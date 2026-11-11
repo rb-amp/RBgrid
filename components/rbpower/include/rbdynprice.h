@@ -85,6 +85,8 @@ bool rbdynprice_resolve_plan(uint32_t ts, float zone_buy, float zone_sell, const
  * @return ESP_ERR_INVALID_ARG on |price| > 100 or until ≤ from.
  */
 esp_err_t rbdynprice_ha_put(float buy, float sell, uint32_t from, uint32_t until);
+/** @brief Whether one pushed price entry is acceptable (buy/sell −100..100 per kWh, sell NAN = none, from < until). */
+bool rbdynprice_entry_ok(float buy, float sell, uint32_t from, uint32_t until);
 /** @brief Drop every pushed price. */
 void rbdynprice_ha_clear(void);
 /** @brief Declare that this build talks to Home Assistant (ESPHome): the HA provider is offered. */

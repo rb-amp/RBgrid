@@ -282,7 +282,13 @@ static void rbtime_sntp_notification_cb(struct timeval *tv)
      * 100 ms, skipping the clock-step detection, the pending-record flush and the stats-timer resync below.
      * Now only the bookkeeping that needs the lock is skipped (force_sntp_sync does it itself); the post-sync
      * actions always run. (code review M13) */
-    bool locked = rbtime_lock(100);
+    /* Host-clock builds call this from rbtime_force_sntp_sync inside the sync task, which already holds the time lock.
+     * Taking a non-recursive mutex we hold stalls 100 ms, and when another task waits on it (priority inherited) the
+     * timeout asserts in vTaskPriorityDisinheritAfterTimeout. The holder does that bookkeeping itself, so take the
+     * lock only when someone else holds it or nobody does. (The SNTP build calls it from the lwIP task: unaffected.) */
+    bool held_by_me = g_time_ctx.mutex != NULL &&
+                      xSemaphoreGetMutexHolder(g_time_ctx.mutex) == xTaskGetCurrentTaskHandle();
+    bool locked = !held_by_me && rbtime_lock(100);
 
     {
         int64_t up_s = (int64_t)(esp_timer_get_time() / 1000000ULL);

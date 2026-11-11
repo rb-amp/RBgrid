@@ -490,9 +490,14 @@ static void st_load_all(void)
 
 /* ============================================ HA store API ========================================== */
 
+bool rbdynprice_entry_ok(float buy, float sell, uint32_t from, uint32_t until)
+{
+    return !(isnan(buy) || buy < -100.0f || buy > 100.0f || until <= from || (!isnan(sell) && (sell < -100.0f || sell > 100.0f)));
+}
+
 esp_err_t rbdynprice_ha_put(float buy, float sell, uint32_t from, uint32_t until)
 {
-    if (isnan(buy) || buy < -100.0f || buy > 100.0f || until <= from || (!isnan(sell) && (sell < -100.0f || sell > 100.0f)))
+    if (!rbdynprice_entry_ok(buy, sell, from, until))
         return ESP_ERR_INVALID_ARG;
     if (!s_st[ST_HA].e) return ESP_ERR_INVALID_STATE;
     portENTER_CRITICAL(&s_st_mux);

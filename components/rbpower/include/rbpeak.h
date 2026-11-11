@@ -32,7 +32,8 @@ void rbpeak_init(void);
  * @brief Add one MAIN_SUPPLY point's energy for the 15-min period ending at q_end_ts. Calls for the same period
  *        are summed; the period is finalized when a later period arrives or by rbpeak_tick().
  * @param q_end_ts   Period end (UTC s), a 15-min boundary.
- * @param import_wh  Imported energy (Wh); export (negative) counts as 0.
+ * @param import_wh  The point's signed energy (Wh, export negative). The points' energies are summed and the
+ *                   period's total is clipped at 0 when it closes, so phases net against each other.
  */
 void rbpeak_add_period(uint32_t q_end_ts, float import_wh);
 

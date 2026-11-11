@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.2.2 — 2026-11-11
+
+### Fixed
+- **Import peaks with one point per phase.** With a three-phase supply set up as one point per phase, each phase's
+  export counted as zero before the phases were added, so on a day when one phase exported (a single-phase inverter)
+  the peak came out higher than the grid meter's. The main-supply points are now added first and the total is
+  clipped at zero, as a grouped three-phase point always did: export on one phase offsets import on another within
+  the 15-min period, in both set-ups.
+- **A price push is stored whole or not at all.** A batch with a bad entry (outside −100..100 per kWh, or
+  `until` ≤ `from`) is refused and nothing of it is stored; the reply names the entry. Before, the entries ahead of
+  it were kept, so a day sent per MWh could end up half applied.
+- **History never serves a damaged record.** A record with no duration or with impossible energy (left by a reset
+  in the middle of a write) is skipped and reported once in the event log (`FAIL history: … damaged`).
+
 ## v1.2.1 — 2026-11-11
 
 ### Fixed

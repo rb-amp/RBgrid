@@ -3692,6 +3692,26 @@ char* rbgrid_history_get_data(
         if (rec_ts == 0 || rec_ts == 0xFFFFFFFFu) {
             continue;
         }
+        /* A record with no duration, or energy no meter can produce (consumed/supplied below zero, or above
+         * 10^8 Wh in one period), is a damaged slot: never serve it. The write path always stamps a duration, so
+         * this is a slot torn by a reset mid-write (seen once on an ESPHome image that asserted at boot). */
+        {
+            const rbstats_v4_hdr_t *hh = (const rbstats_v4_hdr_t*)record_ptr;
+            bool damaged = (hh->dur == 0 || hh->dur == 0xFFFFFFFFu);
+            if (!damaged && type == RBPOWER_DATA_TYPE_ENERGY) {
+                const rbstats_energy_v4_t *ev = (const rbstats_energy_v4_t*)record_ptr;
+                damaged = ev->ec_mwh < 0 || ev->es_mwh < 0 || ev->ec_mwh > 100000000000LL || ev->es_mwh > 100000000000LL;
+            }
+            if (damaged) {
+                static uint32_t s_damaged_logged_ts = 0;
+                if (s_damaged_logged_ts != rec_ts) {
+                    s_damaged_logged_ts = rec_ts;
+                    rbpower_diag_printf("FAIL history: unit 0x%04X period %d record ts=%lu damaged (dur=%lu), not served",
+                                        (unsigned)unit_id, (int)period, (unsigned long)rec_ts, (unsigned long)hh->dur);
+                }
+                continue;
+            }
+        }
 
         switch (type) {
             case RBPOWER_DATA_TYPE_ELECTRICAL:

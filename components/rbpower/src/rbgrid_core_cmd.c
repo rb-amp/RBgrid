@@ -305,20 +305,27 @@ static char* cmd_set_section(const cJSON* root, const char* section, const char*
         } else {
             const cJSON* arr = cJSON_GetObjectItem(data, "prices");
             const cJSON* one = data;
-            int n = cJSON_IsArray(arr) ? cJSON_GetArraySize(arr) : 1, okc = 0;
+            int n = cJSON_IsArray(arr) ? cJSON_GetArraySize(arr) : 1, okc = 0, bad_k = -1;
             const char* why = NULL;
-            for (int k = 0; k < n && !why; k++) {
-                const cJSON* e = cJSON_IsArray(arr) ? cJSON_GetArrayItem(arr, k) : one;
-                const cJSON *jb = cJSON_GetObjectItem(e, "buy"), *js = cJSON_GetObjectItem(e, "sell");
-                const cJSON *jf = cJSON_GetObjectItem(e, "from"), *ju = cJSON_GetObjectItem(e, "until");
-                if (!cJSON_IsNumber(jb) || !cJSON_IsNumber(jf) || !cJSON_IsNumber(ju)) { why = "each price needs buy, from, until (unix s)"; break; }
-                if (js && !cJSON_IsNumber(js) && !cJSON_IsNull(js)) { why = "sell must be a number"; break; }
-                if (rbpower_tariff_set_external_price((float)jb->valuedouble, cJSON_IsNumber(js) ? (float)js->valuedouble : NAN,
-                                                      (uint32_t)jf->valuedouble, (uint32_t)ju->valuedouble) != ESP_OK)
-                    { why = "bad price (buy/sell -100..100) or until <= from"; break; }
-                okc++;
+            /* All or nothing: every entry is checked first, and a batch with a bad entry stores none of it (a day
+             * sent per MWh used to be stored up to its first hour above 100). */
+            for (int pass = 0; pass < 2 && !why; pass++) {
+                for (int k = 0; k < n && !why; k++) {
+                    const cJSON* e = cJSON_IsArray(arr) ? cJSON_GetArrayItem(arr, k) : one;
+                    const cJSON *jb = cJSON_GetObjectItem(e, "buy"), *js = cJSON_GetObjectItem(e, "sell");
+                    const cJSON *jf = cJSON_GetObjectItem(e, "from"), *ju = cJSON_GetObjectItem(e, "until");
+                    if (!cJSON_IsNumber(jb) || !cJSON_IsNumber(jf) || !cJSON_IsNumber(ju)) { why = "each price needs buy, from, until (unix s)"; bad_k = k; break; }
+                    if (js && !cJSON_IsNumber(js) && !cJSON_IsNull(js)) { why = "sell must be a number"; bad_k = k; break; }
+                    float b = (float)jb->valuedouble, sv = cJSON_IsNumber(js) ? (float)js->valuedouble : NAN;
+                    uint32_t f = (uint32_t)jf->valuedouble, u = (uint32_t)ju->valuedouble;
+                    if (pass == 0) {
+                        if (!rbdynprice_entry_ok(b, sv, f, u)) { why = "bad price (buy/sell -100..100 per kWh) or until <= from"; bad_k = k; break; }
+                    } else if (rbpower_tariff_set_external_price(b, sv, f, u) == ESP_OK) {
+                        okc++;
+                    }
+                }
             }
-            if (why) { snprintf(msg, sizeof(msg), "%s (%d stored before it)", why, okc); ack = cmd_ack_json("set", section, "error", msg, id); }
+            if (why) { snprintf(msg, sizeof(msg), "price %d: %s; nothing stored", bad_k, why); ack = cmd_ack_json("set", section, "error", msg, id); }
             else { snprintf(msg, sizeof(msg), "%d price(s) stored", okc); ack = cmd_ack_json("set", section, "ok", msg, id); }
         }
         free(data_str);

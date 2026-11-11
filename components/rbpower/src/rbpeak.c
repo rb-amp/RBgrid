@@ -103,6 +103,10 @@ static void period_close_locked(void)
     if (!s.pend_q) return;
     uint32_t q = s.pend_q; float wh = s.pend_wh;
     s.pend_q = 0; s.pend_wh = 0;
+    /* The grid input's net over the period: the main-supply points' signed energies are summed first and the
+     * result is clipped once, so export on one phase offsets import on another exactly as within a grouped
+     * three-phase point (split per-phase points used to be clipped one by one: the peak came out too high). */
+    if (wh < 0) wh = 0;
     uint32_t mid = q - 450;
     int32_t key = cycle_key_of(mid, s.cycle_day, NULL);
     if (key != s.cur.cycle_key || !s.cur.cycle_start) {   /* new billing cycle (by civil date) */
@@ -145,8 +149,7 @@ void rbpeak_init(void)
 
 void rbpeak_add_period(uint32_t q_end_ts, float import_wh)
 {
-    if (q_end_ts < 1600000000u || isnan(import_wh)) return;
-    if (import_wh < 0) import_wh = 0;
+    if (q_end_ts < 1600000000u || isnan(import_wh)) return;   /* signed: export < 0, clipped at the period close */
     q_end_ts -= q_end_ts % 900;
     portENTER_CRITICAL(&s_mux);
     if (s.pend_q && q_end_ts != s.pend_q) {

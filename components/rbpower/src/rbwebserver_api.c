@@ -2745,17 +2745,22 @@ esp_err_t rbwebserver_api_price_handler(httpd_req_t *req)
         }
         const cJSON *arr = cJSON_GetObjectItem(j, "prices");
         int n = cJSON_IsArray(arr) ? cJSON_GetArraySize(arr) : 1;
-        for (int k = 0; k < n; k++) {
-            const cJSON *e = cJSON_IsArray(arr) ? cJSON_GetArrayItem(arr, k) : j;
-            const cJSON *jb = cJSON_GetObjectItem(e, "buy"), *js = cJSON_GetObjectItem(e, "sell");
-            const cJSON *jf = cJSON_GetObjectItem(e, "from"), *ju = cJSON_GetObjectItem(e, "until");
-            if (!cJSON_IsNumber(jb) || !cJSON_IsNumber(jf) || !cJSON_IsNumber(ju) || (js && !cJSON_IsNumber(js) && !cJSON_IsNull(js)) ||
-                rbpower_tariff_set_external_price((float)jb->valuedouble, cJSON_IsNumber(js) ? (float)js->valuedouble : NAN,
-                                                  (uint32_t)jf->valuedouble, (uint32_t)ju->valuedouble) != ESP_OK) {
-                char m[128];
-                snprintf(m, sizeof(m), "price %d: needs buy/sell -100..100 and from < until (unix s); %d stored before it", k, k);
-                cJSON_Delete(j);
-                return dp_error(req, "prices", m);
+        /* All or nothing: every entry is checked first; a batch with a bad entry stores none of it. */
+        for (int pass = 0; pass < 2; pass++) {
+            for (int k = 0; k < n; k++) {
+                const cJSON *e = cJSON_IsArray(arr) ? cJSON_GetArrayItem(arr, k) : j;
+                const cJSON *jb = cJSON_GetObjectItem(e, "buy"), *js = cJSON_GetObjectItem(e, "sell");
+                const cJSON *jf = cJSON_GetObjectItem(e, "from"), *ju = cJSON_GetObjectItem(e, "until");
+                bool shape = cJSON_IsNumber(jb) && cJSON_IsNumber(jf) && cJSON_IsNumber(ju) && (!js || cJSON_IsNumber(js) || cJSON_IsNull(js));
+                float b = shape ? (float)jb->valuedouble : NAN, sv = cJSON_IsNumber(js) ? (float)js->valuedouble : NAN;
+                uint32_t f = shape ? (uint32_t)jf->valuedouble : 0, u = shape ? (uint32_t)ju->valuedouble : 0;
+                if (pass == 0 && (!shape || !rbdynprice_entry_ok(b, sv, f, u))) {
+                    char m[128];
+                    snprintf(m, sizeof(m), "price %d: needs buy/sell -100..100 per kWh and from < until (unix s); nothing stored", k);
+                    cJSON_Delete(j);
+                    return dp_error(req, "prices", m);
+                }
+                if (pass == 1) (void)rbpower_tariff_set_external_price(b, sv, f, u);
             }
         }
         cJSON_Delete(j);
