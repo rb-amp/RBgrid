@@ -11,6 +11,10 @@
 - **A price push is stored whole or not at all.** A batch with a bad entry (outside −100..100 per kWh, or
   `until` ≤ `from`) is refused and nothing of it is stored; the reply names the entry. Before, the entries ahead of
   it were kept, so a day sent per MWh could end up half applied.
+- **A point added without a restart books each hour whole.** A point bound to a module channel while the hub was
+  running had its last 15-min period of every hour (for example 10:45–11:00) booked into the next hour until the hub
+  restarted; daily totals moved the same way at midnight. Totals and peaks were right; only the hour (and day) the
+  energy landed in was not. The new point now registers its energy source at once.
 - **History never serves a damaged record.** A record with no duration or with impossible energy (left by a reset
   in the middle of a write) is skipped and reported once in the event log (`FAIL history: … damaged`).
 

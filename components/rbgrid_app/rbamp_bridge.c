@@ -2768,6 +2768,10 @@ void rbamp_bridge_bind_unit(const rbpower_unit_definition_t *def)
     }
     if (changed) {
         esp_err_t se = save_cfg();
+        /* register the new point's energy provenance now (as rebind and module-add do): without it the unit reads
+         * as native until the next reboot, its empty native quarter closes each hour at hh:00:00, and the module's
+         * boundary quarter slides into the NEXT hour ("quarter … arrived after its hour was closed") */
+        publish_presence();
         ESP_LOGW(TAG, "bind unit 0x%04X (mod %u ch %u) → fleet entry set, /rbamp.json: %s",
                  (unsigned)def->unit_id, module, ch, esp_err_to_name(se));
     } else {
