@@ -53,6 +53,15 @@ uint32_t rbgrid_foreach_valid_record(rbpower_unit_id_t unit, int stat_period, in
                                      uint32_t from, uint32_t to,
                                      void (*cb)(const rbpower_period_statistics_t *, void *), void *ctx);
 
+/**
+ * @brief rbgrid_foreach_valid_record with an early stop and a deadline.
+ * @param stop_before_from End at the first record older than @p from. @param deadline_us esp_timer deadline, 0 = none.
+ * @return Number of valid records walked.
+ */
+uint32_t rbgrid_foreach_valid_record_ex(rbpower_unit_id_t unit, int stat_period, int flash_period,
+                                        uint32_t from, uint32_t to, bool stop_before_from, int64_t deadline_us,
+                                        void (*cb)(const rbpower_period_statistics_t *, void *), void *ctx);
+
 /** @brief Escape a string for a hand-built JSON body (" \ and control chars). @param in Input. @param out Output. @param n Size. */
 void rbgrid_json_escape(const char *in, char *out, size_t n);
 

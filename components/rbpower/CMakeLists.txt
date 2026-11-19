@@ -35,6 +35,7 @@ set(RBPOWER_SRCS
     "src/rbdynprice.c"                       # dynamic (spot) prices: providers, stores, fetch, per-period price
     "src/rbpeak.c"                           # import peaks per billing cycle (capacity tariffs; metering only)
     "src/rbactivation.c"                     # cheap windows (price rules) + price_signal notification
+    "src/rbllm.c"                            # LLM protocol v1: tool registry, manifest, call envelope, tokens
     # --- flash statistics data layer (history/summary/DAY+ aggregation persistence) ---
     "src/rbstorage.c"
     "src/rbstorage_transfer_types.c"
@@ -62,7 +63,7 @@ endif()
 if(CONFIG_RBGRID_IF_HTTP)
     list(APPEND RBPOWER_SRCS "src/rbwebserver.c" "src/rbwebserver_ota.c" "src/rbwebserver_wifi.c"
                              "src/rbwebserver_api.c" "src/rbwebserver_ui.c" "src/rbwebsocket.c"
-                             "src/rbwebsocket_telemetry.c")
+                             "src/rbwebsocket_telemetry.c" "src/rbwebserver_llm.c")
 endif()
 if(CONFIG_RBGRID_IF_MQTT)
     list(APPEND RBPOWER_SRCS "src/rbmqtt.c")

@@ -79,6 +79,9 @@ void      add_cors_headers(httpd_req_t *req);
  */
 esp_err_t cors_options_handler(httpd_req_t *req);
 
+/** @brief Register the LLM protocol routes (rbwebserver_llm.c) on @p srv. */
+void rbwebserver_llm_register(httpd_handle_t srv);
+
 /**
  * @brief Tell whether a request arrived over the hub's own access point.
  *

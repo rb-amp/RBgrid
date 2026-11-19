@@ -78,6 +78,15 @@ uint32_t rbgrid_foreach_valid_record(rbpower_unit_id_t unit, int stat_period, in
                                            uint32_t from, uint32_t to,
                                            void (*cb)(const rbpower_period_statistics_t *, void *), void *ctx)
 {
+    return rbgrid_foreach_valid_record_ex(unit, stat_period, flash_period, from, to, false, 0, cb, ctx);
+}
+
+/* As rbgrid_foreach_valid_record; stop_before_from ends the walk at the first record older than @p from (rows come
+ * newest first, so nothing inside the window follows), deadline_us (esp_timer, 0 = none) ends it when passed. */
+uint32_t rbgrid_foreach_valid_record_ex(rbpower_unit_id_t unit, int stat_period, int flash_period,
+                                        uint32_t from, uint32_t to, bool stop_before_from, int64_t deadline_us,
+                                        void (*cb)(const rbpower_period_statistics_t *, void *), void *ctx)
+{
     uint32_t valid_total = 0;
     rbgrid_history_get_buffer_info(unit, (rbpower_period_t)flash_period, RBPOWER_DATA_TYPE_ELECTRICAL, &valid_total);
     if (valid_total == 0) return 0;
@@ -103,9 +112,12 @@ uint32_t rbgrid_foreach_valid_record(rbpower_unit_id_t unit, int stat_period, in
             if (ts >= last_ts) continue;
             last_ts = ts;
             emitted++;
+            if (ts < from && stop_before_from) { emitted = valid_total; break; }   // older than the window: done
             if (ts < from || ts > to) continue;              // outside the requested window
             cb(&st[i], ctx);
         }
+        if (emitted >= valid_total) break;
+        if (deadline_us && esp_timer_get_time() > deadline_us) break;
         if (got < RBAPI_REC_BATCH) break;                    // physical ring exhausted
         idx += got;
         /* a background (priority-1) caller would otherwise run this flash scan back to back and starve

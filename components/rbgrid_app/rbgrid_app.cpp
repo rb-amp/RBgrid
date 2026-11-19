@@ -111,6 +111,7 @@ extern "C" void esp_task_wdt_isr_user_handler(void)
 #endif
 #include "esp_mac.h"               // esp_read_mac — mdns hostname rbgrid-<mac4>
 #include "esp_app_desc.h"          // fw version in the _rbgrid._tcp TXT record
+#include "rbllm.h"                // LLM protocol: hub id + proto in the TXT record, events reader
 #include "rbtelemetry.h"
 #include "rbmqtt.h"
 #include "esp_mac.h"
@@ -2087,10 +2088,17 @@ void wifi_event_callback(rbwifi_status_t status, void* user_data)
             mdns_instance_name_set("RBgrid Power Monitor");
             mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
             const esp_app_desc_t *ad = esp_app_get_description();
+            char hub_id[13]; rbllm_hub_id(hub_id);
+            rbgrid_json_context_t *jc = rbgrid_core_json_ctx();
+            char hub_name[33];
+            snprintf(hub_name, sizeof(hub_name), "%s", (jc && jc->device_info.device_name[0]) ? jc->device_info.device_name : "RBgrid");
             mdns_txt_item_t txt[] = {
                 { "fw",    (ad && ad->version[0]) ? ad->version : "0.0.0" },
                 { "api",   "1" },      /* RBGRID_API_VERSION */
                 { "https", "0" },      /* flips with the HTTPS rollout */
+                { "id",    hub_id },   /* LLM protocol §2: 12 hex of the base MAC */
+                { "name",  hub_name },
+                { "proto", RBLLM_PROTO },
             };
             mdns_service_add(NULL, "_rbgrid", "_tcp", 80, txt, sizeof(txt) / sizeof(txt[0]));
             ESP_LOGI(TAG, "mDNS up: %s.local (_http._tcp + _rbgrid._tcp)", host);
@@ -2376,6 +2384,7 @@ static void start_webserver(void)
 
         register_espnow_http();   // ESP-NOW management + health API onto the running server
         rbevlog_register_http();  // GET /api/v1/system/events (+ POST /api/v1/debug/cmd on debug builds)
+        rbllm_register_events_reader(rbevlog_json);   // LLM tool get_events reads the same ring
         modfw_register_http();    // STD module firmware update API (main/modfw.c)
         rbi2c_register_http();    // I2C buses / scan / module address API (main/rbi2c_api.c)
     } else {

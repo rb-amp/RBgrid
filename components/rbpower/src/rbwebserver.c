@@ -904,6 +904,9 @@ static esp_err_t register_uri_handlers(wifi_mode_t wifi_mode)
         }
     }
 
+    // LLM protocol v1 (/api/llm/v1/*) + the hub's AI / LLM page (/api/v1/llm)
+    rbwebserver_llm_register(g_server_handle);
+
     // WiFi Config API
     httpd_uri_t api_wifi_config_uri = {
         .uri = "/api/system/wifi-config",
