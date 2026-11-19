@@ -634,7 +634,12 @@ static bool parse_period(rbllm_cx_t *cx, const cJSON *p, uint32_t *from, uint32_
         return false;
     }
     if (*to > now) *to = now;
-    if (*from >= *to) { fail(cx, "invalid_args", "period: from must be before to (and before now)", NULL); return false; }
+    if (*from >= *to) {
+        fail(cx, "invalid_args", "period: from must be before to (and before now)",
+             *to >= now ? "from is in the future: use a start before now, or period:{preset:\"today\"}."
+                        : "Swap from and to: to is the exclusive end, e.g. {\"from\":\"2026-11-01\",\"to\":\"2026-11-08\"}.");
+        return false;
+    }
     if (now - *from > DAY_DEPTH_S + 86400u) {
         char h[112]; char t0[48]; iso_time(now - DAY_DEPTH_S, t0);
         snprintf(h, sizeof(h), "The earliest available is about %s.", t0);
@@ -1737,7 +1742,8 @@ static cJSON *t_get_regional_context(const cJSON *a, rbllm_cx_t *cx)
         if (zs) cJSON_AddItemToObject(o, "zones", zs);
         cJSON_AddItemToArray(prov, o);
     }
-    cJSON_AddStringToObject(r, "price_state_now", cJSON_GetStringValue(cJSON_GetObjectItem(cfg, "state")) ? cJSON_GetStringValue(cJSON_GetObjectItem(cfg, "state")) : "");
+    { const char *ps = cJSON_GetStringValue(cJSON_GetObjectItem(cfg, "state"));
+      if (ps && ps[0]) cJSON_AddStringToObject(r, "price_state_now", ps); else cJSON_AddNullToObject(r, "price_state_now"); }   /* no data = null */
     cJSON_Delete(cfg);
     note(cx, "spot = wholesale day-ahead price without fees and VAT; all_in = the price a supplier charges. Set the source on the hub's dynamic price page.");
     note(cx, "Tariff templates and local terms are not built in yet; ask the user for the supplier's price sheet.");
