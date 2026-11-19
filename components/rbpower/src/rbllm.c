@@ -371,6 +371,7 @@ typedef struct {
     /* error */
     bool open_hour;        /* the answer includes the open hour's closed 15-min periods */
     int  retry_ms;         /* error.retry_after_ms (0 = none) */
+    bool open_cost_exact;  /* the open hour's main-supply cost came from the hub's day figure, not an estimate */
     const char *err_code;
     char err_msg[160];
     char err_hint[160];
@@ -470,6 +471,8 @@ typedef struct {
     rbllm_cx_t *cx;
     bool      timed_out;
     uint32_t  newest_hour_end;   /* end of the newest HOUR record seen (open-hour de-duplication) */
+    bool      no_open;           /* leave the open hour out (exact-cost path) */
+    double    open_cost, open_rev;   /* the estimate added for the open hour */
 } sum_ctx_t;
 
 static int bucket_index(const sum_ctx_t *c, uint32_t ts)
@@ -562,7 +565,7 @@ static void sum_range(sum_ctx_t *c, uint16_t u, uint32_t from, uint32_t to)
     rbpower_home_lock();
     bool have = rbpower_stats_open_hour(u, &oh, &cov, &oi, &oo);
     rbpower_home_unlock();
-    if (have && cov && oh < to && oh + 3600u > from && c->newest_hour_end < oh + 3600u) {
+    if (!c->no_open && have && cov && oh < to && oh + 3600u > from && c->newest_hour_end < oh + 3600u) {
         int k = bucket_index(c, oh);
         if (k >= 0) {
             bucket_t *b = &c->b[k];
@@ -570,6 +573,8 @@ static void sum_range(sum_ctx_t *c, uint16_t u, uint32_t from, uint32_t to)
             b->e_in += oi; b->e_out += oo;
             b->cost += oi / 1000.0 * tn.buy_rate_all_in;
             b->rev += oo / 1000.0 * tn.sell_rate;
+            c->open_cost += oi / 1000.0 * tn.buy_rate_all_in;
+            c->open_rev += oo / 1000.0 * tn.sell_rate;
             b->recs++;
             c->hour_secs += cov;
             if (oh + cov > c->newest_end) c->newest_end = clamp_now(oh + cov);
@@ -977,7 +982,7 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
 }
 
 /* Totals per selected point over [from,to): fills the out arrays. Returns false on timeout. */
-typedef struct { double e_in, e_out, cost, rev; uint32_t newest; bool any; } tot_t;
+typedef struct { double e_in, e_out, cost, rev; uint32_t newest; bool any; double open_cost, open_rev; } tot_t;
 static bool totals(rbllm_cx_t *cx, const rbgrid_point_snap_t *p, int n, const bool sel[], uint32_t from, uint32_t to, tot_t *t)
 {
     for (int i = 0; i < n; i++) {
@@ -987,7 +992,7 @@ static bool totals(rbllm_cx_t *cx, const rbgrid_point_snap_t *p, int n, const bo
         sum_ctx_t c = { .b = &b, .nb = 1, .unit = 't', .cx = cx };
         sum_range(&c, p[i].unit_id, from, to);
         if (c.timed_out) return false;
-        t[i] = (tot_t){ b.e_in, b.e_out, b.cost, b.rev, c.newest_end, b.recs > 0 };
+        t[i] = (tot_t){ b.e_in, b.e_out, b.cost, b.rev, c.newest_end, b.recs > 0, c.open_cost, c.open_rev };
     }
     return true;
 }
@@ -1014,6 +1019,34 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
         if (p[i].role != RBPOWER_ROLE_MAIN_SUPPLY) continue;
         mains++; cost += t[i].cost; rev += t[i].rev; imp += t[i].e_in; exp += t[i].e_out; any |= t[i].any;
         if (t[i].newest > newest) newest = t[i].newest;
+    }
+    /* The open hour of the main supply: the hub's own day figures are exact (booked per closed 15-min period), so use
+     * cost_day − today's closed hour records instead of the estimate at the price now — the bill figure then equals the
+     * hub page's "cost today". */
+    bool exact_open = false;
+    double oc = 0, orv = 0;
+    for (int i = 0; i < n; i++) if (p[i].role == RBPOWER_ROLE_MAIN_SUPPLY) { oc += t[i].open_cost; orv += t[i].open_rev; }
+    uint32_t today0 = local_floor(now_s(), 'd');
+    if (mains && cx->open_hour && (oc > 0 || orv > 0)) {
+        rbgrid_system_totals_t st;
+        rbpower_home_lock(); rbgrid_core_system_totals(&st, true); rbpower_home_unlock();
+        double closed_c = 0, closed_r = 0;
+        bool okc = true;
+        for (int i = 0; i < n && okc; i++) {
+            if (p[i].role != RBPOWER_ROLE_MAIN_SUPPLY) continue;
+            bucket_t b = { .from = today0 };
+            sum_ctx_t c2 = { .b = &b, .nb = 1, .unit = 't', .cx = cx, .no_open = true };
+            sum_range(&c2, p[i].unit_id, today0, now_s());
+            if (c2.timed_out) okc = false;
+            closed_c += b.cost; closed_r += b.rev;
+        }
+        double ex_c = st.cost_day - closed_c, ex_r = st.rev_day - closed_r;
+        if (okc && ex_c > -0.00005 && ex_r > -0.00005) {
+            cost += (ex_c < 0 ? 0 : ex_c) - oc;
+            rev += (ex_r < 0 ? 0 : ex_r) - orv;
+            exact_open = true;
+            cx->open_cost_exact = true;
+        }
     }
     if (mains && !any) {
         const char *k[] = { "total_cost", "import_kwh", "export_revenue", "export_kwh", "net_cost" };
@@ -1050,6 +1083,7 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
     if (tn.zone[0]) cJSON_AddStringToObject(tj, "zone", tn.zone);
     cJSON_AddNumberToObject(tj, "buy_price_per_kwh", r4(tn.buy_rate_all_in));
     if (tn.placeholder) { cx->estimated = true; note(cx, "No tariff plan is saved: money is computed off the built-in demo plan."); }
+    if (exact_open) cJSON_AddBoolToObject(r, "open_hour_cost_exact", true);
     note(cx, "Costs are gross (VAT included) as the hub books them; fixed charges are not included.");
     note(cx, "by_channel is attribution behind the main feed and does not add up to the bill.");
     free(p); free(t);
@@ -2665,8 +2699,12 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
         if (cx.resolution) cJSON_AddStringToObject(m, "resolution", cx.resolution);
         if (cx.open_hour) {
             if (!cx.notes) cx.notes = cJSON_CreateArray();
-            cJSON_AddItemToArray(cx.notes, cJSON_CreateString("The current hour is included up to its last closed 15-min period; its cost is estimated at the price in force now."));
-            cJSON_ReplaceItemInObject(m, "estimated", cJSON_CreateBool(true));
+            if (cx.open_cost_exact)
+                cJSON_AddItemToArray(cx.notes, cJSON_CreateString("The current hour is included up to its last closed 15-min period; the main supply's cost for it is the hub's own booked figure."));
+            else {
+                cJSON_AddItemToArray(cx.notes, cJSON_CreateString("The current hour is included up to its last closed 15-min period; its cost is estimated at the price in force now."));
+                cJSON_ReplaceItemInObject(m, "estimated", cJSON_CreateBool(true));
+            }
         }
         if (cx.notes) { cJSON_AddItemToObject(m, "notes", cx.notes); cx.notes = NULL; }
         out = cJSON_PrintUnformatted(r);
