@@ -1022,12 +1022,14 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
     }
     /* The open hour of the main supply: the hub's own day figures are exact (booked per closed 15-min period), so use
      * cost_day − today's closed hour records instead of the estimate at the price now — the bill figure then equals the
-     * hub page's "cost today". */
+     * hub page's "cost today". Hour records hold whole cents, so a period that takes in all of today (from ≤ local
+     * midnight, up to now) uses cost_day for the whole day: the cent rounding of the closed hours drops out too. */
     bool exact_open = false;
     double oc = 0, orv = 0;
     for (int i = 0; i < n; i++) if (p[i].role == RBPOWER_ROLE_MAIN_SUPPLY) { oc += t[i].open_cost; orv += t[i].open_rev; }
     uint32_t today0 = local_floor(now_s(), 'd');
-    if (mains && cx->open_hour && (oc > 0 || orv > 0)) {
+    bool whole_today = from <= today0;
+    if (mains && cx->open_hour && (whole_today || oc > 0 || orv > 0)) {
         rbgrid_system_totals_t st;
         rbpower_home_lock(); rbgrid_core_system_totals(&st, true); rbpower_home_unlock();
         double closed_c = 0, closed_r = 0;
@@ -1041,7 +1043,12 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
             closed_c += b.cost; closed_r += b.rev;
         }
         double ex_c = st.cost_day - closed_c, ex_r = st.rev_day - closed_r;
-        if (okc && ex_c > -0.00005 && ex_r > -0.00005) {
+        if (okc && whole_today) {
+            cost += ex_c - oc;      /* today's part becomes cost_day exactly; ex_c may be a hair below 0 (cent rounding) */
+            rev += ex_r - orv;
+            exact_open = true;
+            cx->open_cost_exact = true;
+        } else if (okc && ex_c > -0.00005 && ex_r > -0.00005) {
             cost += (ex_c < 0 ? 0 : ex_c) - oc;
             rev += (ex_r < 0 ? 0 : ex_r) - orv;
             exact_open = true;

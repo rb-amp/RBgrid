@@ -15,6 +15,12 @@ import argparse, json, os, secrets, sys, threading, time, urllib.request, urllib
 FAILS = []
 
 
+def parse_iso(s):
+    """ISO 8601 with offset -> epoch seconds."""
+    from datetime import datetime
+    return int(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
+
+
 def check(cond, what):
     print(("PASS " if cond else "FAIL ") + what)
     if not cond:
@@ -235,6 +241,30 @@ def main():
                   f"import={cb['result'].get('import_kwh')} kWh  period {p['from']} .. {p['to']}")
             code, hist, _, _ = h.req(f"/api/v1/history?unit={mains[0]}&period=day&limit=3", bearer=admin)
             print("   REST day records:", json.dumps(hist)[:600])
+            # yesterday = the hub's own day record of the grid input (whole cents), when one closed inside it
+            code, hi, _, _ = h.req("/api/v1/history?unit=input&period=day&type=all&limit=5", bearer=admin)
+            ys, ye = parse_iso(p["from"]), parse_iso(p["to"])
+            recs = [(e, c) for e, c in zip((hi or {}).get("data", {}).get("energy", []), (hi or {}).get("data", {}).get("economics", []))
+                    if ys < e["ts"] <= ye]   # day records are stamped with the day's END
+            if recs and cb["result"].get("total_cost") is not None:
+                e, c = recs[0]
+                check(abs(cb["result"]["total_cost"] - c["c"]) < 0.006 and abs(cb["result"]["import_kwh"] * 1000 - e["ec"]) < 1.0,
+                      f"yesterday = hub day record: {cb['result']['total_cost']} vs {c['c']}, {cb['result']['import_kwh']} kWh vs {e['ec']} Wh")
+        # ---- today = the hub page's live day counters (cost_day, e_day_in); retried once if a 15-min period closes between
+        if mains:
+            for attempt in range(3):
+                code, jt, *_ = call("get_cost_breakdown", {"period": {"preset": "today"}})
+                code, tel, _, _ = h.req("/api/telemetry/latest")
+                sd = (tel or {}).get("system", {})
+                if not (jt and jt.get("ok")) or "cost_day" not in sd:
+                    continue
+                rt = jt["result"]
+                okc = rt.get("total_cost") is not None and abs(rt["total_cost"] - sd["cost_day"]) < 0.00015
+                oke = rt.get("import_kwh") is not None and abs(rt["import_kwh"] * 1000 - sd["e_day_in"]) < 1.0
+                if okc and oke:
+                    break
+            check(okc and oke, f"today = hub page: cost {rt.get('total_cost')} vs cost_day {sd.get('cost_day')}, "
+                               f"{rt.get('import_kwh')} kWh vs e_day_in {sd.get('e_day_in')} Wh")
 
         # ---- concurrency: 4 parallel calls → all ok, or ok + busy
         out = []
