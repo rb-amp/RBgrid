@@ -143,6 +143,14 @@ def main():
             ("compare_periods", {"a": {"preset": "yesterday"}, "baseline": "previous_period"}),
             ("get_analysis_playbook", {"id": "monthly_report"}),
         ]
+        names_now = [t["name"] for t in man["tools"]]
+        if "get_load_profile" in names_now:
+            chans0 = call("list_channels")[1]["result"]["channels"]
+            if chans0:
+                calls.append(("get_load_profile", {"channel": chans0[0]["id"], "period": {"preset": "today"}}))
+                calls.append(("get_load_profile", {"channel": chans0[0]["id"], "period": {"preset": "last_30_days"}, "resolution": "hour"}))
+        if "get_import_export_balance" in names_now:
+            calls.append(("get_import_export_balance", {"period": {"preset": "today"}}))
         res = {}
         for tool, args in calls:
             code, j, nb, ms = call(tool, args)

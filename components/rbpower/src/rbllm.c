@@ -1059,6 +1059,130 @@ out:
     return r;
 }
 
+/* ---- get_load_profile: avg / min / max power per stored record (hour or day) ---- */
+typedef struct {
+    cJSON *rows; int n, cap; uint32_t newest; bool no_ext; rbllm_cx_t *cx; bool is_hour; bool timed_out;
+    uint32_t ts[400]; double avg[400], mn[400], mx[400]; bool ext[400];
+} prof_ctx_t;
+static void prof_emit(const rbpower_period_statistics_t *s, void *v)
+{
+    prof_ctx_t *c = (prof_ctx_t *)v;
+    if (c->n >= c->cap || c->timed_out) return;
+    uint32_t ts = (uint32_t)(s->period_start_us / 1000000LL);
+    uint32_t dur = s->v4_dur_s ? s->v4_dur_s : (c->is_hour ? 3600u : 86400u);
+    double e = s->exact.valid ? s->exact.ec_mwh / 1000.0 : s->energy_period.consumed_wh;
+    int k = c->n++;
+    c->ts[k] = ts;
+    c->avg[k] = dur ? e * 3600.0 / dur : 0;
+    c->mn[k] = s->extremes.power_min; c->mx[k] = s->extremes.power_max;
+    /* a record without extremes carries 0/0 (BASIC and recomputed DAY+ records); report null, not 0 */
+    c->ext[k] = !(s->extremes.power_min == 0.0f && s->extremes.power_max == 0.0f) && s->extremes.power_max >= s->extremes.power_min;
+    if (!c->ext[k]) c->no_ext = true;
+    if (ts + dur > c->newest) c->newest = ts + dur;
+    if (late(c->cx)) c->timed_out = true;
+}
+static cJSON *t_get_load_profile(const cJSON *a, rbllm_cx_t *cx)
+{
+    uint32_t from, to;
+    if (!parse_period(cx, cJSON_GetObjectItem(a, "period"), &from, &to)) return NULL;
+    const char *rs = cJSON_GetStringValue(cJSON_GetObjectItem(a, "resolution"));
+    bool hour = !rs || !strcmp(rs, "hour");
+    if (rs && !hour && strcmp(rs, "day")) return fail(cx, "invalid_args", "resolution: hour or day", NULL);
+    if (hour && now_s() - from > HOUR_DEPTH_S) return fail(cx, "out_of_history", "hourly history is kept for 60 days", "Use resolution=day.");
+    rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
+    if (!p) return fail(cx, "internal", "out of memory", NULL);
+    int n = snapshot(p, RBLLM_MAX_POINTS);
+    const char *ch = cJSON_GetStringValue(cJSON_GetObjectItem(a, "channel"));
+    int idx = -1;
+    for (int i = 0; ch && i < n; i++) { char h[5]; uid_hex(p[i].unit_id, h); if (!strcasecmp(ch, h) || (p[i].point[0] && !strcmp(ch, p[i].point))) idx = i; }
+    if (idx < 0) { free(p); return fail(cx, "not_found", "unknown channel", "Call list_channels for the channel ids."); }
+    const char *asked = hour ? "hour" : "day";
+    int cap = (RBLLM_MAX_RESPONSE_BYTES - 1500) / 110;   /* ~110 B per row */
+    if (cap > 400) cap = 400;
+    if (hour && (to - from) / 3600u > (uint32_t)cap) { hour = false; cx->truncated = true;
+        note(cx, "The resolution was lowered to day to fit the answer size; narrow the period for hourly rows."); }
+    prof_ctx_t *c = heap_caps_calloc(1, sizeof(prof_ctx_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!c) { free(p); return fail(cx, "internal", "out of memory", NULL); }
+    c->cap = cap; c->cx = cx; c->is_hour = hour;
+    uint32_t now = now_s(), t2 = to > now ? now : to;
+    if (hour) rbgrid_foreach_valid_record_ex(p[idx].unit_id, RBPOWER_STAT_PERIOD_1HOUR, RBPOWER_PERIOD_HOUR, from, t2 - 1, true, cx->deadline_us, prof_emit, c);
+    else {
+        uint32_t d1 = local_floor(t2, 'd');
+        if (from < d1) rbgrid_foreach_valid_record_ex(p[idx].unit_id, RBPOWER_STAT_PERIOD_DAILY, RBPOWER_PERIOD_DAY, local_floor(from, 'd'), d1 - 1, true, cx->deadline_us, prof_emit, c);
+        if (t2 > d1) note(cx, "Today is not in the daily rows until the day closes; ask with resolution=hour for today.");
+    }
+    if (c->timed_out) { heap_caps_free(c); free(p); return fail(cx, "timeout", "the history read took too long", "Narrow the period."); }
+    cJSON *r = cJSON_CreateObject();
+    add_period(r, from, to);
+    char h[5]; uid_hex(p[idx].unit_id, h);
+    cJSON_AddStringToObject(r, "channel", h);
+    add_name(r, p[idx].name);
+    cJSON_AddStringToObject(r, "resolution", hour ? "hour" : "day");
+    cJSON *rows = cJSON_AddArrayToObject(r, "rows");
+    for (int k = c->n - 1; k >= 0; k--) {   /* records come newest first */
+        cJSON *o = cJSON_CreateObject();
+        add_time(o, "from", c->ts[k]);
+        cJSON_AddNumberToObject(o, "avg_w", r2(c->avg[k]));
+        if (c->ext[k]) { cJSON_AddNumberToObject(o, "min_w", r2(c->mn[k])); cJSON_AddNumberToObject(o, "max_w", r2(c->mx[k])); }
+        else { cJSON_AddNullToObject(o, "min_w"); cJSON_AddNullToObject(o, "max_w"); }
+        cJSON_AddItemToArray(rows, o);
+    }
+    if (c->no_ext) note(cx, "min_w/max_w are null where the stored record carries no extremes; avg_w is energy over the period.");
+    if (!c->n) { cx->gaps = true; note(cx, "No stored record in this period."); }
+    if (strcmp(asked, hour ? "hour" : "day")) cx->resolution = "day"; else cx->resolution = asked;
+    cx->as_of = c->newest;
+    heap_caps_free(c); free(p);
+    return r;
+}
+
+/* ---- get_import_export_balance ---- */
+static cJSON *t_get_import_export_balance(const cJSON *a, rbllm_cx_t *cx)
+{
+    uint32_t from, to;
+    if (!parse_period(cx, cJSON_GetObjectItem(a, "period"), &from, &to)) return NULL;
+    rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
+    tot_t *t = calloc(RBLLM_MAX_POINTS, sizeof(tot_t));
+    if (!p || !t) { free(p); free(t); return fail(cx, "internal", "out of memory", NULL); }
+    int n = snapshot(p, RBLLM_MAX_POINTS);
+    bool sel[RBLLM_MAX_POINTS];
+    int mains = 0, gens = 0;
+    for (int i = 0; i < n; i++) {
+        const char *rc = role_class(p[i].role);
+        sel[i] = !strcmp(rc, "main") || !strcmp(rc, "generation");
+        mains += !strcmp(rc, "main"); gens += !strcmp(rc, "generation");
+    }
+    if (!totals(cx, p, n, sel, from, to, t)) { free(p); free(t); return fail(cx, "timeout", "the history read took too long", "Narrow the period."); }
+    double imp = 0, exp = 0, gen = 0; uint32_t newest = 0; bool any = false;
+    for (int i = 0; i < n; i++) {
+        if (!sel[i]) continue;
+        if (t[i].newest > newest) newest = t[i].newest;
+        any |= t[i].any;
+        if (p[i].role == RBPOWER_ROLE_MAIN_SUPPLY) { imp += t[i].e_in; exp += t[i].e_out; }
+        else gen += t[i].e_out;   /* production is energy out of a generation point (role-flipped convention) */
+    }
+    cJSON *r = cJSON_CreateObject();
+    add_period(r, from, to);
+    if (mains) { cJSON_AddNumberToObject(r, "import_kwh", r4(imp / 1000.0)); cJSON_AddNumberToObject(r, "export_kwh", r4(exp / 1000.0)); }
+    else { cJSON_AddNullToObject(r, "import_kwh"); cJSON_AddNullToObject(r, "export_kwh");
+           note(cx, "No point is set as main supply, so grid import and export are unknown."); }
+    if (gens) {
+        double self = gen - exp; if (self < 0) self = 0;
+        cJSON_AddNumberToObject(r, "generation_kwh", r4(gen / 1000.0));
+        cJSON_AddNumberToObject(r, "self_consumption_kwh", r4(self / 1000.0));
+        double use = imp + self;
+        if (gen > 0) cJSON_AddNumberToObject(r, "self_consumption_share", round(1000.0 * self / gen) / 1000.0); else cJSON_AddNullToObject(r, "self_consumption_share");
+        if (use > 0) cJSON_AddNumberToObject(r, "self_sufficiency_share", round(1000.0 * self / use) / 1000.0); else cJSON_AddNullToObject(r, "self_sufficiency_share");
+    } else {
+        cJSON_AddNullToObject(r, "generation_kwh"); cJSON_AddNullToObject(r, "self_consumption_kwh");
+        cJSON_AddNullToObject(r, "self_consumption_share"); cJSON_AddNullToObject(r, "self_sufficiency_share");
+        note(cx, "No generation point (solar, inverter) is configured, so there is no production or self-consumption figure.");
+    }
+    if (!any) { cx->gaps = true; note(cx, "No stored record in this period."); }
+    cx->as_of = newest;
+    free(p); free(t);
+    return r;
+}
+
 static cJSON *t_get_analysis_playbook(const cJSON *a, rbllm_cx_t *cx);
 
 /* ============================================================================================ registry */
@@ -1131,6 +1255,20 @@ static const rbllm_tool_t TOOLS[] = {
       "\"channels\":" S_CHANNELS "},\"required\":[\"a\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"delta_kwh\":{\"type\":\"number\"},\"delta_pct\":{\"type\":[\"number\",\"null\"]}}}}}}",
       t_compare_periods },
+    { "get_load_profile", RBLLM_SCOPE_READ,
+      "When to call: for when power was high or low over a period on one channel (shape of the day, peaks, standby). What it returns: rows "
+      "of {from, avg_w, min_w, max_w} per stored hour or day; min/max are null where the record has no extremes.",
+      "{\"type\":\"object\",\"properties\":{\"channel\":{\"type\":\"string\",\"description\":\"Channel id from list_channels.\"},\"period\":" S_PERIOD ","
+      "\"resolution\":{\"type\":\"string\",\"enum\":[\"hour\",\"day\"]}},\"required\":[\"channel\",\"period\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"resolution\":{\"type\":\"string\"},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"avg_w\":{\"type\":\"number\"},\"min_w\":{\"type\":[\"number\",\"null\"]},\"max_w\":{\"type\":[\"number\",\"null\"]}}}}}}",
+      t_get_load_profile },
+    { "get_import_export_balance", RBLLM_SCOPE_READ,
+      "When to call: for how much came from the grid, went back to it, and (with solar or an inverter) how much of the production was used "
+      "at home. What it returns: import, export, generation and self-consumption in kWh, and the self-consumption and self-sufficiency "
+      "shares (0..1); null where the needed point is not configured.",
+      "{\"type\":\"object\",\"properties\":{\"period\":" S_PERIOD "},\"required\":[\"period\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"import_kwh\":{\"type\":[\"number\",\"null\"]},\"export_kwh\":{\"type\":[\"number\",\"null\"]},\"generation_kwh\":{\"type\":[\"number\",\"null\"]}}}",
+      t_get_import_export_balance },
     { "get_analysis_playbook", RBLLM_SCOPE_READ,
       "When to call: when the user asks for a report or a check and you want the hub's recipe. What it returns: the steps (tools with argument "
       "hints), questions to ask the user and rules for the answer.",
