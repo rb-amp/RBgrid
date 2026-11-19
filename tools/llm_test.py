@@ -149,6 +149,10 @@ def main():
             if chans0:
                 calls.append(("get_load_profile", {"channel": chans0[0]["id"], "period": {"preset": "today"}}))
                 calls.append(("get_load_profile", {"channel": chans0[0]["id"], "period": {"preset": "last_30_days"}, "resolution": "hour"}))
+        for extra, ar in (("check_installation", {}), ("detect_anomalies", {}), ("get_regional_context", {}),
+                          ("get_regional_context", {"country": "DE"}), ("get_analysis_playbook", {"id": "installation_check"})):
+            if extra in names_now:
+                calls.append((extra, ar))
         if "get_import_export_balance" in names_now:
             calls.append(("get_import_export_balance", {"period": {"preset": "today"}}))
         res = {}

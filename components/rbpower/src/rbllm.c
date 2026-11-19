@@ -20,6 +20,7 @@
 #include "rbhome_tariff.h"
 #include "rbpower.h"
 #include "rbjson.h"
+#include "rbdynprice.h"
 #include "rbextflash_operations.h"   /* rbpower_flash_unit_has_history */
 #include "littlefs_raw.h"
 #include "rbamp.h"                   /* rbamp_basic_fw_name */
@@ -1183,6 +1184,254 @@ static cJSON *t_get_import_export_balance(const cJSON *a, rbllm_cx_t *cx)
     return r;
 }
 
+/* ---- check_installation: detects only; the fix is physical or in the module ---- */
+static void finding(cJSON *arr, const char *type, const char *sev, const char *ch, const char *evidence, const char *fix)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "type", type);
+    cJSON_AddStringToObject(o, "severity", sev);
+    if (ch) cJSON_AddStringToObject(o, "channel", ch); else cJSON_AddNullToObject(o, "channel");
+    cJSON_AddStringToObject(o, "evidence", evidence);
+    cJSON_AddStringToObject(o, "fix_hint", fix);
+    cJSON_AddItemToArray(arr, o);
+}
+static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
+{
+    (void)a;
+    rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
+    if (!p) return fail(cx, "internal", "out of memory", NULL);
+    int n = snapshot(p, RBLLM_MAX_POINTS);
+    cJSON *r = cJSON_CreateObject();
+    cJSON *f = cJSON_AddArrayToObject(r, "findings");
+    char ev[200], h[5];
+    int mains = 0;
+    double main_w = 0, loads_w = 0; int loads_in_main = 0;
+    uint16_t main_id = 0;
+    for (int i = 0; i < n; i++) if (p[i].role == RBPOWER_ROLE_MAIN_SUPPLY) { mains++; main_w += p[i].p_w; if (!main_id) main_id = p[i].unit_id; }
+    if (!mains) finding(f, "no_main_supply", "warning", NULL, "No point is set as main supply.",
+                        "Set the role of the point on the grid feed to main supply on the hub's points page; cost and peaks need it.");
+    /* sensors list: CT model, range, correction per point */
+    char *sj = rbgrid_core_json_ctx() ? rbgrid_json_create_sensors_list(rbgrid_core_json_ctx()) : NULL;
+    cJSON *sl = sj ? cJSON_Parse(sj) : NULL;
+    free(sj);
+    for (int i = 0; i < n; i++) {
+        uid_hex(p[i].unit_id, h);
+        if (!p[i].present) {
+            snprintf(ev, sizeof(ev), "'%.40s' has no live source (module or node not heard).", p[i].name);
+            finding(f, "channel_absent", "warning", h, ev, "Check the module or node behind it: cable, power, I2C address; the event log says when it went.");
+            continue;
+        }
+        if (p[i].i_a > 0.3f && p[i].v_v < 1.0f) {
+            snprintf(ev, sizeof(ev), "%.2f A flows but no voltage is measured, so no power or energy is booked.", p[i].i_a);
+            finding(f, "no_voltage", "critical", h, ev, "Connect the module's voltage input (mains reference); current alone does not give energy.");
+        }
+        bool gen = !strcmp(role_class(p[i].role), "generation") || p[i].role == RBPOWER_ROLE_STORAGE_SYSTEM || p[i].role == RBPOWER_ROLE_MAIN_SUPPLY;
+        if (!gen && p[i].p_w < -20.0f) {
+            snprintf(ev, sizeof(ev), "A load point reads %.0f W (negative) right now.", p[i].p_w);
+            finding(f, "ct_reversed", "warning", h, ev, "Turn the clamp round so its arrow points to the load. A software sign flip is not the fix.");
+        }
+        if (p[i].inside && p[i].inside == main_id) { loads_w += p[i].p_w; loads_in_main++; }
+        const cJSON *e;
+        cJSON_ArrayForEach(e, cJSON_GetObjectItem(sl, "sensors")) {
+            const char *uid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
+            if (!uid || strcasecmp(uid, h)) continue;
+            double fs = cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ct_fs_a"));
+            const char *corr = cJSON_GetStringValue(cJSON_GetObjectItem(e, "sct_correction"));
+            const char *ctn = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ct_name"));
+            if (fs > 0 && p[i].i_a > 0.95 * fs) {
+                snprintf(ev, sizeof(ev), "%.1f A is at the clamp's measuring limit (%.1f A for %.30s).", p[i].i_a, fs, ctn ? ctn : "this clamp");
+                finding(f, "ct_rating_mismatch", "warning", h, ev, "Fit a clamp with a higher rating and select its model for this channel.");
+            }
+            if (corr && !strcmp(corr, "uncalibrated")) {
+                finding(f, "module_uncalibrated", "warning", h, "The module reports this channel as uncalibrated.", "Readings may be off; contact the module supplier.");
+            }
+        }
+    }
+    cJSON_Delete(sl);
+    if (mains && loads_in_main && loads_w > main_w * 1.15 + 50.0) {
+        snprintf(ev, sizeof(ev), "The points inside the main supply draw %.0f W together, more than the main supply's %.0f W.", loads_w, main_w);
+        finding(f, "sum_mismatch", "warning", NULL, ev, "A sub-meter clamp may sit on the wrong wire or phase, or a point is set inside the wrong parent.");
+    }
+    for (uint8_t m = 0; m < RBPOWER_MODULE_DESC_MAX; m++) {
+        rbpower_module_desc_t d;
+        if (!rbpower_get_module_desc(m, &d) || d.present) continue;
+        snprintf(ev, sizeof(ev), "Module %u (%.15s at 0x%02X) does not answer.", m, d.model, d.addr);
+        finding(f, "module_missing", "critical", NULL, ev, "Check its cable and power; its channels read no energy meanwhile.");
+    }
+    /* reverse flow seen by the module (BASIC: negative power is not booked) — from this boot's event log */
+    if (s_events_reader) {
+        char *raw = s_events_reader(0, 100, 1);
+        cJSON *src = raw ? cJSON_Parse(raw) : NULL;
+        free(raw);
+        char last_m[24] = "";
+        bool active = false;
+        const cJSON *e;
+        cJSON_ArrayForEach(e, cJSON_GetObjectItem(src, "lines")) {
+            const char *m = cJSON_GetStringValue(cJSON_GetObjectItem(e, "msg"));
+            if (!m) continue;
+            if (strstr(m, "reverse flow on a BASIC module")) { active = true; sscanf(m, "FAIL %23[^ ]", last_m); }
+            else if (strstr(m, "reverse flow ended")) active = false;
+        }
+        cJSON_Delete(src);
+        if (last_m[0]) {
+            snprintf(ev, sizeof(ev), "The module reported reverse power on %s %s this boot; on a BASIC module that energy is not booked.",
+                     last_m, active ? "(still ongoing)" : "(it ended since)");
+            finding(f, "ct_reversed", active ? "critical" : "info", NULL, ev, "Turn the clamp round so its arrow points to the load.");
+        }
+    }
+    if (!rbtime_is_time_valid()) finding(f, "clock_unsynced", "warning", NULL, "The hub clock is not synced.", "Check the hub's internet access (NTP); hours and costs need the clock.");
+    rbgrid_tariff_now_t tn; rbgrid_core_tariff_now(&tn);
+    if (tn.placeholder) finding(f, "tariff_not_set", "info", NULL, "No tariff plan is saved; money is computed off a demo plan.", "Enter the tariff on the hub's tariff page.");
+    cJSON_AddNumberToObject(r, "checked_channels", n);
+    if (!cJSON_GetArraySize(f)) note(cx, "No installation problem found in the live data and this boot's log.");
+    note(cx, "This tool detects only; it changes nothing on the hub.");
+    free(p);
+    cx->as_of = now_s();
+    return r;
+}
+
+/* ---- detect_anomalies: heuristics over the stored hours and days, flagged as such ---- */
+typedef struct { double night[2]; int night_n[2]; uint32_t split; double day[64]; uint32_t day_ts[64]; int nd; } anom_ctx_t;
+static void anom_hour(const rbpower_period_statistics_t *s, void *v)
+{
+    anom_ctx_t *c = (anom_ctx_t *)v;
+    uint32_t ts = (uint32_t)(s->period_start_us / 1000000LL);
+    uint32_t dur = s->v4_dur_s ? s->v4_dur_s : 3600;
+    if (dur < 3540) return;
+    time_t mid = (time_t)(ts + dur / 2); struct tm lt; rbgrid_localtime_r(&mid, &lt);
+    if (lt.tm_hour < 1 || lt.tm_hour >= 5) return;
+    int k = ts >= c->split ? 1 : 0;
+    double e = s->exact.valid ? s->exact.ec_mwh / 1000.0 : s->energy_period.consumed_wh;
+    c->night[k] += e * 3600.0 / dur; c->night_n[k]++;
+}
+static void anom_day(const rbpower_period_statistics_t *s, void *v)
+{
+    anom_ctx_t *c = (anom_ctx_t *)v;
+    if (c->nd >= 64) return;
+    c->day_ts[c->nd] = (uint32_t)(s->period_start_us / 1000000LL);
+    c->day[c->nd++] = s->exact.valid ? s->exact.ec_mwh / 1000.0 : s->energy_period.consumed_wh;
+}
+static cJSON *t_detect_anomalies(const cJSON *a, rbllm_cx_t *cx)
+{
+    rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
+    if (!p) return fail(cx, "internal", "out of memory", NULL);
+    int n = snapshot(p, RBLLM_MAX_POINTS);
+    bool sel[RBLLM_MAX_POINTS];
+    if (!select_points(cx, cJSON_GetObjectItem(a, "channels"), p, n, sel)) { free(p); return NULL; }
+    uint32_t now = now_s();
+    if (now < RBGRID_TS_SANE_MIN) { free(p); return fail(cx, "internal", "the hub clock is not set", NULL); }
+    uint32_t today0 = local_floor(now, 'd');
+    cJSON *r = cJSON_CreateObject();
+    cJSON *f = cJSON_AddArrayToObject(r, "findings");
+    anom_ctx_t *c = calloc(1, sizeof(*c));
+    if (!c) { cJSON_Delete(r); free(p); return fail(cx, "internal", "out of memory", NULL); }
+    char ev[220], h[5];
+    int analysed = 0;
+    for (int i = 0; i < n; i++) {
+        if (!sel[i] || late(cx)) continue;
+        memset(c, 0, sizeof(*c));
+        uid_hex(p[i].unit_id, h);
+        /* night baseline: this week vs the week before, hours 01–05 local */
+        c->split = local_add(today0, 'd', -7);
+        rbgrid_foreach_valid_record_ex(p[i].unit_id, RBPOWER_STAT_PERIOD_1HOUR, RBPOWER_PERIOD_HOUR, local_add(today0, 'd', -14), now, true,
+                                       cx->deadline_us, anom_hour, c);
+        if (c->night_n[0] >= 8 && c->night_n[1] >= 8) {
+            double w0 = c->night[0] / c->night_n[0], w1 = c->night[1] / c->night_n[1];
+            if (w1 > w0 * 1.3 && w1 - w0 > 20.0) {
+                snprintf(ev, sizeof(ev), "Night standby (01:00–05:00) averaged %.0f W over the last 7 days against %.0f W the week before.", w1, w0);
+                cJSON *o = cJSON_CreateObject();
+                cJSON_AddStringToObject(o, "type", "night_baseline_rise"); cJSON_AddStringToObject(o, "channel", h);
+                cJSON_AddStringToObject(o, "evidence", ev);
+                cJSON_AddNumberToObject(o, "confidence", w1 - w0 > 60 ? 0.8 : 0.6);
+                cJSON_AddItemToArray(f, o);
+            }
+            analysed++;
+        }
+        /* unusual day: a closed day above mean + 2.5 sigma of the last 30 */
+        rbgrid_foreach_valid_record_ex(p[i].unit_id, RBPOWER_STAT_PERIOD_DAILY, RBPOWER_PERIOD_DAY, local_add(today0, 'd', -30), today0 - 1, true,
+                                       cx->deadline_us, anom_day, c);
+        if (c->nd >= 10) {
+            double m = 0, v = 0;
+            for (int k = 0; k < c->nd; k++) m += c->day[k];
+            m /= c->nd;
+            for (int k = 0; k < c->nd; k++) v += (c->day[k] - m) * (c->day[k] - m);
+            double sd = sqrt(v / c->nd);
+            for (int k = 0; k < c->nd; k++) {
+                if (sd > 0 && c->day[k] > m + 2.5 * sd && c->day[k] - m > 500.0) {
+                    char d[48]; iso_time(c->day_ts[k], d); d[10] = '\0';
+                    snprintf(ev, sizeof(ev), "%s used %.1f kWh against a 30-day average of %.1f kWh.", d, c->day[k] / 1000.0, m / 1000.0);
+                    cJSON *o = cJSON_CreateObject();
+                    cJSON_AddStringToObject(o, "type", "unusual_day"); cJSON_AddStringToObject(o, "channel", h);
+                    cJSON_AddStringToObject(o, "evidence", ev);
+                    cJSON_AddNumberToObject(o, "confidence", 0.7);
+                    cJSON_AddItemToArray(f, o);
+                }
+            }
+            analysed++;
+        }
+    }
+    free(c); free(p);
+    if (late(cx)) { cJSON_Delete(r); return fail(cx, "timeout", "the history read took too long", "Pick fewer channels."); }
+    cJSON_AddNumberToObject(r, "checks_with_enough_data", analysed);
+    note(cx, "Findings are heuristics over the stored hours and days, not measurements of a fault; say so when you report them.");
+    if (!analysed) { cx->gaps = true; note(cx, "Not enough history yet: the night check needs 14 days of hours, the day check 10 closed days."); }
+    cx->as_of = today0;
+    return r;
+}
+
+/* ---- get_regional_context: what the hub itself knows for a country (dynamic price sources, currency) ---- */
+static cJSON *t_get_regional_context(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *cc = cJSON_GetStringValue(cJSON_GetObjectItem(a, "country"));
+    if (cc && (strlen(cc) != 2)) return fail(cx, "invalid_args", "country: ISO 3166-1 alpha-2 code, e.g. DE", NULL);
+    cJSON *cfg = rbdynprice_config_json();
+    if (!cfg) return fail(cx, "internal", "out of memory", NULL);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "hub_currency", rbpower_tariff_currency());
+    if (cc) cJSON_AddStringToObject(r, "country", cc);
+    cJSON *prov = cJSON_AddArrayToObject(r, "dynamic_price_sources");
+    cJSON *countries = cc ? NULL : cJSON_AddArrayToObject(r, "countries_with_dynamic_prices");
+    const cJSON *pv;
+    cJSON_ArrayForEach(pv, cJSON_GetObjectItem(cfg, "providers")) {
+        cJSON *zs = NULL;
+        const cJSON *z;
+        cJSON_ArrayForEach(z, cJSON_GetObjectItem(pv, "zones")) {
+            const char *zc = cJSON_GetStringValue(cJSON_GetObjectItem(z, "country"));
+            if (!zc) continue;
+            if (countries) {
+                bool dup = false; const cJSON *q;
+                cJSON_ArrayForEach(q, countries) if (!strcmp(cJSON_GetStringValue(q), zc)) dup = true;
+                if (!dup) cJSON_AddItemToArray(countries, cJSON_CreateString(zc));
+                continue;
+            }
+            if (strcasecmp(zc, cc)) continue;
+            if (!zs) zs = cJSON_CreateArray();
+            cJSON *zo = cJSON_CreateObject();
+            cJSON_AddStringToObject(zo, "zone", cJSON_GetStringValue(cJSON_GetObjectItem(z, "id")));
+            cJSON_AddStringToObject(zo, "name", cJSON_GetStringValue(cJSON_GetObjectItem(z, "name")));
+            cJSON_AddStringToObject(zo, "currency", cJSON_GetStringValue(cJSON_GetObjectItem(z, "currency")));
+            cJSON_AddItemToArray(zs, zo);
+        }
+        bool local = cJSON_IsTrue(cJSON_GetObjectItem(pv, "local"));
+        if (cc && !zs && !local) continue;
+        if (!cc && !local) continue;   /* without a country: list only the country-free sources (Home Assistant push) */
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "id", cJSON_GetStringValue(cJSON_GetObjectItem(pv, "id")));
+        cJSON_AddStringToObject(o, "name", cJSON_GetStringValue(cJSON_GetObjectItem(pv, "name")));
+        cJSON_AddStringToObject(o, "price_class", cJSON_GetStringValue(cJSON_GetObjectItem(pv, "class")));
+        cJSON_AddBoolToObject(o, "needs_token", cJSON_IsTrue(cJSON_GetObjectItem(pv, "needs_token")));
+        cJSON_AddBoolToObject(o, "pushed_to_hub", local);
+        if (zs) cJSON_AddItemToObject(o, "zones", zs);
+        cJSON_AddItemToArray(prov, o);
+    }
+    cJSON_AddStringToObject(r, "price_state_now", cJSON_GetStringValue(cJSON_GetObjectItem(cfg, "state")) ? cJSON_GetStringValue(cJSON_GetObjectItem(cfg, "state")) : "");
+    cJSON_Delete(cfg);
+    note(cx, "spot = wholesale day-ahead price without fees and VAT; all_in = the price a supplier charges. Set the source on the hub's dynamic price page.");
+    note(cx, "Tariff templates and local terms are not built in yet; ask the user for the supplier's price sheet.");
+    cx->as_of = now_s();
+    return r;
+}
+
 static cJSON *t_get_analysis_playbook(const cJSON *a, rbllm_cx_t *cx);
 
 /* ============================================================================================ registry */
@@ -1269,6 +1518,25 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"period\":" S_PERIOD "},\"required\":[\"period\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"import_kwh\":{\"type\":[\"number\",\"null\"]},\"export_kwh\":{\"type\":[\"number\",\"null\"]},\"generation_kwh\":{\"type\":[\"number\",\"null\"]}}}",
       t_get_import_export_balance },
+    { "check_installation", RBLLM_SCOPE_READ,
+      "When to call: after setup, or when numbers look wrong. What it returns: findings {type, severity, channel, evidence, fix_hint}: "
+      "no_main_supply, channel_absent, module_missing, no_voltage, ct_reversed, ct_rating_mismatch, sum_mismatch, clock_unsynced, "
+      "tariff_not_set. Detects only; a reversed clamp is fixed at the clamp.",
+      "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"severity\":{\"type\":\"string\"},\"fix_hint\":{\"type\":\"string\"}}}}}}",
+      t_check_installation },
+    { "detect_anomalies", RBLLM_SCOPE_READ,
+      "When to call: for 'anything unusual?' or 'why is my bill higher'. What it returns: heuristic findings {type: night_baseline_rise | "
+      "unusual_day, channel, evidence, confidence} from the stored hours and days. They are hints, not measured faults.",
+      "{\"type\":\"object\",\"properties\":{\"channels\":" S_CHANNELS "},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\"},\"checks_with_enough_data\":{\"type\":\"integer\"}}}",
+      t_detect_anomalies },
+    { "get_regional_context", RBLLM_SCOPE_READ,
+      "When to call: when the user asks about dynamic or spot prices for their country. What it returns: the dynamic price sources the "
+      "hub can use for that country (zones, currency, whether a token is needed), the hub currency and the price state now.",
+      "{\"type\":\"object\",\"properties\":{\"country\":{\"type\":\"string\",\"description\":\"ISO 3166-1 alpha-2, e.g. DE; omit for the list of countries\"}},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"dynamic_price_sources\":{\"type\":\"array\"},\"hub_currency\":{\"type\":\"string\"}}}",
+      t_get_regional_context },
     { "get_analysis_playbook", RBLLM_SCOPE_READ,
       "When to call: when the user asks for a report or a check and you want the hub's recipe. What it returns: the steps (tools with argument "
       "hints), questions to ask the user and rules for the answer.",
@@ -1285,7 +1553,7 @@ static const char *const PLAYBOOKS[] = {
     "{\"tool\":\"compare_periods\",\"args_hint\":{\"a\":{\"preset\":\"last_month\"},\"baseline\":\"previous_period\"}}],"
     "\"ask_user\":[\"Which month?\"],\"rules\":[\"Show the numbers and the period behind every conclusion.\",\"Answer in the user's language.\","
     "\"Say when meta.gaps or meta.estimated is true.\"]}",
-    "{\"id\":\"installation_check\",\"title\":\"Installation check\",\"steps\":[{\"tool\":\"get_health\"},{\"tool\":\"list_channels\"},"
+    "{\"id\":\"installation_check\",\"title\":\"Installation check\",\"steps\":[{\"tool\":\"check_installation\"},{\"tool\":\"get_health\"},{\"tool\":\"list_channels\"},"
     "{\"tool\":\"read_live\"},{\"tool\":\"get_events\",\"args_hint\":{\"limit\":30}}],"
     "\"ask_user\":[\"Which appliances are running now?\"],\"rules\":[\"A missing module or a channel that is not present comes first.\","
     "\"A reversed clamp is fixed at the clamp; never suggest a software sign flip.\",\"Answer in the user's language.\"]}",
