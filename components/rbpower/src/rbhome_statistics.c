@@ -1586,6 +1586,25 @@ static uint32_t hour_start_now(void)
     return (uint32_t)(t - (t % 3600ULL));
 }
 
+/* The open (not yet closed) hour of a point, from its 1HOUR accumulator: the closed 15-min periods folded so far.
+ * Caller holds the home lock. */
+bool rbpower_stats_open_hour(rbpower_unit_id_t unit_id, uint32_t *hour_ts, uint32_t *covered_s, double *e_in_wh, double *e_out_wh)
+{
+    for (int i = 0; i < g_home_network.units_count && i < RBPOWER_MAX_HOME_UNITS; i++) {
+        if (g_home_network.units[i].definition.unit_id != unit_id) continue;
+        const rbpower_period_accumulator_t *acc = &g_period_accumulators[i][RBPOWER_STAT_PERIOD_1HOUR];
+        if (!acc->is_active || acc->metadata.input_periods_received == 0) return false;
+        uint32_t h = (rbtime_is_time_valid() && s_hour_of_acc[i]) ? s_hour_of_acc[i] : hour_start_now();
+        if (!h) return false;
+        if (hour_ts) *hour_ts = h;
+        if (covered_s) *covered_s = acc->metadata.covered_ms / 1000u;
+        if (e_in_wh) *e_in_wh = acc->energy.consumed_wh_accumulator;
+        if (e_out_wh) *e_out_wh = acc->energy.supplied_wh_accumulator;
+        return true;
+    }
+    return false;
+}
+
 static void hour_persist(uint8_t unit_idx)
 {
     rbpower_period_accumulator_t* acc = &g_period_accumulators[unit_idx][RBPOWER_STAT_PERIOD_1HOUR];

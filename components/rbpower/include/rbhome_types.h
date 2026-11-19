@@ -2386,6 +2386,13 @@ rbpower_err_t rbpower_force_finalize_period(rbpower_unit_id_t unit_id, rbpower_s
  * @return Number of units flushed.
  */
 int rbpower_stats_flush_open_hours(void);
+/**
+ * @brief The open hour of a point (closed 15-min periods folded so far; RAM).
+ * @param[in] unit_id Point. @param[out] hour_ts Hour start, epoch s. @param[out] covered_s Covered time, s.
+ * @param[out] e_in_wh Energy in, Wh. @param[out] e_out_wh Energy out, Wh. Any output may be NULL.
+ * @return false if the point has no open hour with data. Call with rbpower_home_lock() held.
+ */
+bool rbpower_stats_open_hour(rbpower_unit_id_t unit_id, uint32_t *hour_ts, uint32_t *covered_s, double *e_in_wh, double *e_out_wh);
 
 /**
  * @brief Forget the per-unit open-HOUR NVS image and pending quality bits of units[unit_idx].

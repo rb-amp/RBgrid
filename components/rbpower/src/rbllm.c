@@ -368,6 +368,7 @@ typedef struct {
     bool truncated, gaps, estimated;
     cJSON *notes;          /* array or NULL */
     /* error */
+    bool open_hour;        /* the answer includes the open hour's closed 15-min periods */
     const char *err_code;
     char err_msg[160];
     char err_hint[160];
@@ -466,6 +467,7 @@ typedef struct {
     uint32_t  day_secs;
     rbllm_cx_t *cx;
     bool      timed_out;
+    uint32_t  newest_hour_end;   /* end of the newest HOUR record seen (open-hour de-duplication) */
 } sum_ctx_t;
 
 static int bucket_index(const sum_ctx_t *c, uint32_t ts)
@@ -508,6 +510,7 @@ static void sum_emit(const rbpower_period_statistics_t *s, void *v, bool is_hour
     b->recs++;
     uint32_t end = clamp_now(rec_end(s));
     if (end > c->newest_end) c->newest_end = end;
+    if (is_hour && rec_end(s) > c->newest_hour_end) c->newest_hour_end = rec_end(s);
     if (is_hour) c->hour_secs += dur; else c->day_secs += dur;
     if (late(c->cx)) c->timed_out = true;
 }
@@ -551,6 +554,25 @@ static void sum_range(sum_ctx_t *c, uint16_t u, uint32_t from, uint32_t to)
         hour_seg(c, u, d1, to, hmin);     /* partial last day / today */
     } else {
         hour_seg(c, u, from, to, hmin);
+    }
+    /* the open hour (RAM): its closed 15-min periods, unless a record already covers it */
+    uint32_t oh = 0, cov = 0; double oi = 0, oo = 0;
+    rbpower_home_lock();
+    bool have = rbpower_stats_open_hour(u, &oh, &cov, &oi, &oo);
+    rbpower_home_unlock();
+    if (have && cov && oh < to && oh + 3600u > from && c->newest_hour_end < oh + 3600u) {
+        int k = bucket_index(c, oh);
+        if (k >= 0) {
+            bucket_t *b = &c->b[k];
+            rbgrid_tariff_now_t tn; rbgrid_core_tariff_now(&tn);
+            b->e_in += oi; b->e_out += oo;
+            b->cost += oi / 1000.0 * tn.buy_rate_all_in;
+            b->rev += oo / 1000.0 * tn.sell_rate;
+            b->recs++;
+            c->hour_secs += cov;
+            if (oh + cov > c->newest_end) c->newest_end = clamp_now(oh + cov);
+            c->cx->open_hour = true;
+        }
     }
     if (late(c->cx)) c->timed_out = true;
 }
@@ -942,7 +964,7 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
     }
     free(p);
     cx->as_of = newest;
-    if (newest && to > newest + 60) note(cx, "Data runs up to as_of; the newest 15-min period is booked when it closes.");
+    if (newest && to > newest + 60 && !cx->open_hour) note(cx, "Data runs up to as_of; the newest 15-min period is booked when it closes.");
     cx->resolution = res_str(u);
     return r;
 }
@@ -1137,6 +1159,22 @@ static cJSON *t_get_load_profile(const cJSON *a, rbllm_cx_t *cx)
         if (t2 > d1) note(cx, "Today is not in the daily rows until the day closes; ask with resolution=hour for today.");
     }
     if (c->timed_out) { heap_caps_free(c); free(p); return fail(cx, "timeout", "the history read took too long", "Narrow the period."); }
+    if (hour && c->n < c->cap) {   /* open hour, newest: prepend in record order (rows are emitted reversed) */
+        uint32_t oh = 0, cov = 0; double oi = 0, oo = 0;
+        rbpower_home_lock();
+        bool have = rbpower_stats_open_hour(p[idx].unit_id, &oh, &cov, &oi, &oo);
+        rbpower_home_unlock();
+        bool dup = false;
+        for (int k = 0; k < c->n; k++) if (c->ts[k] == oh) dup = true;
+        if (have && cov && !dup && oh < to && oh + 3600u > from) {
+            memmove(&c->ts[1], &c->ts[0], c->n * sizeof(c->ts[0])); memmove(&c->avg[1], &c->avg[0], c->n * sizeof(c->avg[0]));
+            memmove(&c->mn[1], &c->mn[0], c->n * sizeof(c->mn[0])); memmove(&c->mx[1], &c->mx[0], c->n * sizeof(c->mx[0]));
+            memmove(&c->ext[1], &c->ext[0], c->n * sizeof(c->ext[0]));
+            c->ts[0] = oh; c->avg[0] = oi * 3600.0 / cov; c->ext[0] = false; c->n++; c->no_ext = true;
+            if (oh + cov > c->newest) c->newest = clamp_now(oh + cov);
+            cx->open_hour = true;
+        }
+    }
     cJSON *r = cJSON_CreateObject();
     add_period(r, from, to);
     char h[5]; uid_hex(p[idx].unit_id, h);
@@ -2317,6 +2355,11 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
         cJSON_AddBoolToObject(m, "gaps", cx.gaps);
         cJSON_AddBoolToObject(m, "estimated", cx.estimated);
         if (cx.resolution) cJSON_AddStringToObject(m, "resolution", cx.resolution);
+        if (cx.open_hour) {
+            if (!cx.notes) cx.notes = cJSON_CreateArray();
+            cJSON_AddItemToArray(cx.notes, cJSON_CreateString("The current hour is included up to its last closed 15-min period; its cost is estimated at the price in force now."));
+            cJSON_ReplaceItemInObject(m, "estimated", cJSON_CreateBool(true));
+        }
         if (cx.notes) { cJSON_AddItemToObject(m, "notes", cx.notes); cx.notes = NULL; }
         out = cJSON_PrintUnformatted(r);
         cJSON_Delete(r);
