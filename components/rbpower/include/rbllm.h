@@ -23,7 +23,7 @@ extern "C" {
 #define RBLLM_PROTO              "1.0"   ///< Protocol version (§11)
 #define RBLLM_MAX_RESPONSE_BYTES 16384   ///< limits.max_response_bytes (§3)
 #define RBLLM_MAX_MANIFEST_BYTES 65536   ///< limits.max_manifest_bytes (§3)
-#define RBLLM_MAX_CONCURRENT     2       ///< limits.max_concurrent: one running + one queued
+#define RBLLM_MAX_CONCURRENT     4       ///< limits.max_concurrent: one running + three queued (two assistants + HA measured busy at 2)
 #define RBLLM_CALL_TIMEOUT_MS    8000    ///< limits.call_timeout_ms
 #define RBLLM_MAX_REQUEST_BYTES  4096    ///< A call body larger than this is refused (invalid_args)
 
