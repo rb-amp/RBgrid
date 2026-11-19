@@ -79,12 +79,19 @@ static esp_err_t h_manifest(httpd_req_t *req)
     return send_json(req, 200, rbllm_manifest_json());
 }
 
-static void call_done(char *reply, void *ctx)
+/* Finish a detached call. A second request on the same socket after an async handler is never answered (measured
+ * 19.11 on IDF 5.5.1: the handler runs, the reply is lost), so a call answer always says Connection: close and the
+ * session is closed after it; clients open a new connection per call (one LAN handshake). */
+static void async_finish(httpd_req_t *r, int status, char *body)
 {
-    httpd_req_t *r = (httpd_req_t *)ctx;
-    send_json(r, 200, reply);
+    httpd_handle_t hd = r->handle;
+    int fd = httpd_req_to_sockfd(r);
+    httpd_resp_set_hdr(r, "Connection", "close");
+    send_json(r, status, body);
     httpd_req_async_handler_complete(r);
+    if (fd >= 0) httpd_sess_trigger_close(hd, fd);
 }
+static void call_done(char *reply, void *ctx) { async_finish((httpd_req_t *)ctx, 200, reply); }
 
 static esp_err_t h_call(httpd_req_t *req)
 {
@@ -100,8 +107,7 @@ static esp_err_t h_call(httpd_req_t *req)
     }
     if (!rbllm_submit(body, strlen(body), &who, call_done, copy)) {
         free(body);
-        send_json(copy, 429, rbllm_error_json(NULL, "busy", "the hub is answering another call", "Retry.", 1000));
-        httpd_req_async_handler_complete(copy);
+        async_finish(copy, 429, rbllm_error_json(NULL, "busy", "the hub is answering another call", "Retry.", 1000));
     }
     return ESP_OK;
 }

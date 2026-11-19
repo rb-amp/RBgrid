@@ -53,7 +53,13 @@ def main():
     ap.add_argument("host")
     ap.add_argument("--admin-token-env", default="RBGRID_ADMIN_TOKEN")
     ap.add_argument("--keep", action="store_true", help="leave the API on and the client paired")
+    ap.add_argument("--admin-token-file", help="env-style file with RBGRID_*_ADMIN_TOKEN= (read, never printed)")
     a = ap.parse_args()
+    if a.admin_token_file:
+        for line in open(a.admin_token_file, encoding="utf-8"):
+            k, _, v = line.strip().partition("=")
+            if k.endswith("_ADMIN_TOKEN") and v:
+                os.environ["RBGRID_ADMIN_TOKEN"] = v
     h = Hub(a.host)
 
     # ---- admin token: use the given one, or arm a temporary one
@@ -185,6 +191,30 @@ def main():
         check(j and j["error"]["code"] == "out_of_history", "out_of_history")
         code, j, _, _ = call("read_live", {"channels": ["FFFF"]})
         check(j and j["error"]["code"] == "not_found", "not_found: unknown channel")
+
+        # ---- config scope: a read token is refused, a read+config token reads every section
+        if "get_config" in [t["name"] for t in man["tools"]]:
+            code, j, _, _ = call("get_config")
+            check(j and j.get("ok") is False and j["error"]["code"] == "forbidden_scope", "get_config with a read token: forbidden_scope")
+            code, ps2, _, _ = h.req("/api/llm/v1/pair/start", "POST", {"client_name": "llm_test_cfg", "scopes": ["read", "config"]})
+            code, st2, _, _ = h.req("/api/v1/llm", bearer=admin)
+            c2 = [p["code"] for p in st2["pairing"] if p["client_name"] == "llm_test_cfg"]
+            code, pj2, _, _ = h.req("/api/llm/v1/pair/complete", "POST", {"pair_id": ps2["pair_id"], "code": c2[0]})
+            tok2 = pj2.get("token", "")
+            check(pj2.get("scopes") == ["read", "config"], "pair with read+config")
+            for sec in (None, "channels", "tariff", "notifications", "region"):
+                body = {"tool": "get_config", "args": {"section": sec} if sec else {}, "request_id": "cfg"}
+                code, j, nb, ms = h.req("/api/llm/v1/call", "POST", body, bearer=tok2)
+                ok = j and j.get("ok") and len(j["result"].get("version", "")) == 8
+                check(ok and nb <= maxb, f"get_config {sec or 'all'}: ok, version, {nb} B, {ms:.0f} ms")
+                if not ok:
+                    print("   ", json.dumps(j)[:300])
+                txt = json.dumps(j)
+                check("token\":\"" not in txt and "password" not in txt.lower(), f"get_config {sec or 'all'}: no token or password in the answer")
+            code, st2, _, _ = h.req("/api/v1/llm", bearer=admin)
+            for t in st2.get("tokens", []):
+                if t["client_name"] == "llm_test_cfg":
+                    h.req("/api/v1/llm", "POST", {"revoke": t["id"]}, bearer=admin)
 
         # ---- yesterday's cost vs the REST API
         cb = res.get("get_cost_breakdown") or {}

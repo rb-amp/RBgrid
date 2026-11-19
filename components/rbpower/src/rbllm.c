@@ -21,6 +21,8 @@
 #include "rbpower.h"
 #include "rbjson.h"
 #include "rbdynprice.h"
+#include "rbactivation.h"
+#include "rbpeak.h"
 #include "rbextflash_operations.h"   /* rbpower_flash_unit_has_history */
 #include "littlefs_raw.h"
 #include "rbamp.h"                   /* rbamp_basic_fw_name */
@@ -479,11 +481,18 @@ static int bucket_index(const sum_ctx_t *c, uint32_t ts)
     return -1;
 }
 
+/* Record timestamps are the period END (rbstats_v4_types.h: "ts = Period END"); a record belongs to the period that
+ * ends at ts, i.e. starts at the local hour/day floor of ts - 1. A partial (open-hour) record carries the hour's end
+ * too, with dur = the covered time. */
+static uint32_t rec_end(const rbpower_period_statistics_t *s) { return (uint32_t)(s->period_start_us / 1000000LL); }
+static uint32_t rec_start(const rbpower_period_statistics_t *s, bool is_hour) { return local_floor(rec_end(s) - 1, is_hour ? 'h' : 'd'); }
+static uint32_t clamp_now(uint32_t t) { uint32_t n = now_s(); return t > n ? n : t; }
+
 static void sum_emit(const rbpower_period_statistics_t *s, void *v, bool is_hour)
 {
     sum_ctx_t *c = (sum_ctx_t *)v;
     if (c->timed_out) return;
-    uint32_t ts = (uint32_t)(s->period_start_us / 1000000LL);
+    uint32_t ts = rec_start(s, is_hour);
     uint32_t dur = s->v4_dur_s ? s->v4_dur_s : (is_hour ? 3600u : 86400u);
     int k = bucket_index(c, ts);
     if (k < 0) return;
@@ -496,7 +505,8 @@ static void sum_emit(const rbpower_period_statistics_t *s, void *v, bool is_hour
         b->cost += s->result_base.cost_consumed;  b->rev += s->result_base.revenue_supplied;
     }
     b->recs++;
-    if (ts + dur > c->newest_end) c->newest_end = ts + dur;
+    uint32_t end = clamp_now(rec_end(s));
+    if (end > c->newest_end) c->newest_end = end;
     if (is_hour) c->hour_secs += dur; else c->day_secs += dur;
     if (late(c->cx)) c->timed_out = true;
 }
@@ -516,7 +526,7 @@ static void hour_seg(sum_ctx_t *c, uint16_t u, uint32_t a, uint32_t b, uint32_t 
         if (b <= hmin) return;
         a = hmin;
     }
-    rbgrid_foreach_valid_record_ex(u, RBPOWER_STAT_PERIOD_1HOUR, RBPOWER_PERIOD_HOUR, a, b - 1, true,
+    rbgrid_foreach_valid_record_ex(u, RBPOWER_STAT_PERIOD_1HOUR, RBPOWER_PERIOD_HOUR, a + 1, local_add(local_floor(b - 1, 'h'), 'h', 1), true,
                                    c->cx->deadline_us, sum_emit_h, c);
 }
 static void sum_range(sum_ctx_t *c, uint16_t u, uint32_t from, uint32_t to)
@@ -534,7 +544,7 @@ static void sum_range(sum_ctx_t *c, uint16_t u, uint32_t from, uint32_t to)
     uint32_t d1 = local_floor(to, 'd');   if (d1 > today0) d1 = today0;                 /* end of the whole closed days */
     bool whole = c->unit != 'h' && d0 < d1;   /* hourly rows never take a day record */
     if (whole) {
-        rbgrid_foreach_valid_record_ex(u, RBPOWER_STAT_PERIOD_DAILY, RBPOWER_PERIOD_DAY, d0, d1 - 1, true,
+        rbgrid_foreach_valid_record_ex(u, RBPOWER_STAT_PERIOD_DAILY, RBPOWER_PERIOD_DAY, d0 + 1, d1, true,
                                        c->cx->deadline_us, sum_emit_d, c);
         hour_seg(c, u, from, d0, hmin);   /* partial first day */
         hour_seg(c, u, d1, to, hmin);     /* partial last day / today */
@@ -682,6 +692,9 @@ static cJSON *t_read_live(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddNumberToObject(o, "current_a", round(p[i].i_a * 1000.0) / 1000.0);
         if (p[i].v_v > 1.0f) cJSON_AddNumberToObject(o, "voltage_v", r2(p[i].v_v));
         else cJSON_AddNullToObject(o, "voltage_v");
+        if (p[i].pf > 0.0f && p[i].pf <= 1.0f && p[i].v_v > 1.0f && fabsf(p[i].p_w) > 1.0f) cJSON_AddNumberToObject(o, "pf", round(p[i].pf * 1000.0) / 1000.0);
+        else cJSON_AddNullToObject(o, "pf");
+        if (p[i].age_ms != UINT32_MAX) cJSON_AddNumberToObject(o, "age_ms", p[i].age_ms); else cJSON_AddNullToObject(o, "age_ms");
         cJSON_AddItemToArray(arr, o);
     }
     free(p);
@@ -913,8 +926,10 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
             cJSON_AddItemToArray(rows, row);
         }
         cJSON *tot = cJSON_AddObjectToObject(o, "total");
-        cJSON_AddNumberToObject(tot, "energy_kwh", r4(ti / 1000.0));
-        cJSON_AddNumberToObject(tot, "export_kwh", r4(te / 1000.0));
+        if (empty < nb) {
+            cJSON_AddNumberToObject(tot, "energy_kwh", r4(ti / 1000.0));
+            cJSON_AddNumberToObject(tot, "export_kwh", r4(te / 1000.0));
+        } else { cJSON_AddNullToObject(tot, "energy_kwh"); cJSON_AddNullToObject(tot, "export_kwh"); }
         if (empty) { cx->gaps = true; note(cx, "Rows with null have no stored record (hub off, point added later, or beyond the history depth)."); }
         if (!c.hour_secs && !c.day_secs) cx->gaps = true;
         if (c.newest_end > newest) newest = c.newest_end;
@@ -923,7 +938,7 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
     }
     free(p);
     cx->as_of = newest;
-    if (newest && to > newest + 60) note(cx, "Data runs up to as_of: the open hour is booked when it closes.");
+    if (newest && to > newest + 60) note(cx, "Data runs up to as_of; the newest 15-min period is booked when it closes.");
     cx->resolution = res_str(u);
     return r;
 }
@@ -967,13 +982,16 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
         mains++; cost += t[i].cost; rev += t[i].rev; imp += t[i].e_in; exp += t[i].e_out; any |= t[i].any;
         if (t[i].newest > newest) newest = t[i].newest;
     }
-    if (mains) {
+    if (mains && !any) {
+        const char *k[] = { "total_cost", "import_kwh", "export_revenue", "export_kwh", "net_cost" };
+        for (size_t q = 0; q < 5; q++) cJSON_AddNullToObject(r, k[q]);
+        cx->gaps = true; note(cx, "No stored record of the main supply in this period: no data, not zero.");
+    } else if (mains) {
         cJSON_AddNumberToObject(r, "total_cost", r4(cost));
         cJSON_AddNumberToObject(r, "import_kwh", r4(imp / 1000.0));
         cJSON_AddNumberToObject(r, "export_revenue", r4(rev));
         cJSON_AddNumberToObject(r, "export_kwh", r4(exp / 1000.0));
         cJSON_AddNumberToObject(r, "net_cost", r4(cost - rev));
-        if (!any) { cx->gaps = true; note(cx, "No stored record of the main supply in this period."); }
     } else {
         cJSON_AddNullToObject(r, "total_cost");
         note(cx, "No point is set as main supply, so there is no bill figure; costs per channel are attribution only.");
@@ -986,8 +1004,8 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(o, "id", h);
         add_name(o, p[i].name);
         cJSON_AddStringToObject(o, "role", role_class(p[i].role));
-        cJSON_AddNumberToObject(o, "cost", r4(t[i].cost));
-        cJSON_AddNumberToObject(o, "energy_kwh", r4(t[i].e_in / 1000.0));
+        if (t[i].any) { cJSON_AddNumberToObject(o, "cost", r4(t[i].cost)); cJSON_AddNumberToObject(o, "energy_kwh", r4(t[i].e_in / 1000.0)); }
+        else { cJSON_AddNullToObject(o, "cost"); cJSON_AddNullToObject(o, "energy_kwh"); }
         if (t[i].e_out > 0) { cJSON_AddNumberToObject(o, "export_kwh", r4(t[i].e_out / 1000.0)); cJSON_AddNumberToObject(o, "export_value", r4(t[i].rev)); }
         cJSON_AddItemToArray(bc, o);
         if (t[i].newest > newest) newest = t[i].newest;
@@ -1041,13 +1059,15 @@ static cJSON *t_compare_periods(const cJSON *a, rbllm_cx_t *cx)
         char h[5]; uid_hex(p[i].unit_id, h);
         cJSON_AddStringToObject(o, "id", h);
         add_name(o, p[i].name);
-        cJSON_AddNumberToObject(o, "a_energy_kwh", r4(ta[i].e_in / 1000.0));
-        cJSON_AddNumberToObject(o, "b_energy_kwh", r4(tb[i].e_in / 1000.0));
-        double d = (ta[i].e_in - tb[i].e_in) / 1000.0;
-        cJSON_AddNumberToObject(o, "delta_kwh", r4(d));
-        if (tb[i].e_in > 1.0) cJSON_AddNumberToObject(o, "delta_pct", round(1000.0 * d * 1000.0 / tb[i].e_in) / 10.0);
-        else cJSON_AddNullToObject(o, "delta_pct");
-        cJSON_AddNumberToObject(o, "delta_cost", r4(ta[i].cost - tb[i].cost));
+        if (ta[i].any) cJSON_AddNumberToObject(o, "a_energy_kwh", r4(ta[i].e_in / 1000.0)); else cJSON_AddNullToObject(o, "a_energy_kwh");
+        if (tb[i].any) cJSON_AddNumberToObject(o, "b_energy_kwh", r4(tb[i].e_in / 1000.0)); else cJSON_AddNullToObject(o, "b_energy_kwh");
+        if (ta[i].any && tb[i].any) {
+            double d = (ta[i].e_in - tb[i].e_in) / 1000.0;
+            cJSON_AddNumberToObject(o, "delta_kwh", r4(d));
+            if (tb[i].e_in > 1.0) cJSON_AddNumberToObject(o, "delta_pct", round(1000.0 * d * 1000.0 / tb[i].e_in) / 10.0);
+            else cJSON_AddNullToObject(o, "delta_pct");
+            cJSON_AddNumberToObject(o, "delta_cost", r4(ta[i].cost - tb[i].cost));
+        } else { cJSON_AddNullToObject(o, "delta_kwh"); cJSON_AddNullToObject(o, "delta_pct"); cJSON_AddNullToObject(o, "delta_cost"); }
         if (!ta[i].any || !tb[i].any) cx->gaps = true;
         if (ta[i].newest > newest) newest = ta[i].newest;
         cJSON_AddItemToArray(arr, o);
@@ -1069,7 +1089,7 @@ static void prof_emit(const rbpower_period_statistics_t *s, void *v)
 {
     prof_ctx_t *c = (prof_ctx_t *)v;
     if (c->n >= c->cap || c->timed_out) return;
-    uint32_t ts = (uint32_t)(s->period_start_us / 1000000LL);
+    uint32_t ts = rec_start(s, c->is_hour);
     uint32_t dur = s->v4_dur_s ? s->v4_dur_s : (c->is_hour ? 3600u : 86400u);
     double e = s->exact.valid ? s->exact.ec_mwh / 1000.0 : s->energy_period.consumed_wh;
     int k = c->n++;
@@ -1079,7 +1099,7 @@ static void prof_emit(const rbpower_period_statistics_t *s, void *v)
     /* a record without extremes carries 0/0 (BASIC and recomputed DAY+ records); report null, not 0 */
     c->ext[k] = !(s->extremes.power_min == 0.0f && s->extremes.power_max == 0.0f) && s->extremes.power_max >= s->extremes.power_min;
     if (!c->ext[k]) c->no_ext = true;
-    if (ts + dur > c->newest) c->newest = ts + dur;
+    if (clamp_now(rec_end(s)) > c->newest) c->newest = clamp_now(rec_end(s));
     if (late(c->cx)) c->timed_out = true;
 }
 static cJSON *t_get_load_profile(const cJSON *a, rbllm_cx_t *cx)
@@ -1106,10 +1126,10 @@ static cJSON *t_get_load_profile(const cJSON *a, rbllm_cx_t *cx)
     if (!c) { free(p); return fail(cx, "internal", "out of memory", NULL); }
     c->cap = cap; c->cx = cx; c->is_hour = hour;
     uint32_t now = now_s(), t2 = to > now ? now : to;
-    if (hour) rbgrid_foreach_valid_record_ex(p[idx].unit_id, RBPOWER_STAT_PERIOD_1HOUR, RBPOWER_PERIOD_HOUR, from, t2 - 1, true, cx->deadline_us, prof_emit, c);
+    if (hour) rbgrid_foreach_valid_record_ex(p[idx].unit_id, RBPOWER_STAT_PERIOD_1HOUR, RBPOWER_PERIOD_HOUR, from + 1, local_add(local_floor(t2 - 1, 'h'), 'h', 1), true, cx->deadline_us, prof_emit, c);
     else {
         uint32_t d1 = local_floor(t2, 'd');
-        if (from < d1) rbgrid_foreach_valid_record_ex(p[idx].unit_id, RBPOWER_STAT_PERIOD_DAILY, RBPOWER_PERIOD_DAY, local_floor(from, 'd'), d1 - 1, true, cx->deadline_us, prof_emit, c);
+        if (from < d1) rbgrid_foreach_valid_record_ex(p[idx].unit_id, RBPOWER_STAT_PERIOD_DAILY, RBPOWER_PERIOD_DAY, local_floor(from, 'd') + 1, d1, true, cx->deadline_us, prof_emit, c);
         if (t2 > d1) note(cx, "Today is not in the daily rows until the day closes; ask with resolution=hour for today.");
     }
     if (c->timed_out) { heap_caps_free(c); free(p); return fail(cx, "timeout", "the history read took too long", "Narrow the period."); }
@@ -1163,7 +1183,8 @@ static cJSON *t_get_import_export_balance(const cJSON *a, rbllm_cx_t *cx)
     }
     cJSON *r = cJSON_CreateObject();
     add_period(r, from, to);
-    if (mains) { cJSON_AddNumberToObject(r, "import_kwh", r4(imp / 1000.0)); cJSON_AddNumberToObject(r, "export_kwh", r4(exp / 1000.0)); }
+    if (mains && any) { cJSON_AddNumberToObject(r, "import_kwh", r4(imp / 1000.0)); cJSON_AddNumberToObject(r, "export_kwh", r4(exp / 1000.0)); }
+    else if (mains) { cJSON_AddNullToObject(r, "import_kwh"); cJSON_AddNullToObject(r, "export_kwh"); }
     else { cJSON_AddNullToObject(r, "import_kwh"); cJSON_AddNullToObject(r, "export_kwh");
            note(cx, "No point is set as main supply, so grid import and export are unknown."); }
     if (gens) {
@@ -1295,10 +1316,10 @@ typedef struct { double night[2]; int night_n[2]; uint32_t split; double day[64]
 static void anom_hour(const rbpower_period_statistics_t *s, void *v)
 {
     anom_ctx_t *c = (anom_ctx_t *)v;
-    uint32_t ts = (uint32_t)(s->period_start_us / 1000000LL);
+    uint32_t ts = rec_start(s, true);
     uint32_t dur = s->v4_dur_s ? s->v4_dur_s : 3600;
     if (dur < 3540) return;
-    time_t mid = (time_t)(ts + dur / 2); struct tm lt; rbgrid_localtime_r(&mid, &lt);
+    time_t mid = (time_t)(ts + 1800); struct tm lt; rbgrid_localtime_r(&mid, &lt);
     if (lt.tm_hour < 1 || lt.tm_hour >= 5) return;
     int k = ts >= c->split ? 1 : 0;
     double e = s->exact.valid ? s->exact.ec_mwh / 1000.0 : s->energy_period.consumed_wh;
@@ -1308,7 +1329,7 @@ static void anom_day(const rbpower_period_statistics_t *s, void *v)
 {
     anom_ctx_t *c = (anom_ctx_t *)v;
     if (c->nd >= 64) return;
-    c->day_ts[c->nd] = (uint32_t)(s->period_start_us / 1000000LL);
+    c->day_ts[c->nd] = rec_start(s, false);
     c->day[c->nd++] = s->exact.valid ? s->exact.ec_mwh / 1000.0 : s->energy_period.consumed_wh;
 }
 static cJSON *t_detect_anomalies(const cJSON *a, rbllm_cx_t *cx)
@@ -1333,7 +1354,7 @@ static cJSON *t_detect_anomalies(const cJSON *a, rbllm_cx_t *cx)
         uid_hex(p[i].unit_id, h);
         /* night baseline: this week vs the week before, hours 01–05 local */
         c->split = local_add(today0, 'd', -7);
-        rbgrid_foreach_valid_record_ex(p[i].unit_id, RBPOWER_STAT_PERIOD_1HOUR, RBPOWER_PERIOD_HOUR, local_add(today0, 'd', -14), now, true,
+        rbgrid_foreach_valid_record_ex(p[i].unit_id, RBPOWER_STAT_PERIOD_1HOUR, RBPOWER_PERIOD_HOUR, local_add(today0, 'd', -14) + 1, now + 3600, true,
                                        cx->deadline_us, anom_hour, c);
         if (c->night_n[0] >= 8 && c->night_n[1] >= 8) {
             double w0 = c->night[0] / c->night_n[0], w1 = c->night[1] / c->night_n[1];
@@ -1348,7 +1369,7 @@ static cJSON *t_detect_anomalies(const cJSON *a, rbllm_cx_t *cx)
             analysed++;
         }
         /* unusual day: a closed day above mean + 2.5 sigma of the last 30 */
-        rbgrid_foreach_valid_record_ex(p[i].unit_id, RBPOWER_STAT_PERIOD_DAILY, RBPOWER_PERIOD_DAY, local_add(today0, 'd', -30), today0 - 1, true,
+        rbgrid_foreach_valid_record_ex(p[i].unit_id, RBPOWER_STAT_PERIOD_DAILY, RBPOWER_PERIOD_DAY, local_add(today0, 'd', -30) + 1, today0, true,
                                        cx->deadline_us, anom_day, c);
         if (c->nd >= 10) {
             double m = 0, v = 0;
@@ -1428,6 +1449,116 @@ static cJSON *t_get_regional_context(const cJSON *a, rbllm_cx_t *cx)
     cJSON_Delete(cfg);
     note(cx, "spot = wholesale day-ahead price without fees and VAT; all_in = the price a supplier charges. Set the source on the hub's dynamic price page.");
     note(cx, "Tariff templates and local terms are not built in yet; ask the user for the supplier's price sheet.");
+    cx->as_of = now_s();
+    return r;
+}
+
+/* ---- get_config: compact, LLM-facing projection of the settings (never the raw files, never a token) ---- */
+static void cfg_channels(cJSON *r)
+{
+    rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
+    if (!p) return;
+    int n = snapshot(p, RBLLM_MAX_POINTS);
+    char *sj = rbgrid_core_json_ctx() ? rbgrid_json_create_sensors_list(rbgrid_core_json_ctx()) : NULL;
+    cJSON *sl = sj ? cJSON_Parse(sj) : NULL;
+    free(sj);
+    cJSON *arr = cJSON_AddArrayToObject(r, "channels");
+    for (int i = 0; i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        char h[5]; uid_hex(p[i].unit_id, h);
+        cJSON_AddStringToObject(o, "id", h);
+        add_name(o, p[i].name);
+        cJSON_AddStringToObject(o, "point", p[i].point);
+        cJSON_AddStringToObject(o, "role_detail", role_name(p[i].role));
+        if (p[i].inside) { char ih[5]; uid_hex(p[i].inside, ih); cJSON_AddStringToObject(o, "inside", ih); } else cJSON_AddNullToObject(o, "inside");
+        const cJSON *e;
+        cJSON_ArrayForEach(e, cJSON_GetObjectItem(sl, "sensors")) {
+            const char *uid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
+            if (!uid || strcasecmp(uid, h)) continue;
+            cJSON *src = cJSON_AddObjectToObject(o, "source");
+            const char *ifc = cJSON_GetStringValue(cJSON_GetObjectItem(e, "iface"));
+            cJSON_AddStringToObject(src, "iface", ifc ? ifc : "");
+            cJSON_AddNumberToObject(src, "module", cJSON_GetNumberValue(cJSON_GetObjectItem(e, "module")));
+            cJSON_AddNumberToObject(src, "input", cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ch")));
+            const char *ctn = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ct_name"));
+            if (ctn) cJSON_AddStringToObject(src, "ct_model", ctn);
+            double ra = cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ct_rated_a"));
+            if (ra > 0) cJSON_AddNumberToObject(src, "ct_rating_a", ra);
+            break;
+        }
+        cJSON_AddItemToArray(arr, o);
+    }
+    cJSON_Delete(sl);
+    free(p);
+}
+static void cfg_tariff(cJSON *r, rbllm_cx_t *cx)
+{
+    static const char *ZN[RBPOWER_TARIFF_ZONE_COUNT] = { "night", "morning_peak", "day", "evening_peak", "late_evening", "weekend", "holiday", "critical_peak" };
+    cJSON *t = cJSON_AddObjectToObject(r, "tariff");
+    const rbpower_tariff_plan_t *tp = rbpower_tariff_get_current_plan();
+    if (!tp) { cJSON_AddNullToObject(t, "plan"); return; }
+    bool ph = rbpower_tariff_plan_is_placeholder(tp->plan_name, tp->provider_name);
+    cJSON_AddBoolToObject(t, "plan_saved", !ph);
+    if (ph) note(cx, "No tariff plan is saved: the figures are the built-in demo plan.");
+    char b[64];
+    utf8_clean(tp->plan_name, b, sizeof(b)); cJSON_AddStringToObject(t, "plan_name", b);
+    utf8_clean(tp->provider_name, b, sizeof(b)); cJSON_AddStringToObject(t, "provider", b);
+    cJSON_AddStringToObject(t, "currency", tp->currency_code);
+    cJSON_AddNumberToObject(t, "vat_percent", r2(tp->vat_percent));
+    cJSON_AddNumberToObject(t, "energy_tax_per_kwh", r4(tp->energy_tax_per_kwh));
+    cJSON_AddNumberToObject(t, "grid_fee_per_kwh", r4(tp->grid_usage_fee_per_kwh));
+    cJSON_AddNumberToObject(t, "levy_per_kwh", r4(tp->renewable_levy_per_kwh));
+    cJSON_AddBoolToObject(t, "net_metering", tp->net_metering_enabled);
+    cJSON *zs = cJSON_AddArrayToObject(t, "zones");
+    for (int z = 0; z < RBPOWER_TARIFF_ZONE_COUNT; z++) {
+        const rbpower_tariff_zone_t *zo = &tp->zones[z];
+        if (!zo->is_enabled) continue;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "zone", ZN[z]);
+        utf8_clean(zo->zone_name, b, sizeof(b)); cJSON_AddStringToObject(o, "name", b);
+        cJSON_AddNumberToObject(o, "buy_per_kwh", r4(zo->rate_buying_per_kwh));
+        cJSON_AddNumberToObject(o, "sell_per_kwh", r4(zo->rate_selling_per_kwh));
+        cJSON_AddItemToArray(zs, o);
+    }
+    note(cx, "Zone rates are before fees and VAT; the zone time windows are shown on the hub's tariff page.");
+    cJSON *dp = rbdynprice_config_json();
+    if (dp) {
+        cJSON *d = cJSON_AddObjectToObject(t, "dynamic_price");
+        const char *k[] = { "enabled", "source", "backup_source", "zone", "country", "sell_mode", "state" };
+        for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+            const cJSON *v = cJSON_GetObjectItem(dp, k[i]);
+            if (v) cJSON_AddItemToObject(d, k[i], cJSON_Duplicate(v, false));
+        }
+        cJSON_Delete(dp);
+    }
+}
+static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *sec = cJSON_GetStringValue(cJSON_GetObjectItem(a, "section"));
+    bool all = !sec;
+    if (sec && strcmp(sec, "channels") && strcmp(sec, "tariff") && strcmp(sec, "notifications") && strcmp(sec, "region"))
+        return fail(cx, "invalid_args", "section: channels, tariff, notifications or region", NULL);
+    cJSON *r = cJSON_CreateObject();
+    char ver[9]; rbgrid_core_config_version(ver);
+    cJSON_AddStringToObject(r, "version", ver);
+    if (all || !strcmp(sec, "channels")) cfg_channels(r);
+    if (all || !strcmp(sec, "tariff")) cfg_tariff(r, cx);
+    if (all || !strcmp(sec, "notifications")) {
+        cJSON *n = cJSON_AddObjectToObject(r, "notifications");
+        cJSON *ru = rbact_rules_json(), *sg = rbact_signal_json(), *pk = rbpeak_json();
+        if (ru) { cJSON *x = cJSON_DetachItemFromObject(ru, "rules"); cJSON_AddItemToObject(n, "price_rules", x ? x : cJSON_CreateArray()); cJSON_Delete(ru); }
+        if (sg) { cJSON_DeleteItemFromObject(sg, "type"); cJSON_AddItemToObject(n, "price_signal", sg); }
+        if (pk) { cJSON *c = cJSON_GetObjectItem(pk, "cycle_day"); cJSON_AddNumberToObject(n, "peaks_cycle_day", c ? c->valuedouble : 1); cJSON_Delete(pk); }
+    }
+    if (all || !strcmp(sec, "region")) {
+        cJSON *g = cJSON_AddObjectToObject(r, "region");
+        rbtime_config_t tc; memset(&tc, 0, sizeof(tc)); rbtime_get_config(&tc);
+        cJSON_AddStringToObject(g, "timezone", tc.timezone);
+        cJSON_AddStringToObject(g, "currency", rbpower_tariff_currency());
+        const rbpower_tariff_plan_t *tp = rbpower_tariff_get_current_plan();
+        cJSON_AddStringToObject(g, "region_code", tp ? tp->region_code : "");
+    }
+    note(cx, "Read-only view. Changing settings over LLM comes with propose_config / apply_config; until then the user changes them on the hub page.");
     cx->as_of = now_s();
     return r;
 }
@@ -1537,6 +1668,12 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"country\":{\"type\":\"string\",\"description\":\"ISO 3166-1 alpha-2, e.g. DE; omit for the list of countries\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"dynamic_price_sources\":{\"type\":\"array\"},\"hub_currency\":{\"type\":\"string\"}}}",
       t_get_regional_context },
+    { "get_config", RBLLM_SCOPE_CONFIG,
+      "When to call: to explain how the hub is set up (points and their clamps, tariff, price rules, time zone) before advising a change. "
+      "What it returns: the chosen section(s) as a compact view plus the config version; no secrets.",
+      "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"tariff\",\"notifications\",\"region\"]}},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"string\"},\"channels\":{\"type\":\"array\"},\"tariff\":{\"type\":\"object\"}}}",
+      t_get_config },
     { "get_analysis_playbook", RBLLM_SCOPE_READ,
       "When to call: when the user asks for a report or a check and you want the hub's recipe. What it returns: the steps (tools with argument "
       "hints), questions to ask the user and rules for the answer.",
@@ -1616,6 +1753,7 @@ char *rbllm_manifest_json(void)
     cJSON_AddItemToArray(cap, cJSON_CreateString("read"));
     cJSON_AddItemToArray(cap, cJSON_CreateString("events"));
     cJSON_AddItemToArray(cap, cJSON_CreateString("playbooks"));
+    cJSON_AddItemToArray(cap, cJSON_CreateString("config_read"));
     cJSON *lim = cJSON_AddObjectToObject(r, "limits");
     cJSON_AddNumberToObject(lim, "max_response_bytes", RBLLM_MAX_RESPONSE_BYTES);
     cJSON_AddNumberToObject(lim, "max_manifest_bytes", RBLLM_MAX_MANIFEST_BYTES);
@@ -1635,7 +1773,7 @@ char *rbllm_manifest_json(void)
         cJSON_AddItemToObject(t, "input_schema", cJSON_Parse(TOOLS[i].input));
         cJSON_AddItemToObject(t, "output_schema", cJSON_Parse(TOOLS[i].output));
         cJSON *an = cJSON_AddObjectToObject(t, "annotations");
-        bool ro = TOOLS[i].scope == RBLLM_SCOPE_READ;
+        bool ro = TOOLS[i].scope == RBLLM_SCOPE_READ || !strncmp(TOOLS[i].name, "get_", 4);   /* get_config: config scope, no change */
         cJSON_AddBoolToObject(an, "readOnlyHint", ro);
         cJSON_AddBoolToObject(an, "destructiveHint", false);
         cJSON_AddBoolToObject(an, "idempotentHint", ro);

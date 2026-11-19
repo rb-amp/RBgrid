@@ -66,7 +66,13 @@ def main():
     ap.add_argument("--calls", type=int, default=300)
     ap.add_argument("--reboot", action="store_true")
     ap.add_argument("--disruptive", action="store_true", help="switch the API off/on and read-only (disturbs other clients)")
+    ap.add_argument("--admin-token-file", help="env-style file with RBGRID_*_ADMIN_TOKEN= (read, never printed)")
     a = ap.parse_args()
+    if a.admin_token_file:
+        for line in open(a.admin_token_file, encoding="utf-8"):
+            k, _, v = line.strip().partition("=")
+            if k.endswith("_ADMIN_TOKEN") and v:
+                os.environ["RBGRID_ADMIN_TOKEN"] = v
     admin = os.environ.get("RBGRID_ADMIN_TOKEN")
     if not admin:
         print("set RBGRID_ADMIN_TOKEN")

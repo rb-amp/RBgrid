@@ -235,6 +235,8 @@ typedef struct {
     double   e_out_wh;      ///< Lifetime energy out, Wh
     double   cost_total;    ///< Lifetime cost of the energy in, plan currency
     double   rev_total;     ///< Lifetime value of the energy out, plan currency
+    float    pf;            ///< Power factor (200 ms average; 0 = unknown)
+    uint32_t age_ms;        ///< Time since the point's last update, ms (UINT32_MAX = never)
 } rbgrid_point_snap_t;
 
 /**

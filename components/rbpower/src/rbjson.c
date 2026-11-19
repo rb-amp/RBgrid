@@ -475,6 +475,11 @@ int rbgrid_core_points_snapshot(rbgrid_point_snap_t *out, int max)
         o->p_w = u->realtime_average_200ms.average_200ms.power_active_avg_w;
         o->i_a = u->realtime_average_200ms.average_200ms.current_rms_avg;
         o->v_v = u->realtime_average_200ms.average_200ms.voltage_rms_avg;
+        o->pf = u->realtime_average_200ms.average_200ms.power_factor_avg;
+        {
+            uint64_t lu = u->last_update_us, nw = (uint64_t)esp_timer_get_time();
+            o->age_ms = lu == 0 ? UINT32_MAX : (nw > lu ? (uint32_t)((nw - lu) / 1000ULL) : 0);
+        }
         const rbpower_lifetime_accumulators_basic_t *la = &u->statistics.lifetime_accumulators;
         float fin = la->total_energy_consumed_wh, fout = la->total_energy_supplied_wh;
         o->cost_total = la->total_cost_consumed;
