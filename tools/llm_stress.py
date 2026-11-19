@@ -159,6 +159,8 @@ def main():
         ("long request_id", json.dumps({"tool": "get_hub_info", "request_id": "r" * 500}).encode(), None),
         ("unicode tool name", json.dumps({"tool": "получить"}).encode(), "unknown_tool"),
         ("invalid UTF-8 tool", b'{"tool":"\xff\xfe"}', None),
+        ("invalid UTF-8 request_id", b'{"tool":"get_hub_info","request_id":"a\xc3\x28\xff"}', None),
+        ("request_id cut inside a character", json.dumps({"tool": "get_hub_info", "request_id": "\u044f" * 40}, ensure_ascii=False).encode(), None),
         ("feb 30", json.dumps({"tool": "get_energy_summary", "args": {"period": {"from": "2026-02-30", "to": "2026-03-02"}}}).encode(), None),
         ("hour 25", json.dumps({"tool": "get_energy_summary", "args": {"period": {"from": "2026-11-19T25:00", "to": "2026-11-19T26:00"}}}).encode(), "invalid_args"),
         ("offset +14:00", json.dumps({"tool": "get_energy_summary", "args": {"period": {"from": "2026-11-19T00:00+14:00", "to": "2026-11-20T00:00+14:00"}}}).encode(), None),
@@ -185,6 +187,9 @@ def main():
             print("   ", err or (json.dumps(j)[:300] if j else None))
     code, j, *_ = call("get_hub_info")
     check(j and j.get("ok"), "hub still answers after the hostile set")
+    # the call log keeps what hostile calls sent: the admin view must still be strict UTF-8 JSON
+    c, adm, nb, _, err = h.raw("/api/v1/llm", bearer=admin)
+    check(c == 200 and adm is not None, f"admin view is valid UTF-8 JSON after the hostile set ({nb} B){'' if adm is not None else ': ' + str(err)}")
 
     # ---- 3. web UI latency, idle vs under LLM load
     def ui_lat(n=15):
@@ -217,7 +222,7 @@ def main():
         c, j, *_ = h.req("/api/llm/v1/pair/start", "POST", {"client_name": nm, "scopes": sc})
         check(c == 400, f"pair/start refuses {what} (HTTP {c})")
     c, st0, *_ = h.req("/api/v1/llm", bearer=admin)
-    pend0 = len(st0.get("pairing", []))   # pairings left by an earlier run or another client (expire in 10 min)
+    pend0 = len((st0 or {}).get("pairing", []))   # pairings left by an earlier run or another client (expire in 10 min)
     codes = []
     for k in range(3):
         c, pk, *_ = h.req("/api/llm/v1/pair/start", "POST", {"client_name": f"abuse{k + 1}", "scopes": ["read"]})

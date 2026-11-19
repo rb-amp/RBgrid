@@ -2638,8 +2638,10 @@ static void log_call(const char *client, const char *tool, const char *code, int
     if (S.log) {
         rbllm_log_t *l = &S.log[S.log_head];
         l->ts = rbtime_is_time_valid() ? now_s() : 0;   /* 0 = before the clock synced */
-        strlcpy(l->client, client ? client : "", sizeof(l->client));
-        strlcpy(l->tool, tool ? tool : "", sizeof(l->tool));
+        /* Both come from the request (an unknown tool name is the caller's raw text): keep only well-formed UTF-8,
+         * or one hostile call makes the admin view's JSON unreadable. */
+        utf8_clean(client, l->client, sizeof(l->client));
+        utf8_clean(tool, l->tool, sizeof(l->tool));
         strlcpy(l->code, code, sizeof(l->code));
         l->ms = (uint16_t)(us / 1000 > 65535 ? 65535 : us / 1000);
         l->bytes = (uint16_t)(bytes > 65535 ? 65535 : bytes);
@@ -2658,10 +2660,10 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
     cJSON *req = (len && len <= RBLLM_MAX_REQUEST_BYTES) ? cJSON_ParseWithLength(body, len) : NULL;
     const char *rid = req ? cJSON_GetStringValue(cJSON_GetObjectItem(req, "request_id")) : NULL;
     char ridb[65] = {0};
-    if (rid) strlcpy(ridb, rid, sizeof(ridb));
+    if (rid) utf8_clean(rid, ridb, sizeof(ridb));   /* echoed back: well-formed UTF-8 only, never cut inside a character */
     const char *tname = req ? cJSON_GetStringValue(cJSON_GetObjectItem(req, "tool")) : NULL;
     char tnb[28] = {0};
-    if (tname) strlcpy(tnb, tname, sizeof(tnb));
+    if (tname) utf8_clean(tname, tnb, sizeof(tnb));
     const rbllm_tool_t *t = NULL;
     cJSON *res = NULL;
     if (!req || !cJSON_IsObject(req)) fail(&cx, "invalid_args", "body: JSON object {tool, args, request_id} required (max 4 KB)", NULL);
