@@ -124,8 +124,9 @@ def main():
         names = [t["name"] for t in man["tools"]]
         print("tools:", ", ".join(names))
         for t in man["tools"]:
-            ok = isinstance(t.get("input_schema"), dict) and t["input_schema"].get("type") == "object" and t.get("annotations", {}).get("readOnlyHint") is True
-            check(ok, f"tool {t['name']}: object input_schema, readOnlyHint")
+            writes = t["name"] in ("apply_config", "rollback_config")
+            ok = isinstance(t.get("input_schema"), dict) and t["input_schema"].get("type") == "object" and t.get("annotations", {}).get("readOnlyHint") is (not writes)
+            check(ok, f"tool {t['name']}: object input_schema, readOnlyHint {not writes}")
         code, man2, _, _ = h.req("/api/llm/v1/manifest", bearer=tok)
         check(man2 and man2["manifest_hash"] == man["manifest_hash"], "manifest_hash stable")
         maxb = man["limits"]["max_response_bytes"]

@@ -84,6 +84,7 @@ typedef struct {
     char     code[20];     /* "ok" or the error code */
     uint16_t ms;
     uint16_t bytes;
+    bool     cfg;
 } rbllm_log_t;
 
 /* PSRAM (.ext_ram.bss): ~1.6 KB kept out of internal RAM; touched only from tasks, under s_mx */
@@ -728,6 +729,9 @@ static cJSON *t_get_health(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddNumberToObject(hp, "internal_free_b", heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     cJSON_AddNumberToObject(hp, "internal_min_b", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     cJSON_AddNumberToObject(hp, "psram_free_b", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    extern TaskHandle_t rbllm_worker_handle(void);
+    TaskHandle_t wh = rbllm_worker_handle();
+    if (wh) cJSON_AddNumberToObject(hp, "llm_stack_free_b", (double)uxTaskGetStackHighWaterMark(wh) * sizeof(StackType_t));
     cJSON *mods = cJSON_AddArrayToObject(r, "modules");
     int on = 0, tot = 0;
     for (uint8_t m = 0; m < RBPOWER_MODULE_DESC_MAX; m++) {
@@ -1563,6 +1567,390 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
     return r;
 }
 
+/* ============================================================================================ config writes (stage 2) */
+/* Writable over LLM (v1): per channel name / role (load-class roles only; supply roles are topology, not a patch) /
+ * inside; notifications.peaks_cycle_day. Versions: /llm_cfgver.json keeps the last 5 states of exactly these fields.
+ * A change made elsewhere (hub page, REST, HA) is noticed by its hash and recorded as source "hub" at the next config
+ * call, so every path gets a version (§1.8). */
+static bool s_cfg_changed;   /* set by apply for the call log (worker task only) */
+#define CFGVER_FILE  "/llm_cfgver.json"
+#define CFGVER_N     5
+#define PROP_N       4
+#define PROP_TTL_S   600
+
+typedef struct { char token[33]; char client[33]; int64_t exp_us; char base[17]; cJSON *patch; char summary[120]; } prop_t;
+static EXT_RAM_BSS_ATTR prop_t s_prop[PROP_N];
+
+/* Current state of the writable fields: {"channels":{"0006":{"name","role","inside"}}, "peaks_cycle_day":n} */
+static cJSON *cfg_capture(void)
+{
+    cJSON *r = cJSON_CreateObject();
+    cJSON *ch = cJSON_AddObjectToObject(r, "channels");
+    rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
+    if (p) {
+        int n = snapshot(p, RBLLM_MAX_POINTS);
+        for (int i = 0; i < n; i++) {
+            char h[5]; uid_hex(p[i].unit_id, h);
+            cJSON *o = cJSON_AddObjectToObject(ch, h);
+            char b[48]; utf8_clean(p[i].name, b, sizeof(b));
+            cJSON_AddStringToObject(o, "name", b);
+            cJSON_AddStringToObject(o, "role", role_name(p[i].role));
+            if (p[i].inside) { char ih[5]; uid_hex(p[i].inside, ih); cJSON_AddStringToObject(o, "inside", ih); }
+            else cJSON_AddStringToObject(o, "inside", "");
+        }
+        free(p);
+    }
+    cJSON *pk = rbpeak_json();
+    const cJSON *cd = pk ? cJSON_GetObjectItem(pk, "cycle_day") : NULL;
+    cJSON_AddNumberToObject(r, "peaks_cycle_day", cd ? cd->valuedouble : 1);
+    cJSON_Delete(pk);
+    return r;
+}
+static void cfg_hash(const cJSON *cap, char out[17])
+{
+    char *t = cJSON_PrintUnformatted(cap);
+    uint8_t h[32] = {0};
+    if (t) { mbedtls_sha256((const unsigned char *)t, strlen(t), h, 0); free(t); }
+    hex_of(h, 8, out);
+}
+static cJSON *ver_load(void)
+{
+    size_t sz = 0;
+    cJSON *v = NULL;
+    if (littlefs_raw_size(CFGVER_FILE, &sz) == ESP_OK && sz > 0 && sz < 32768) {
+        char *b = malloc(sz + 1); size_t got = 0;
+        if (b && littlefs_raw_read(CFGVER_FILE, b, sz, &got) == ESP_OK) { b[got] = '\0'; v = cJSON_Parse(b); }
+        free(b);
+    }
+    if (!cJSON_IsObject(v)) { cJSON_Delete(v); v = cJSON_CreateObject(); cJSON_AddNumberToObject(v, "next", 1); cJSON_AddArrayToObject(v, "versions"); }
+    return v;
+}
+static void ver_save(cJSON *v)
+{
+    char *t = cJSON_PrintUnformatted(v);
+    if (t) { if (littlefs_raw_write(CFGVER_FILE, t, strlen(t)) != ESP_OK) rbpower_diag_printf("FAIL llm: %s not saved", CFGVER_FILE); free(t); }
+}
+/* Record the current state as a new version if it differs from the newest one. Returns the newest version number. */
+static int ver_sync(const char *source, const char *summary)
+{
+    cJSON *cap = cfg_capture();
+    char h[17]; cfg_hash(cap, h);
+    cJSON *v = ver_load();
+    cJSON *arr = cJSON_GetObjectItem(v, "versions");
+    int n = cJSON_GetArraySize(arr);
+    cJSON *last = n ? cJSON_GetArrayItem(arr, n - 1) : NULL;
+    const char *lh = last ? cJSON_GetStringValue(cJSON_GetObjectItem(last, "hash")) : NULL;
+    int num = last ? (int)cJSON_GetNumberValue(cJSON_GetObjectItem(last, "version")) : 0;
+    if (!lh || strcmp(lh, h)) {
+        int next = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(v, "next"));
+        if (next < 1) next = 1;
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddNumberToObject(e, "version", next);
+        cJSON_AddNumberToObject(e, "ts", now_s());
+        cJSON_AddStringToObject(e, "source", source);
+        cJSON_AddStringToObject(e, "summary", summary ? summary : (last ? "changed outside the LLM API" : "first recorded state"));
+        cJSON_AddStringToObject(e, "hash", h);
+        cJSON_AddItemToObject(e, "state", cap); cap = NULL;
+        cJSON_AddItemToArray(arr, e);
+        while (cJSON_GetArraySize(arr) > CFGVER_N) cJSON_DeleteItemFromArray(arr, 0);
+        cJSON_ReplaceItemInObject(v, "next", cJSON_CreateNumber(next + 1));
+        ver_save(v);
+        num = next;
+    }
+    cJSON_Delete(cap);
+    cJSON_Delete(v);
+    return num;
+}
+
+static bool valid_name(const char *s)
+{
+    if (!s || !s[0] || strlen(s) > 31) return false;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) if (*p < 0x20) return false;
+    char b[48]; utf8_clean(s, b, sizeof(b));
+    return !strcmp(b, s);
+}
+static int role_from_name(const char *s)
+{
+    for (int r = 0; r < 10; r++) if (s && !strcmp(s, role_name((uint8_t)r))) return r;
+    return -1;
+}
+
+/* Validate a channels patch against the current state; fill diff/warnings; return a normalized patch or NULL (fail set). */
+static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, cJSON *diff, cJSON *warn)
+{
+    const cJSON *pch = cJSON_GetObjectItem(patch, "channels"), *pcd = cJSON_GetObjectItem(patch, "peaks_cycle_day");
+    if (!pch && !pcd) return fail(cx, "invalid_args", "patch: {channels: {<id>: {name?, role?, inside?}}} and/or {peaks_cycle_day}", NULL);
+    if (pch && !cJSON_IsObject(pch)) return fail(cx, "invalid_args", "patch.channels must be an object keyed by channel id", NULL);
+    cJSON *norm = cJSON_CreateObject();
+    cJSON *nch = cJSON_AddObjectToObject(norm, "channels");
+    const cJSON *cch = cJSON_GetObjectItem(cur, "channels");
+    const cJSON *e;
+    char m[160];
+    cJSON_ArrayForEach(e, pch) {
+        char id[5]; strlcpy(id, e->string ? e->string : "", sizeof(id));
+        for (char *q = id; *q; q++) if (*q >= 'a' && *q <= 'f') *q -= 32;
+        const cJSON *c = cJSON_GetObjectItem(cch, id);
+        if (!c) { snprintf(m, sizeof(m), "patch.channels: unknown channel '%.8s'", e->string ? e->string : ""); cJSON_Delete(norm); return fail(cx, "not_found", m, "Call list_channels for the ids."); }
+        if (!cJSON_IsObject(e)) { cJSON_Delete(norm); return fail(cx, "invalid_args", "each channel patch is an object {name?, role?, inside?}", NULL); }
+        cJSON *o = NULL;
+        const cJSON *f;
+        cJSON_ArrayForEach(f, e) {
+            const char *k = f->string;
+            const char *was = cJSON_GetStringValue(cJSON_GetObjectItem(c, k));
+            if (!strcmp(k, "name")) {
+                if (!valid_name(cJSON_GetStringValue(f))) { snprintf(m, sizeof(m), "channels.%s.name: 1..31 bytes of UTF-8 text, no control characters", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+            } else if (!strcmp(k, "role")) {
+                const char *nr = cJSON_GetStringValue(f);
+                int r = role_from_name(nr);
+                if (r < 0) { snprintf(m, sizeof(m), "channels.%s.role: one of device_load, zone_load, circuit_breaker, ev_charging, heating_cooling, smart_appliance, renewable_source, storage_system", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                int cr = role_from_name(was);
+                bool cs = cr == RBPOWER_ROLE_MAIN_SUPPLY || cr == RBPOWER_ROLE_ALTERNATIVE_SUPPLY, ns = r == RBPOWER_ROLE_MAIN_SUPPLY || r == RBPOWER_ROLE_ALTERNATIVE_SUPPLY;
+                if ((cs || ns) && r != cr) { snprintf(m, sizeof(m), "channels.%s.role: a supply role (main / alternative supply) is the hub's topology and is changed on the hub's points page", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "Ask the user to change it on the hub page."); }
+            } else if (!strcmp(k, "inside")) {
+                const char *iv = cJSON_GetStringValue(f);
+                if (!iv) { cJSON_Delete(norm); return fail(cx, "invalid_args", "inside: a channel id, or \"\" for top level", NULL); }
+                if (iv[0]) {
+                    char iid[5]; strlcpy(iid, iv, sizeof(iid)); for (char *q = iid; *q; q++) if (*q >= 'a' && *q <= 'f') *q -= 32;
+                    if (!cJSON_GetObjectItem(cch, iid) || !strcmp(iid, id)) { snprintf(m, sizeof(m), "channels.%s.inside: another existing channel id", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                }
+            } else { snprintf(m, sizeof(m), "channels.%s.%.20s: not writable over LLM (name, role, inside)", id, k); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+            const char *nv = cJSON_GetStringValue(f);
+            if (was && nv && !strcmp(was, nv)) continue;   /* no change */
+            if (!o) o = cJSON_AddObjectToObject(nch, id);
+            cJSON_AddStringToObject(o, k, nv);
+            cJSON *d = cJSON_CreateObject();
+            char path[48]; snprintf(path, sizeof(path), "channels.%s.%s", id, k);
+            cJSON_AddStringToObject(d, "path", path);
+            cJSON_AddStringToObject(d, "from", was ? was : "");
+            cJSON_AddStringToObject(d, "to", nv);
+            cJSON_AddItemToArray(diff, d);
+            if (!strcmp(k, "role")) cJSON_AddItemToArray(warn, cJSON_CreateString("A role change regroups the point in the app and HA; its energy history stays."));
+            if (!strcmp(k, "name")) cJSON_AddItemToArray(warn, cJSON_CreateString("A rename can create new entities in Home Assistant if it is connected."));
+        }
+    }
+    if (pcd) {
+        if (!cJSON_IsNumber(pcd) || pcd->valuedouble < 1 || pcd->valuedouble > 28 || pcd->valuedouble != (int)pcd->valuedouble) { cJSON_Delete(norm); return fail(cx, "invalid_args", "peaks_cycle_day: integer 1..28", NULL); }
+        double was = cJSON_GetNumberValue(cJSON_GetObjectItem(cur, "peaks_cycle_day"));
+        if ((int)was != (int)pcd->valuedouble) {
+            cJSON_AddNumberToObject(norm, "peaks_cycle_day", pcd->valuedouble);
+            cJSON *d = cJSON_CreateObject();
+            cJSON_AddStringToObject(d, "path", "notifications.peaks_cycle_day");
+            cJSON_AddNumberToObject(d, "from", was); cJSON_AddNumberToObject(d, "to", pcd->valuedouble);
+            cJSON_AddItemToArray(diff, d);
+            cJSON_AddItemToArray(warn, cJSON_CreateString("A new cycle day starts a new peak cycle; the current figures move to the previous cycle."));
+        }
+    }
+    if (!cJSON_GetArraySize(diff)) { cJSON_Delete(norm); return fail(cx, "invalid_args", "the patch changes nothing", "Read get_config first."); }
+    return norm;
+}
+
+/* Patch that turns `cur` into `target` (both captures). */
+static cJSON *patch_between(const cJSON *cur, const cJSON *target)
+{
+    cJSON *p = cJSON_CreateObject();
+    cJSON *ch = cJSON_AddObjectToObject(p, "channels");
+    const cJSON *t;
+    cJSON_ArrayForEach(t, cJSON_GetObjectItem(target, "channels")) {
+        const cJSON *c = cJSON_GetObjectItem(cJSON_GetObjectItem(cur, "channels"), t->string);
+        if (!c) continue;   /* the point no longer exists: nothing to restore */
+        cJSON *o = NULL;
+        const char *ks[] = { "name", "role", "inside" };
+        for (int k = 0; k < 3; k++) {
+            const char *a = cJSON_GetStringValue(cJSON_GetObjectItem(c, ks[k])), *b = cJSON_GetStringValue(cJSON_GetObjectItem(t, ks[k]));
+            if (a && b && strcmp(a, b)) { if (!o) o = cJSON_AddObjectToObject(ch, t->string); cJSON_AddStringToObject(o, ks[k], b); }
+        }
+    }
+    double a = cJSON_GetNumberValue(cJSON_GetObjectItem(cur, "peaks_cycle_day")), b = cJSON_GetNumberValue(cJSON_GetObjectItem(target, "peaks_cycle_day"));
+    if ((int)a != (int)b && b >= 1) cJSON_AddNumberToObject(p, "peaks_cycle_day", b);
+    return p;
+}
+
+static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
+{
+    const cJSON *patch = cJSON_GetObjectItem(a, "patch"), *rb = cJSON_GetObjectItem(a, "rollback_to");
+    if (!patch == !rb) return fail(cx, "invalid_args", "give either patch or rollback_to", NULL);
+    ver_sync("hub", NULL);
+    cJSON *cur = cfg_capture();
+    char base[17]; cfg_hash(cur, base);
+    cJSON *own = NULL;
+    char summary[120] = "";
+    if (rb) {
+        if (!cJSON_IsNumber(rb)) { cJSON_Delete(cur); return fail(cx, "invalid_args", "rollback_to: a version number from list_config_versions", NULL); }
+        cJSON *v = ver_load();
+        const cJSON *e, *hit = NULL;
+        cJSON_ArrayForEach(e, cJSON_GetObjectItem(v, "versions")) if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "version")) == (int)rb->valuedouble) hit = e;
+        if (!hit) { cJSON_Delete(v); cJSON_Delete(cur); return fail(cx, "not_found", "no such version (the hub keeps the last 5)", "Call list_config_versions."); }
+        own = patch_between(cur, cJSON_GetObjectItem(hit, "state"));
+        snprintf(summary, sizeof(summary), "rollback to version %d", (int)rb->valuedouble);
+        cJSON_Delete(v);
+        patch = own;
+    } else if (!cJSON_IsObject(patch)) { cJSON_Delete(cur); return fail(cx, "invalid_args", "patch must be an object", NULL); }
+    cJSON *diff = cJSON_CreateArray(), *warn = cJSON_CreateArray();
+    cJSON *norm = check_patch(cx, patch, cur, diff, warn);
+    cJSON_Delete(own); cJSON_Delete(cur);
+    if (!norm) { cJSON_Delete(diff); cJSON_Delete(warn); return NULL; }
+    /* dedupe warnings */
+    cJSON *w2 = cJSON_CreateArray(); const cJSON *w;
+    cJSON_ArrayForEach(w, warn) { bool dup = false; const cJSON *x; cJSON_ArrayForEach(x, w2) if (!strcmp(x->valuestring, w->valuestring)) dup = true;
+                                  if (!dup) cJSON_AddItemToArray(w2, cJSON_CreateString(w->valuestring)); }
+    cJSON_Delete(warn);
+    if (!summary[0]) snprintf(summary, sizeof(summary), "%d change(s)", cJSON_GetArraySize(diff));
+    lk();
+    int slot = 0; int64_t now = esp_timer_get_time();
+    for (int i = 0; i < PROP_N; i++) { if (!s_prop[i].token[0] || now > s_prop[i].exp_us) { slot = i; break; } if (s_prop[i].exp_us < s_prop[slot].exp_us) slot = i; }
+    prop_t *pp = &s_prop[slot];
+    cJSON_Delete(pp->patch);
+    memset(pp, 0, sizeof(*pp));
+    rand_hex(pp->token, 16);
+    strlcpy(pp->client, cx->client ? cx->client : "", sizeof(pp->client));
+    pp->exp_us = now + (int64_t)PROP_TTL_S * 1000000;
+    strlcpy(pp->base, base, sizeof(pp->base));
+    pp->patch = norm;
+    strlcpy(pp->summary, summary, sizeof(pp->summary));
+    char tok[33]; strlcpy(tok, pp->token, sizeof(tok));
+    ulk();
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddItemToObject(r, "diff", diff);
+    cJSON_AddItemToObject(r, "warnings", w2);
+    cJSON_AddBoolToObject(r, "restart_required", false);
+    cJSON_AddStringToObject(r, "confirm_token", tok);
+    cJSON_AddNumberToObject(r, "expires_in", PROP_TTL_S);
+    cJSON_AddStringToObject(r, "base_version", base);
+    note(cx, "Show the diff to the user and apply only after they say yes; the token works once and only for this diff.");
+    cx->as_of = now_s();
+    return r;
+}
+
+/* Apply a normalized patch through the core's own validated paths. On a failure mid-way the changes already made are
+ * undone, so a patch is all-or-nothing. */
+static bool apply_patch(rbllm_cx_t *cx, const cJSON *norm, const cJSON *before)
+{
+    const cJSON *e;
+    cJSON *done = cJSON_CreateArray();
+    bool ok = true;
+    char m[200];
+    cJSON_ArrayForEach(e, cJSON_GetObjectItem(norm, "channels")) {
+        unsigned uid = 0; sscanf(e->string, "%4x", &uid);
+        cJSON *body = cJSON_CreateObject();
+        const cJSON *f;
+        cJSON_ArrayForEach(f, e) {
+            if (!strcmp(f->string, "role")) {
+                char up[24]; strlcpy(up, f->valuestring, sizeof(up)); for (char *q = up; *q; q++) if (*q >= 'a' && *q <= 'z') *q -= 32;
+                cJSON_AddStringToObject(body, "role", up);
+            } else if (!strcmp(f->string, "inside")) {
+                if (f->valuestring[0]) cJSON_AddStringToObject(body, "inside", f->valuestring); else cJSON_AddNumberToObject(body, "inside", 0);
+            } else cJSON_AddStringToObject(body, f->string, f->valuestring);
+        }
+        char *js = cJSON_PrintUnformatted(body);
+        cJSON_Delete(body);
+        int st = 0;
+        char *rep = js ? rbgrid_units_mutate((rbpower_unit_id_t)uid, "", js, &st) : NULL;
+        free(js);
+        if (st != 200) {
+            cJSON *rj = rep ? cJSON_Parse(rep) : NULL;
+            const char *msg = rj ? cJSON_GetStringValue(cJSON_GetObjectItem(rj, "message")) : NULL;
+            snprintf(m, sizeof(m), "channel %s: the hub refused the change (%d: %.120s)", e->string, st, msg ? msg : "?");
+            cJSON_Delete(rj); free(rep);
+            ok = false;
+            break;
+        }
+        free(rep);
+        cJSON_AddItemToArray(done, cJSON_CreateString(e->string));
+    }
+    const cJSON *pcd = cJSON_GetObjectItem(norm, "peaks_cycle_day");
+    if (ok && pcd) {
+        cJSON *d = cJSON_CreateObject(); cJSON_AddNumberToObject(d, "cycle_day", pcd->valuedouble);
+        char em[64] = "";
+        if (rbpeak_set(d, em, sizeof(em)) != ESP_OK) { snprintf(m, sizeof(m), "peaks_cycle_day: the hub refused it (%s)", em); ok = false; }
+        cJSON_Delete(d);
+    }
+    if (!ok) {
+        /* undo what was applied: restore the before values of those channels */
+        cJSON *undo = cJSON_CreateObject(), *uch = cJSON_AddObjectToObject(undo, "channels");
+        const cJSON *id;
+        cJSON_ArrayForEach(id, done) {
+            const cJSON *b = cJSON_GetObjectItem(cJSON_GetObjectItem(before, "channels"), id->valuestring);
+            if (b) cJSON_AddItemToObject(uch, id->valuestring, cJSON_Duplicate(b, true));
+        }
+        if (cJSON_GetArraySize(uch)) (void)apply_patch(cx, undo, before);
+        cJSON_Delete(undo);
+        cJSON_Delete(done);
+        fail(cx, "conflict", m, "Nothing was changed. Read get_config and propose again.");
+        return false;
+    }
+    cJSON_Delete(done);
+    return true;
+}
+
+static cJSON *t_apply_config(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *tok = cJSON_GetStringValue(cJSON_GetObjectItem(a, "confirm_token"));
+    if (!tok) return fail(cx, "confirm_required", "confirm_token required", "Call propose_config first.");
+    lk();
+    prop_t *pp = NULL; bool expired = false;
+    for (int i = 0; i < PROP_N; i++) if (s_prop[i].token[0] && !strcmp(s_prop[i].token, tok)) pp = &s_prop[i];
+    if (pp && esp_timer_get_time() > pp->exp_us) expired = true;
+    prop_t p = {0};
+    if (pp && !expired) { p = *pp; pp->patch = NULL; }
+    if (pp) { cJSON_Delete(pp->patch); memset(pp, 0, sizeof(*pp)); }   /* single use, also when expired */
+    ulk();
+    if (!pp) return fail(cx, "confirm_invalid", "unknown or used confirm_token", "Call propose_config again.");
+    if (expired) return fail(cx, "confirm_expired", "the proposal expired (10 min)", "Call propose_config again.");
+    cJSON *cur = cfg_capture();
+    char h[17]; cfg_hash(cur, h);
+    if (strcmp(h, p.base)) { cJSON_Delete(cur); cJSON_Delete(p.patch); return fail(cx, "conflict", "the settings changed since the proposal", "Read get_config and propose again."); }
+    ver_sync("hub", NULL);   /* the state before, if not yet recorded */
+    bool ok = apply_patch(cx, p.patch, cur);
+    cJSON_Delete(cur); cJSON_Delete(p.patch);
+    if (!ok) return NULL;
+    char src[48]; snprintf(src, sizeof(src), "llm:%.40s", p.client[0] ? p.client : "client");
+    int v = ver_sync(src, p.summary);
+    rbpower_diag_printf("llm: config version %d applied by '%s' (%s)", v, p.client, p.summary);
+    s_cfg_changed = true;
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "version", v);
+    cJSON_AddBoolToObject(r, "applied", true);
+    cJSON_AddBoolToObject(r, "restart_required", false);
+    cJSON_AddStringToObject(r, "summary", p.summary);
+    note(cx, "Applied. list_config_versions shows it; propose_config {rollback_to} undoes it.");
+    cx->as_of = now_s();
+    return r;
+}
+
+static cJSON *t_list_config_versions(const cJSON *a, rbllm_cx_t *cx)
+{
+    (void)a;
+    ver_sync("hub", NULL);
+    cJSON *v = ver_load();
+    cJSON *r = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(r, "versions");
+    const cJSON *e;
+    int n = cJSON_GetArraySize(cJSON_GetObjectItem(v, "versions"));
+    for (int k = n - 1; k >= 0; k--) {   /* newest first */
+        e = cJSON_GetArrayItem(cJSON_GetObjectItem(v, "versions"), k);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "version", cJSON_GetNumberValue(cJSON_GetObjectItem(e, "version")));
+        uint32_t ts = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ts"));
+        if (ts > RBGRID_TS_SANE_MIN) add_time(o, "time", ts); else cJSON_AddNullToObject(o, "time");
+        cJSON_AddStringToObject(o, "source", cJSON_GetStringValue(cJSON_GetObjectItem(e, "source")));
+        char sm[128]; utf8_clean(cJSON_GetStringValue(cJSON_GetObjectItem(e, "summary")), sm, sizeof(sm));
+        cJSON_AddStringToObject(o, "summary", sm);
+        cJSON_AddBoolToObject(o, "current", k == n - 1);
+        cJSON_AddItemToArray(arr, o);
+    }
+    cJSON_Delete(v);
+    note(cx, "Versions cover what can be changed over LLM: channel names, roles, inside and the peaks cycle day.");
+    cx->as_of = now_s();
+    return r;
+}
+
+static cJSON *t_rollback_config(const cJSON *a, rbllm_cx_t *cx)
+{
+    if (!cJSON_GetObjectItem(a, "confirm_token"))
+        return fail(cx, "confirm_required", "a rollback takes two steps", "Call propose_config {rollback_to: <version>}, show the diff, then rollback_config with its confirm_token.");
+    return t_apply_config(a, cx);
+}
+
 static cJSON *t_get_analysis_playbook(const cJSON *a, rbllm_cx_t *cx);
 
 /* ============================================================================================ registry */
@@ -1674,6 +2062,31 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"tariff\",\"notifications\",\"region\"]}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"string\"},\"channels\":{\"type\":\"array\"},\"tariff\":{\"type\":\"object\"}}}",
       t_get_config },
+    { "propose_config", RBLLM_SCOPE_CONFIG,
+      "When to call: when the user wants to rename a channel, change its role or parent, set the peaks cycle day, or undo a change. "
+      "What it returns: the diff, warnings and a one-time confirm_token (10 min). Changes nothing; show the diff and ask the user.",
+      "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,role?,inside?}}, peaks_cycle_day?}\"},"
+      "\"rollback_to\":{\"type\":\"integer\",\"description\":\"a version from list_config_versions\"}},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"}}}",
+      t_propose_config },
+    { "apply_config", RBLLM_SCOPE_CONFIG,
+      "When to call: only after the user said yes to a propose_config diff. What it returns: the new version number. Fails with conflict "
+      "if the settings changed since the proposal; nothing is half applied.",
+      "{\"type\":\"object\",\"properties\":{\"confirm_token\":{\"type\":\"string\"}},\"required\":[\"confirm_token\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"applied\":{\"type\":\"boolean\"},\"restart_required\":{\"type\":\"boolean\"}}}",
+      t_apply_config },
+    { "list_config_versions", RBLLM_SCOPE_CONFIG,
+      "When to call: when the user asks what changed, or before a rollback. What it returns: the last 5 versions, newest first, with time, "
+      "source (hub, llm:<client>) and a summary.",
+      "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"versions\":{\"type\":\"array\"}}}",
+      t_list_config_versions },
+    { "rollback_config", RBLLM_SCOPE_CONFIG,
+      "When to call: to finish an undo the user confirmed. Takes the confirm_token from propose_config {rollback_to}. What it returns: "
+      "as apply_config.",
+      "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"confirm_token\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"applied\":{\"type\":\"boolean\"}}}",
+      t_rollback_config },
     { "get_analysis_playbook", RBLLM_SCOPE_READ,
       "When to call: when the user asks for a report or a check and you want the hub's recipe. What it returns: the steps (tools with argument "
       "hints), questions to ask the user and rules for the answer.",
@@ -1754,6 +2167,7 @@ char *rbllm_manifest_json(void)
     cJSON_AddItemToArray(cap, cJSON_CreateString("events"));
     cJSON_AddItemToArray(cap, cJSON_CreateString("playbooks"));
     cJSON_AddItemToArray(cap, cJSON_CreateString("config_read"));
+    cJSON_AddItemToArray(cap, cJSON_CreateString("config"));
     cJSON *lim = cJSON_AddObjectToObject(r, "limits");
     cJSON_AddNumberToObject(lim, "max_response_bytes", RBLLM_MAX_RESPONSE_BYTES);
     cJSON_AddNumberToObject(lim, "max_manifest_bytes", RBLLM_MAX_MANIFEST_BYTES);
@@ -1773,7 +2187,8 @@ char *rbllm_manifest_json(void)
         cJSON_AddItemToObject(t, "input_schema", cJSON_Parse(TOOLS[i].input));
         cJSON_AddItemToObject(t, "output_schema", cJSON_Parse(TOOLS[i].output));
         cJSON *an = cJSON_AddObjectToObject(t, "annotations");
-        bool ro = TOOLS[i].scope == RBLLM_SCOPE_READ || !strncmp(TOOLS[i].name, "get_", 4);   /* get_config: config scope, no change */
+        bool ro = TOOLS[i].scope == RBLLM_SCOPE_READ || !strncmp(TOOLS[i].name, "get_", 4) || !strcmp(TOOLS[i].name, "propose_config") ||
+                  !strcmp(TOOLS[i].name, "list_config_versions");   /* config scope but no change */
         cJSON_AddBoolToObject(an, "readOnlyHint", ro);
         cJSON_AddBoolToObject(an, "destructiveHint", false);
         cJSON_AddBoolToObject(an, "idempotentHint", ro);
@@ -1848,6 +2263,7 @@ static void log_call(const char *client, const char *tool, const char *code, int
         strlcpy(l->code, code, sizeof(l->code));
         l->ms = (uint16_t)(us / 1000 > 65535 ? 65535 : us / 1000);
         l->bytes = (uint16_t)(bytes > 65535 ? 65535 : bytes);
+        l->cfg = s_cfg_changed; s_cfg_changed = false;
         S.log_head = (uint16_t)((S.log_head + 1) % RBLLM_LOG_N);
         if (S.log_n < RBLLM_LOG_N) S.log_n++;
     }
@@ -1879,7 +2295,8 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
         else if (!(cx.scopes & t->scope)) {
             char m[64]; snprintf(m, sizeof(m), "the tool needs scope '%s'", t->scope == RBLLM_SCOPE_CONFIG ? "config" : "read");
             fail(&cx, "forbidden_scope", m, "Pair again with that scope on the hub's AI / LLM page.");
-        } else if (t->scope == RBLLM_SCOPE_CONFIG && S.read_only) fail(&cx, "read_only_mode", "the hub is in read-only mode for LLM clients", NULL);
+        } else if (S.read_only && (!strcmp(t->name, "apply_config") || !strcmp(t->name, "rollback_config") || !strcmp(t->name, "propose_config")))
+            fail(&cx, "read_only_mode", "the hub is in read-only mode for LLM clients", "The user can switch read-only off on the hub's AI / LLM page.");
         else if (!cJSON_IsObject(args)) fail(&cx, "invalid_args", "'args' must be an object", NULL);
         else if (check_args(&cx, t, args)) res = t->fn(args, &cx);
         cJSON_Delete(empty);
@@ -1925,7 +2342,7 @@ typedef struct {
     void (*done)(char *, void *); void *ctx; int64_t deadline_us;
 } rbllm_job_t;
 
-#define RBLLM_STACK 6144
+#define RBLLM_STACK 12288   /* apply_config runs rbgrid_units_mutate, which keeps fleet config copies on the stack */
 static StaticTask_t s_task_buf;
 static StackType_t  s_task_stack[RBLLM_STACK];   /* internal RAM: the tools read flash (cache off) — no PSRAM stack */
 static TaskHandle_t s_task;
@@ -1933,6 +2350,7 @@ static QueueHandle_t s_q;
 static StaticQueue_t s_q_buf;
 static uint8_t s_q_store[(RBLLM_MAX_CONCURRENT - 1 > 0 ? RBLLM_MAX_CONCURRENT - 1 : 1) * sizeof(rbllm_job_t)];
 static volatile bool s_busy;
+TaskHandle_t rbllm_worker_handle(void) { return s_task; }
 
 static void worker(void *arg)
 {
@@ -2111,7 +2529,7 @@ char *rbllm_admin_json(void)
         cJSON_AddStringToObject(o, "result", l->code);
         cJSON_AddNumberToObject(o, "ms", l->ms);
         cJSON_AddNumberToObject(o, "bytes", l->bytes);
-        cJSON_AddBoolToObject(o, "config_changed", false);
+        cJSON_AddBoolToObject(o, "config_changed", l->cfg);
         cJSON_AddItemToArray(la, o);
     }
     cJSON_AddNumberToObject(r, "log_total", S.log_n);
