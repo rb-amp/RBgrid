@@ -416,6 +416,8 @@ static int snapshot(rbgrid_point_snap_t *p, int max)
     return n;
 }
 
+static void utf8_clean(const char *in, char *out, size_t n);
+static void add_name(cJSON *o, const char *name) { char b[48]; utf8_clean(name, b, sizeof(b)); cJSON_AddStringToObject(o, "name", b); }
 static void uid_hex(uint16_t u, char out[5]) { snprintf(out, 5, "%04X", (unsigned)u); }
 
 /* `channels` arg → selection mask over the snapshot. NULL/absent = all. Unknown id → not_found. */
@@ -636,7 +638,7 @@ static cJSON *t_list_channels(const cJSON *a, rbllm_cx_t *cx)
         cJSON *o = cJSON_CreateObject();
         char h[5]; uid_hex(p[i].unit_id, h);
         cJSON_AddStringToObject(o, "id", h);
-        cJSON_AddStringToObject(o, "name", p[i].name);
+        add_name(o, p[i].name);
         cJSON_AddStringToObject(o, "point", p[i].point);
         cJSON_AddStringToObject(o, "role", role_class(p[i].role));
         cJSON_AddStringToObject(o, "role_detail", role_name(p[i].role));
@@ -673,7 +675,7 @@ static cJSON *t_read_live(const cJSON *a, rbllm_cx_t *cx)
         cJSON *o = cJSON_CreateObject();
         char h[5]; uid_hex(p[i].unit_id, h);
         cJSON_AddStringToObject(o, "id", h);
-        cJSON_AddStringToObject(o, "name", p[i].name);
+        add_name(o, p[i].name);
         cJSON_AddBoolToObject(o, "present", p[i].present);
         cJSON_AddNumberToObject(o, "power_w", r2(p[i].p_w));
         cJSON_AddNumberToObject(o, "current_a", round(p[i].i_a * 1000.0) / 1000.0);
@@ -748,6 +750,24 @@ static cJSON *t_get_health(const cJSON *a, rbllm_cx_t *cx)
     return r;
 }
 
+/* Copy @p in to @p out keeping only well-formed UTF-8 (a log line cut at its byte limit can end inside a character;
+ * a client name is the user's text). Invalid bytes become '?'. */
+static void utf8_clean(const char *in, char *out, size_t n)
+{
+    size_t o = 0;
+    const unsigned char *p = (const unsigned char *)(in ? in : "");
+    while (*p && o + 1 < n) {
+        int len = *p < 0x80 ? 1 : (*p & 0xE0) == 0xC0 ? 2 : (*p & 0xF0) == 0xE0 ? 3 : (*p & 0xF8) == 0xF0 ? 4 : 0;
+        bool ok = len > 0 && !(len == 2 && *p < 0xC2);
+        for (int k = 1; ok && k < len; k++) ok = (p[k] & 0xC0) == 0x80;
+        if (!ok) { out[o++] = '?'; p++; continue; }
+        if (o + len >= n) break;
+        for (int k = 0; k < len; k++) out[o++] = (char)p[k];
+        p += len;
+    }
+    out[o] = '\0';
+}
+
 static cJSON *t_get_events(const cJSON *a, rbllm_cx_t *cx)
 {
     if (!s_events_reader) return fail(cx, "internal", "event log not available in this build", NULL);
@@ -773,8 +793,9 @@ static cJSON *t_get_events(const cJSON *a, rbllm_cx_t *cx)
         const char *lv = cJSON_GetStringValue(cJSON_GetObjectItem(e, "lvl"));
         cJSON_AddStringToObject(o, "severity", lv && !strcmp(lv, "fail") ? "warning" : "info");
         cJSON_AddStringToObject(o, "type", "log");
-        const char *m = cJSON_GetStringValue(cJSON_GetObjectItem(e, "msg"));
-        cJSON_AddStringToObject(o, "message", m ? m : "");
+        char mc[224];
+        utf8_clean(cJSON_GetStringValue(cJSON_GetObjectItem(e, "msg")), mc, sizeof(mc));
+        cJSON_AddStringToObject(o, "message", mc);
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_AddNumberToObject(r, "next", cJSON_GetNumberValue(cJSON_GetObjectItem(src, "next")));
@@ -873,7 +894,7 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
         cJSON *o = cJSON_CreateObject();
         char h[5]; uid_hex(p[i].unit_id, h);
         cJSON_AddStringToObject(o, "id", h);
-        cJSON_AddStringToObject(o, "name", p[i].name);
+        add_name(o, p[i].name);
         cJSON_AddStringToObject(o, "role", role_class(p[i].role));
         double ti = 0, te = 0;
         cJSON *rows = (u == 't') ? NULL : cJSON_AddArrayToObject(o, "rows");
@@ -900,8 +921,8 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
         free(b);
     }
     free(p);
-    cx->as_of = newest ? newest : from;
-    if (to > cx->as_of + 60) note(cx, "Data runs up to as_of: the open hour is booked when it closes.");
+    cx->as_of = newest;
+    if (newest && to > newest + 60) note(cx, "Data runs up to as_of: the open hour is booked when it closes.");
     cx->resolution = res_str(u);
     return r;
 }
@@ -962,7 +983,7 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
         cJSON *o = cJSON_CreateObject();
         char h[5]; uid_hex(p[i].unit_id, h);
         cJSON_AddStringToObject(o, "id", h);
-        cJSON_AddStringToObject(o, "name", p[i].name);
+        add_name(o, p[i].name);
         cJSON_AddStringToObject(o, "role", role_class(p[i].role));
         cJSON_AddNumberToObject(o, "cost", r4(t[i].cost));
         cJSON_AddNumberToObject(o, "energy_kwh", r4(t[i].e_in / 1000.0));
@@ -980,7 +1001,7 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
     note(cx, "Costs are gross (VAT included) as the hub books them; fixed charges are not included.");
     note(cx, "by_channel is attribution behind the main feed and does not add up to the bill.");
     free(p); free(t);
-    cx->as_of = newest ? newest : from;
+    cx->as_of = newest;
     return r;
 }
 
@@ -1018,7 +1039,7 @@ static cJSON *t_compare_periods(const cJSON *a, rbllm_cx_t *cx)
         cJSON *o = cJSON_CreateObject();
         char h[5]; uid_hex(p[i].unit_id, h);
         cJSON_AddStringToObject(o, "id", h);
-        cJSON_AddStringToObject(o, "name", p[i].name);
+        add_name(o, p[i].name);
         cJSON_AddNumberToObject(o, "a_energy_kwh", r4(ta[i].e_in / 1000.0));
         cJSON_AddNumberToObject(o, "b_energy_kwh", r4(tb[i].e_in / 1000.0));
         double d = (ta[i].e_in - tb[i].e_in) / 1000.0;
@@ -1032,7 +1053,7 @@ static cJSON *t_compare_periods(const cJSON *a, rbllm_cx_t *cx)
     }
     if (cx->gaps) note(cx, "A period has no stored record for some channel (hub off, point added later, or beyond the history depth).");
     if ((at - af) != (bt - bf)) note(cx, "The two periods differ in length; compare per-day figures if that matters.");
-    cx->as_of = newest ? newest : af;
+    cx->as_of = newest;
 out:
     free(p); free(ta); free(tb);
     return r;
@@ -1428,15 +1449,16 @@ char *rbllm_pair_start(const char *body, int *status)
     if (slot < 0) { ulk(); cJSON_Delete(b); return jerr(status, 429, "busy", "two pairings are already waiting; finish or let them expire (10 min)"); }
     rbllm_pair_t *p = &S.pair[slot];
     rand_hex(p->pair_id, 8);
-    strlcpy(p->client, nm, sizeof(p->client));
+    utf8_clean(nm, p->client, sizeof(p->client));
     p->scopes = sc;
     snprintf(p->code, sizeof(p->code), "%06lu", (unsigned long)(esp_random() % 1000000u));
     p->exp_us = esp_timer_get_time() + (int64_t)RBLLM_PAIR_TTL_S * 1000000;
     p->fails = 0;
     char pid[17]; strlcpy(pid, p->pair_id, sizeof(pid));
+    char cname[33]; strlcpy(cname, p->client, sizeof(cname));   /* nm points into b, freed below */
     ulk();
     cJSON_Delete(b);
-    rbpower_diag_printf("llm: pairing started for '%s' — the code is on the hub's AI / LLM page", nm);
+    rbpower_diag_printf("llm: pairing started for '%s' — the code is on the hub's AI / LLM page", cname);
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "pair_id", pid);
     cJSON_AddNumberToObject(r, "expires_in", RBLLM_PAIR_TTL_S);
