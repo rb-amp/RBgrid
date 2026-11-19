@@ -370,6 +370,7 @@ typedef struct {
     cJSON *notes;          /* array or NULL */
     /* error */
     bool open_hour;        /* the answer includes the open hour's closed 15-min periods */
+    int  retry_ms;         /* error.retry_after_ms (0 = none) */
     const char *err_code;
     char err_msg[160];
     char err_hint[160];
@@ -585,7 +586,7 @@ static double r2(double v) { return round(v * 100.0) / 100.0; }
 static bool parse_period(rbllm_cx_t *cx, const cJSON *p, uint32_t *from, uint32_t *to)
 {
     uint32_t now = now_s();
-    if (now < RBGRID_TS_SANE_MIN) { fail(cx, "internal", "the hub clock is not set", "Wait until the hub has synced its clock."); return false; }
+    if (now < RBGRID_TS_SANE_MIN) { fail(cx, "clock_unsynced", "the hub clock is not set yet (just restarted, or no internet for NTP)", "Retry in a few seconds; if it persists, check the hub's internet access."); cx->retry_ms = 5000; return false; }
     if (!cJSON_IsObject(p)) { fail(cx, "invalid_args", "period: object {from,to} or {preset} required", "Pass period:{preset:\"yesterday\"}."); return false; }
     const char *pre = cJSON_GetStringValue(cJSON_GetObjectItem(p, "preset"));
     if (pre) {
@@ -1383,7 +1384,7 @@ static cJSON *t_detect_anomalies(const cJSON *a, rbllm_cx_t *cx)
     bool sel[RBLLM_MAX_POINTS];
     if (!select_points(cx, cJSON_GetObjectItem(a, "channels"), p, n, sel)) { free(p); return NULL; }
     uint32_t now = now_s();
-    if (now < RBGRID_TS_SANE_MIN) { free(p); return fail(cx, "internal", "the hub clock is not set", NULL); }
+    if (now < RBGRID_TS_SANE_MIN) { free(p); cx->retry_ms = 5000; return fail(cx, "clock_unsynced", "the hub clock is not set yet", "Retry in a few seconds."); }
     uint32_t today0 = local_floor(now, 'd');
     cJSON *r = cJSON_CreateObject();
     cJSON *f = cJSON_AddArrayToObject(r, "findings");
@@ -2672,7 +2673,7 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
     }
     cJSON_Delete(cx.notes);
     if (!out) out = rbllm_error_json(ridb[0] ? ridb : NULL, cx.err_code ? cx.err_code : "internal",
-                                     cx.err_code ? cx.err_msg : "out of memory", cx.err_hint, 0);
+                                     cx.err_code ? cx.err_msg : "out of memory", cx.err_hint, cx.retry_ms);
     log_call(cx.client, tnb[0] ? tnb : "?", cx.err_code ? cx.err_code : "ok", esp_timer_get_time() - t0, out ? strlen(out) : 0);
     return out;
 }

@@ -216,10 +216,16 @@ def main():
                          ("ok", ["admin"], "admin scope only"), ("", ["read"], "empty name")]:
         c, j, *_ = h.req("/api/llm/v1/pair/start", "POST", {"client_name": nm, "scopes": sc})
         check(c == 400, f"pair/start refuses {what} (HTTP {c})")
-    c1, p1, *_ = h.req("/api/llm/v1/pair/start", "POST", {"client_name": "abuse1", "scopes": ["read"]})
-    c2, p2, *_ = h.req("/api/llm/v1/pair/start", "POST", {"client_name": "abuse2", "scopes": ["read"]})
-    c3, p3, *_ = h.req("/api/llm/v1/pair/start", "POST", {"client_name": "abuse3", "scopes": ["read"]})
-    check(c1 == 200 and c2 == 200 and c3 == 429, f"two pairings wait, the third gets 429 ({c1},{c2},{c3})")
+    c, st0, *_ = h.req("/api/v1/llm", bearer=admin)
+    pend0 = len(st0.get("pairing", []))   # pairings left by an earlier run or another client (expire in 10 min)
+    codes = []
+    for k in range(3):
+        c, pk, *_ = h.req("/api/llm/v1/pair/start", "POST", {"client_name": f"abuse{k + 1}", "scopes": ["read"]})
+        codes.append((c, pk))
+    want = [200 if k < max(0, 2 - pend0) else 429 for k in range(3)]
+    got = [c for c, _ in codes]
+    check(got == want, f"at most two pairings wait, then 429 (pending before {pend0}: got {got}, want {want})")
+    c1, p1 = codes[0]
     if c1 == 200:
         for k in range(5):
             h.req("/api/llm/v1/pair/complete", "POST", {"pair_id": p1["pair_id"], "code": "%06d" % k if k else "999999"})
