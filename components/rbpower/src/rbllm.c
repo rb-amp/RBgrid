@@ -29,6 +29,7 @@
 #include "rbamp.h"                   /* rbamp_basic_fw_name */
 #include "esp_app_desc.h"
 #include "esp_mac.h"
+#include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
@@ -237,6 +238,17 @@ void rbllm_init(void)
 
 bool rbllm_enabled(void) { return S.enabled; }
 
+int rbllm_pair_pending(void)
+{
+    if (!S.enabled || !s_mx) return 0;
+    int n = 0;
+    lk();
+    int64_t now = esp_timer_get_time();
+    for (int i = 0; i < RBLLM_MAX_PAIRS; i++) if (S.pair[i].pair_id[0] && now <= S.pair[i].exp_us) n++;
+    ulk();
+    return n;
+}
+
 bool rbllm_auth(const char *token, rbllm_caller_t *out)
 {
     if (!token || strncmp(token, "rbl_", 4) != 0 || strlen(token) > 80) return false;
@@ -369,6 +381,7 @@ typedef struct {
     int64_t  deadline_us;
     uint8_t  scopes;
     const char *client;
+    bool internal;         /* the hub page (RBLLM_CLIENT_WEB, admin token): not subject to read-only mode */
     /* meta */
     uint32_t as_of;
     const char *resolution;
@@ -2418,7 +2431,9 @@ static cJSON *t_apply_config(const cJSON *a, rbllm_cx_t *cx)
     bool ok = apply_patch(cx, p.patch, cur);
     cJSON_Delete(cur); cJSON_Delete(p.patch);
     if (!ok) return NULL;
-    char src[48]; snprintf(src, sizeof(src), "llm:%.40s", p.client[0] ? p.client : "client");
+    char src[48];
+    if (cx->internal && !strcmp(p.client, RBLLM_CLIENT_WEB)) strlcpy(src, "web", sizeof(src));   /* the user on the hub page */
+    else snprintf(src, sizeof(src), "llm:%.40s", p.client[0] ? p.client : "client");
     int v = ver_sync(src, p.summary);
     rbpower_diag_printf("llm: config version %d applied by '%s' (%s)", v, p.client, p.summary);
     s_cfg_changed = true;
@@ -3035,7 +3050,8 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
 {
     int64_t t0 = esp_timer_get_time();
     rbllm_cx_t cx = { .deadline_us = deadline_us ? deadline_us : t0 + (int64_t)RBLLM_CALL_TIMEOUT_MS * 1000,
-                      .scopes = caller ? caller->scopes : 0, .client = caller ? caller->client : "" };
+                      .scopes = caller ? caller->scopes : 0, .client = caller ? caller->client : "",
+                      .internal = caller && !caller->token_id[0] && !strcmp(caller->client, RBLLM_CLIENT_WEB) };
     cJSON *req = (len && len <= RBLLM_MAX_REQUEST_BYTES) ? cJSON_ParseWithLength(body, len) : NULL;
     const char *rid = req ? cJSON_GetStringValue(cJSON_GetObjectItem(req, "request_id")) : NULL;
     char ridb[65] = {0};
@@ -3056,7 +3072,7 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
         else if (!(cx.scopes & t->scope)) {
             char m[64]; snprintf(m, sizeof(m), "the tool needs scope '%s'", t->scope == RBLLM_SCOPE_CONFIG ? "config" : "read");
             fail(&cx, "forbidden_scope", m, "Pair again with that scope on the hub's AI / LLM page.");
-        } else if (S.read_only && (!strcmp(t->name, "apply_config") || !strcmp(t->name, "rollback_config") || !strcmp(t->name, "propose_config")))
+        } else if (S.read_only && !cx.internal && (!strcmp(t->name, "apply_config") || !strcmp(t->name, "rollback_config") || !strcmp(t->name, "propose_config")))
             fail(&cx, "read_only_mode", "the hub is in read-only mode for LLM clients", "The user can switch read-only off on the hub's AI / LLM page.");
         else if (!cJSON_IsObject(args)) fail(&cx, "invalid_args", "'args' must be an object", NULL);
         else if (check_args(&cx, t, args)) res = t->fn(args, &cx);
@@ -3181,6 +3197,7 @@ char *rbllm_pair_start(const char *body, int *status)
     uint8_t sc = b ? scopes_from_json(cJSON_GetObjectItem(b, "scopes")) : 0;
     if (!nm || !nm[0] || strlen(nm) > 32 || !sc) { cJSON_Delete(b); return jerr(status, 400, "invalid_args", "client_name (1..32 chars) and scopes [read|config] required"); }
     for (const char *c = nm; *c; c++) if ((unsigned char)*c < 0x20) { cJSON_Delete(b); return jerr(status, 400, "invalid_args", "client_name: no control characters"); }
+    if (!strcasecmp(nm, RBLLM_CLIENT_WEB)) { cJSON_Delete(b); return jerr(status, 400, "invalid_args", "client_name: \"web\" is reserved for the hub page"); }
     lk();
     pair_gc_locked();
     if (esp_timer_get_time() < S.pair_block_until_us) { ulk(); cJSON_Delete(b); return jerr(status, 429, "busy", "pairing is blocked for 10 minutes after too many wrong codes"); }
@@ -3279,6 +3296,7 @@ char *rbllm_admin_json(void)
         rbllm_pair_t *p = &S.pair[i];
         if (!p->pair_id[0]) continue;
         cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "pair_id", p->pair_id);
         cJSON_AddStringToObject(o, "client_name", p->client);
         scopes_to_json(o, "scopes", p->scopes);
         cJSON_AddStringToObject(o, "code", p->code);
@@ -3312,6 +3330,25 @@ char *rbllm_admin_json(void)
     }
     cJSON_AddNumberToObject(r, "log_total", S.log_n);
     ulk();
+    /* what the page needs to write a client's config snippet (CONNECT-UX §2.2) */
+    cJSON *cn = cJSON_AddObjectToObject(r, "connect");
+    char id[13]; rbllm_hub_id(id);
+    cJSON_AddStringToObject(cn, "hub_id", id);
+    rbgrid_json_context_t *jc = rbgrid_core_json_ctx();
+    char nm[48]; utf8_clean(jc && jc->device_info.device_name[0] ? jc->device_info.device_name : "RBgrid", nm, sizeof(nm));
+    cJSON_AddStringToObject(cn, "name", nm);
+    uint8_t mac[6] = {0}; esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char host[32]; snprintf(host, sizeof(host), "rbgrid-%02x%02x.local", mac[4], mac[5]);   /* = rbgrid_app's mDNS host */
+    cJSON_AddStringToObject(cn, "mdns_host", host);
+    esp_netif_t *nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip = {0};
+    if (nif && esp_netif_get_ip_info(nif, &ip) == ESP_OK && ip.ip.addr) {
+        char ips[16]; snprintf(ips, sizeof(ips), IPSTR, IP2STR(&ip.ip));
+        cJSON_AddStringToObject(cn, "ip", ips);
+        char u[40]; snprintf(u, sizeof(u), "http://%s/", ips);
+        cJSON_AddStringToObject(cn, "url", u);
+    } else { cJSON_AddNullToObject(cn, "ip"); cJSON_AddNullToObject(cn, "url"); }
+    cJSON_AddStringToObject(cn, "proto", RBLLM_PROTO);
     char *s = cJSON_PrintUnformatted(r);
     cJSON_Delete(r);
     return s;
@@ -3322,10 +3359,17 @@ char *rbllm_admin_set(const char *body, int *status)
     cJSON *b = body ? cJSON_Parse(body) : NULL;
     if (!cJSON_IsObject(b)) { cJSON_Delete(b); return jerr(status, 400, "invalid_args", "JSON object {enabled?, read_only?, revoke?} required"); }
     const cJSON *en = cJSON_GetObjectItem(b, "enabled"), *ro = cJSON_GetObjectItem(b, "read_only"), *rv = cJSON_GetObjectItem(b, "revoke");
-    if ((en && !cJSON_IsBool(en)) || (ro && !cJSON_IsBool(ro)) || (rv && !cJSON_IsString(rv))) {
-        cJSON_Delete(b); return jerr(status, 400, "invalid_args", "enabled/read_only: boolean; revoke: token id");
+    const cJSON *pc = cJSON_GetObjectItem(b, "pair_cancel");
+    if ((en && !cJSON_IsBool(en)) || (ro && !cJSON_IsBool(ro)) || (rv && !cJSON_IsString(rv)) || (pc && !cJSON_IsString(pc))) {
+        cJSON_Delete(b); return jerr(status, 400, "invalid_args", "enabled/read_only: boolean; revoke: token id; pair_cancel: pair id");
     }
     lk();
+    if (pc) {   /* Deny on the page: the pending pairing ends now; its code stops working */
+        bool hit = false;
+        for (int i = 0; i < RBLLM_MAX_PAIRS; i++)
+            if (S.pair[i].pair_id[0] && !strcmp(S.pair[i].pair_id, pc->valuestring)) { memset(&S.pair[i], 0, sizeof(S.pair[i])); hit = true; }
+        if (!hit) { ulk(); cJSON_Delete(b); return jerr(status, 404, "not_found", "no pending pairing with that id"); }
+    }
     bool found = true;
     if (rv) {
         found = false;

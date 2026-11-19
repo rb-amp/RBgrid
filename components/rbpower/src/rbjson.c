@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "rbjson.h"
+#include "rbllm.h"
 #include "rbdynprice.h"
 #include "rbextflash_operations.h"   /* rbpower_flash_unit_has_history — units-config `history` */
 #include "esp_log.h"
@@ -3567,6 +3568,7 @@ char* rbgrid_json_create_telemetry_frame(uint8_t frame) {
             }
             cJSON_AddNumberToObject(sys, "units",     units_valid);
             cJSON_AddNumberToObject(sys, "present",   units_present);
+            if (rbllm_enabled()) cJSON_AddNumberToObject(sys, "llm_pair_pending", rbllm_pair_pending());   /* the app's pairing banner */
             cJSON_AddItemToObject(root, "system", sys);
         }
     }

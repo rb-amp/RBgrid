@@ -27,6 +27,10 @@ extern "C" {
 #define RBLLM_CALL_TIMEOUT_MS    8000    ///< limits.call_timeout_ms
 #define RBLLM_MAX_REQUEST_BYTES  4096    ///< A call body larger than this is refused (invalid_args)
 
+/** @brief Client name of the hub's own page calling tools with the admin token (POST /api/v1/llm/call). Reserved:
+ *  pairing refuses it, so a config version with source "web" is always the user on the hub page. */
+#define RBLLM_CLIENT_WEB "web"
+
 /** @brief Token scopes (§6). */
 #define RBLLM_SCOPE_READ   0x01u
 #define RBLLM_SCOPE_CONFIG 0x02u
@@ -94,6 +98,9 @@ char *rbllm_admin_json(void);
  * @param[out] status HTTP-style status. @return malloc'd JSON (the new state, or an error naming the field).
  */
 char *rbllm_admin_set(const char *body, int *status);
+
+/** @brief Pairings waiting for their code now (the app-wide banner; telemetry `llm_pair_pending`). */
+int rbllm_pair_pending(void);
 
 /** @brief Hub id: 12 hex of the base MAC (manifest, envelope, mDNS TXT `id`). @param[out] out 13 bytes. */
 void rbllm_hub_id(char out[13]);

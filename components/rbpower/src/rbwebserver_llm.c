@@ -112,6 +112,31 @@ static esp_err_t h_call(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* POST /api/v1/llm/call — the hub page runs a tool with the admin token (config versions, rollback, events,
+ * identify_channel during set-up). Same tools and envelope as an assistant; caller "web", not subject to read-only
+ * mode, works with the LLM API off (it is the page, not an assistant). */
+static esp_err_t h_admin_call(httpd_req_t *req)
+{
+    add_cors_headers(req);
+    if (!rbapi_require_auth(req)) return ESP_OK;
+    rbllm_caller_t who;
+    memset(&who, 0, sizeof(who));
+    who.scopes = RBLLM_SCOPE_READ | RBLLM_SCOPE_CONFIG;
+    strlcpy(who.client, RBLLM_CLIENT_WEB, sizeof(who.client));
+    char *body = read_body(req, RBLLM_MAX_REQUEST_BYTES);
+    if (!body) return send_json(req, 400, rbllm_error_json(NULL, "invalid_args", "empty or oversized body (max 4 KB)", NULL, 0));
+    httpd_req_t *copy = NULL;
+    if (httpd_req_async_handler_begin(req, &copy) != ESP_OK) {
+        free(body);
+        return send_json(req, 429, rbllm_error_json(NULL, "busy", "no free connection slot", "Retry.", 1000));
+    }
+    if (!rbllm_submit(body, strlen(body), &who, call_done, copy)) {
+        free(body);
+        async_finish(copy, 429, rbllm_error_json(NULL, "busy", "the hub is answering another call", "Retry.", 1000));
+    }
+    return ESP_OK;
+}
+
 static esp_err_t h_pair(httpd_req_t *req)
 {
     add_cors_headers(req);
@@ -157,6 +182,7 @@ void rbwebserver_llm_register(httpd_handle_t srv)
         { .uri = "/api/llm/v1/pair/complete", .method = HTTP_POST, .handler = h_pair },
         { .uri = "/api/v1/llm",               .method = HTTP_GET,  .handler = h_admin },
         { .uri = "/api/v1/llm",               .method = HTTP_POST, .handler = h_admin },
+        { .uri = "/api/v1/llm/call",          .method = HTTP_POST, .handler = h_admin_call },
     };
     for (size_t i = 0; i < sizeof(u) / sizeof(u[0]); i++)
         if (httpd_register_uri_handler(srv, &u[i]) != ESP_OK)
