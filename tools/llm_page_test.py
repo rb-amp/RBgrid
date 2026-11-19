@@ -100,8 +100,9 @@ def main():
     c, j = h.page("get_events", {"limit": 5})
     check(c == 200 and j and j.get("ok") and isinstance(j["result"].get("events"), list), "page: get_events")
     c, j = h.page("list_channels")
-    chans = [x for x in (j or {}).get("result", {}).get("channels", []) if x["role"] != "main"]
-    if not check(chans, "page: list_channels has a non-main channel"):
+    allc = (j or {}).get("result", {}).get("channels", [])
+    chans = [x for x in allc if x["role"] != "main"] or allc   # a name is writable on any channel
+    if not check(chans, "page: list_channels has a channel"):
         return 1
     ch = chans[0]
     old = ch["name"]
