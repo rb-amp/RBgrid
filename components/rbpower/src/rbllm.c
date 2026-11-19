@@ -110,6 +110,10 @@ void rbllm_register_events_reader(char *(*fn)(uint32_t, uint32_t, int)) { s_even
 
 static void lk(void)  { if (s_mx) xSemaphoreTake(s_mx, portMAX_DELAY); }
 static void ulk(void) { if (s_mx) xSemaphoreGive(s_mx); }
+static void ev_boot(void);
+static void ev_watch(void);
+static void ev_add(uint8_t type, uint8_t sev, uint16_t chan, const char *info);
+static void ensure_task(void);
 
 static uint32_t now_s(void) { return (uint32_t)time(NULL); }
 
@@ -227,6 +231,8 @@ void rbllm_init(void)
     }
     ulk();
     ESP_LOGI(TAG, "LLM API %s", S.enabled ? "on" : "off");
+    ev_boot();
+    ensure_task();            /* the worker also runs the event watcher, so it starts with the hub */
 }
 
 bool rbllm_enabled(void) { return S.enabled; }
@@ -815,14 +821,193 @@ static void utf8_clean(const char *in, char *out, size_t n)
     out[o] = '\0';
 }
 
+/* ============================================================================================ typed event ring (§8.5)
+ * One ring of EV_N records in /llm_events.bin; seq grows across reboots and is the get_events cursor. Written whole on
+ * each event (events are rare: a restart, a config version, a module lost/back, the clock, prices). A record made before
+ * the clock synced keeps its uptime and gets its time when the clock comes. */
+#define EV_FILE   "/llm_events.bin"
+#define EV_N      64
+#define EV_MAGIC  0x31564552u   /* "REV1" */
+enum { EV_REBOOT = 1, EV_CONFIG, EV_MODULE_LOST, EV_MODULE_BACK, EV_CLOCK, EV_PRICE };
+enum { SEV_INFO = 0, SEV_WARNING, SEV_CRITICAL };
+typedef struct __attribute__((packed)) {
+    uint32_t seq, ts, up_s;
+    uint8_t  type, sev;
+    uint16_t chan;
+    char     info[40];
+} ev_rec_t;
+typedef struct { uint32_t magic, next_seq; ev_rec_t r[EV_N]; } ev_file_t;
+static EXT_RAM_BSS_ATTR ev_file_t s_ev;
+static StaticSemaphore_t s_ev_mx_buf;
+static SemaphoreHandle_t s_ev_mx;
+static bool     s_ev_loaded;
+static uint32_t s_ev_boot_seq;      /* first seq of this boot */
+static bool     s_ev_ts_pending;    /* this boot has records with ts 0 */
+
+static const char *ev_type_name(uint8_t t)
+{
+    switch (t) {
+    case EV_REBOOT: return "reboot"; case EV_CONFIG: return "config_changed"; case EV_MODULE_LOST: return "module_lost";
+    case EV_MODULE_BACK: return "module_back"; case EV_CLOCK: return "clock_unsynced"; case EV_PRICE: return "price_missing";
+    default: return "other";
+    }
+}
+
+static void ev_save(void)
+{
+    if (littlefs_raw_write(EV_FILE, &s_ev, sizeof(s_ev)) != ESP_OK) rbpower_diag_printf("FAIL llm: %s not saved", EV_FILE);
+}
+
+static void ev_add(uint8_t type, uint8_t sev, uint16_t chan, const char *info)
+{
+    if (!s_ev_loaded || !s_ev_mx) return;
+    xSemaphoreTake(s_ev_mx, portMAX_DELAY);
+    uint32_t seq = s_ev.next_seq++;
+    ev_rec_t *r = &s_ev.r[seq % EV_N];
+    memset(r, 0, sizeof(*r));
+    r->seq = seq;
+    r->up_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    r->ts = rbtime_is_time_valid() ? now_s() : 0;
+    if (!r->ts) s_ev_ts_pending = true;
+    r->type = type; r->sev = sev; r->chan = chan;
+    utf8_clean(info, r->info, sizeof(r->info));
+    ev_save();
+    xSemaphoreGive(s_ev_mx);
+}
+
+static void ev_boot(void)
+{
+    if (!s_ev_mx) s_ev_mx = xSemaphoreCreateMutexStatic(&s_ev_mx_buf);
+    if (s_ev_loaded || !littlefs_raw_is_mounted()) return;
+    size_t sz = 0, got = 0;
+    bool ok = littlefs_raw_size(EV_FILE, &sz) == ESP_OK && sz == sizeof(s_ev) &&
+              littlefs_raw_read(EV_FILE, &s_ev, sizeof(s_ev), &got) == ESP_OK && got == sizeof(s_ev) && s_ev.magic == EV_MAGIC;
+    if (!ok) { memset(&s_ev, 0, sizeof(s_ev)); s_ev.magic = EV_MAGIC; s_ev.next_seq = 1; }
+    s_ev_loaded = true;
+    s_ev_boot_seq = s_ev.next_seq;
+    esp_reset_reason_t rr = esp_reset_reason();
+    bool bad = rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT || rr == ESP_RST_WDT || rr == ESP_RST_BROWNOUT;
+    ev_add(EV_REBOOT, bad ? SEV_WARNING : SEV_INFO, 0, reset_name(rr));
+}
+
+/* ---- the watcher: called on the worker task about every 10 s */
+#define W_LOST_S        30     /* a point gone this long is lost */
+#define W_NEVER_S      120     /* a point never seen this boot is reported after this uptime */
+static EXT_RAM_BSS_ATTR rbgrid_point_snap_t s_w_snap[RBLLM_MAX_POINTS];
+static EXT_RAM_BSS_ATTR struct { uint16_t uid; bool seen, lost; int64_t gone_us; } s_w[RBLLM_MAX_POINTS];
+static int  s_w_n;
+static bool s_w_clock_ev;
+static char s_w_price[16];
+static int64_t s_w_last_us;
+
+static void ev_watch(void)
+{
+    int64_t t = esp_timer_get_time();
+    if (!s_ev_loaded || t - s_w_last_us < 9000000LL) return;
+    s_w_last_us = t;
+    uint32_t up = (uint32_t)(t / 1000000LL);
+    bool clk = rbtime_is_time_valid();
+    /* clock */
+    if (!clk && up >= 180 && !s_w_clock_ev) { s_w_clock_ev = true; ev_add(EV_CLOCK, SEV_WARNING, 0, "no time sync 3 min after start"); }
+    if (clk && s_ev_ts_pending) {
+        xSemaphoreTake(s_ev_mx, portMAX_DELAY);
+        uint32_t n = now_s();
+        for (int i = 0; i < EV_N; i++) {
+            ev_rec_t *r = &s_ev.r[i];
+            if (r->seq >= s_ev_boot_seq && !r->ts) r->ts = n - (up - r->up_s);
+        }
+        s_ev_ts_pending = false;
+        ev_save();
+        xSemaphoreGive(s_ev_mx);
+    }
+    /* modules: presence per point */
+    if (rbpower_home_lock_timeout(100)) {
+        int n = rbgrid_core_points_snapshot(s_w_snap, RBLLM_MAX_POINTS);
+        rbpower_home_unlock();
+        for (int i = 0; i < n; i++) {
+            int k = 0;
+            while (k < s_w_n && s_w[k].uid != s_w_snap[i].unit_id) k++;
+            if (k == s_w_n) { if (s_w_n >= RBLLM_MAX_POINTS) continue; s_w_n++; memset(&s_w[k], 0, sizeof(s_w[k])); s_w[k].uid = s_w_snap[i].unit_id; }
+            if (s_w_snap[i].present) {
+                s_w[k].seen = true; s_w[k].gone_us = 0;
+                if (s_w[k].lost) { s_w[k].lost = false; ev_add(EV_MODULE_BACK, SEV_INFO, s_w[k].uid, s_w_snap[i].name); }
+            } else if (!s_w[k].lost) {
+                if (!s_w[k].gone_us) s_w[k].gone_us = t;
+                bool due = s_w[k].seen ? (t - s_w[k].gone_us) >= W_LOST_S * 1000000LL : up >= W_NEVER_S;
+                if (due) { s_w[k].lost = true; ev_add(EV_MODULE_LOST, SEV_WARNING, s_w[k].uid, s_w_snap[i].name); }
+            }
+        }
+    }
+    /* dynamic prices: entering a state without tomorrow's (or today's) prices */
+    if (clk && up >= W_NEVER_S) {
+        const char *st = rbdynprice_state();
+        bool bad = !strcmp(st, "today_only") || !strcmp(st, "stale") || !strcmp(st, "plan_fallback");
+        bool was_bad = !strcmp(s_w_price, "today_only") || !strcmp(s_w_price, "stale") || !strcmp(s_w_price, "plan_fallback");
+        if (bad && !was_bad) ev_add(EV_PRICE, SEV_WARNING, 0, st);
+        strlcpy(s_w_price, st, sizeof(s_w_price));
+    }
+}
+
+static cJSON *events_typed(uint32_t since, uint32_t lim, rbllm_cx_t *cx)
+{
+    cJSON *r = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(r, "events");
+    if (!s_ev_loaded) { cJSON_AddNumberToObject(r, "next", since); cJSON_AddBoolToObject(r, "more", false); return r; }
+    xSemaphoreTake(s_ev_mx, portMAX_DELAY);
+    uint32_t top = s_ev.next_seq;                       /* exclusive */
+    uint32_t oldest = top > EV_N ? top - EV_N : 1;
+    while (oldest < top && s_ev.r[oldest % EV_N].seq != oldest) oldest++;
+    uint32_t s = since + 1 > oldest ? since + 1 : oldest;
+    uint32_t last = since, cnt = 0, last_ts = 0;
+    for (uint32_t q = s; q < top && cnt < lim; q++) {
+        const ev_rec_t *e = &s_ev.r[q % EV_N];
+        if (e->seq != q) continue;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "seq", q);
+        if (e->ts > RBGRID_TS_SANE_MIN) { add_time(o, "time", e->ts); last_ts = e->ts; } else cJSON_AddNullToObject(o, "time");
+        cJSON_AddStringToObject(o, "type", ev_type_name(e->type));
+        cJSON_AddStringToObject(o, "severity", e->sev == SEV_CRITICAL ? "critical" : e->sev == SEV_WARNING ? "warning" : "info");
+        if (e->chan) { char h[5]; uid_hex(e->chan, h); cJSON_AddStringToObject(o, "channel", h); }
+        cJSON *d = cJSON_AddObjectToObject(o, "data");
+        char msg[96];
+        switch (e->type) {
+        case EV_REBOOT: cJSON_AddStringToObject(d, "reason", e->info); snprintf(msg, sizeof(msg), "Hub started (reset: %s)", e->info); break;
+        case EV_CONFIG: {
+            char b[40]; strlcpy(b, e->info, sizeof(b));
+            char *bar = strchr(b, '|');
+            if (bar) { *bar = 0; cJSON_AddNumberToObject(d, "version", atoi(b)); cJSON_AddStringToObject(d, "source", bar + 1); }
+            snprintf(msg, sizeof(msg), "Configuration version %s saved (%s)", b, bar ? bar + 1 : "?");
+            break; }
+        case EV_MODULE_LOST: cJSON_AddStringToObject(d, "name", e->info); snprintf(msg, sizeof(msg), "No data from channel \"%s\"", e->info); break;
+        case EV_MODULE_BACK: cJSON_AddStringToObject(d, "name", e->info); snprintf(msg, sizeof(msg), "Channel \"%s\" reports again", e->info); break;
+        case EV_CLOCK: snprintf(msg, sizeof(msg), "Clock not set: %s", e->info); break;
+        case EV_PRICE: cJSON_AddStringToObject(d, "state", e->info); snprintf(msg, sizeof(msg), "Dynamic prices missing (state %s); the plan price is used", e->info); break;
+        default: snprintf(msg, sizeof(msg), "%s", e->info); break;
+        }
+        char mc[112]; utf8_clean(msg, mc, sizeof(mc));
+        cJSON_AddStringToObject(o, "message", mc);
+        cJSON_AddItemToArray(arr, o);
+        last = q; cnt++;
+    }
+    bool more = last + 1 < top && cnt >= lim;
+    xSemaphoreGive(s_ev_mx);
+    cJSON_AddNumberToObject(r, "next", last);
+    cJSON_AddBoolToObject(r, "more", more);
+    if (since && since + 1 < oldest) cJSON_AddNumberToObject(r, "lost", oldest - since - 1);
+    cx->as_of = last_ts ? last_ts : now_s();
+    return r;
+}
+
 static cJSON *t_get_events(const cJSON *a, rbllm_cx_t *cx)
 {
-    if (!s_events_reader) return fail(cx, "internal", "event log not available in this build", NULL);
     const cJSON *js = cJSON_GetObjectItem(a, "since"), *jl = cJSON_GetObjectItem(a, "limit");
-    uint32_t since = cJSON_IsNumber(js) && js->valuedouble > 0 ? (uint32_t)js->valuedouble : 0;
-    uint32_t lim = cJSON_IsNumber(jl) ? (uint32_t)jl->valuedouble : 30;
-    if (lim < 1) lim = 1;
-    if (lim > 50) lim = 50;
+    uint32_t since = cJSON_IsNumber(js) && js->valuedouble > 0 ? (js->valuedouble > 4e9 ? 4000000000u : (uint32_t)js->valuedouble) : 0;
+    uint32_t lim = cJSON_IsNumber(jl) ? (jl->valuedouble > 50 ? 50 : jl->valuedouble < 1 ? 1 : (uint32_t)jl->valuedouble) : 30;
+    const char *src_s = cJSON_GetStringValue(cJSON_GetObjectItem(a, "source"));
+    if (src_s && strcmp(src_s, "events") && strcmp(src_s, "log"))
+        return fail(cx, "invalid_args", "source: \"events\" or \"log\"", NULL);
+    if (!src_s || !strcmp(src_s, "events")) return events_typed(since, lim, cx);
+    if (!s_events_reader) return fail(cx, "internal", "event log not available in this build", NULL);
     char *raw = s_events_reader(since, lim, 1);   /* events + FAIL lines, not the periodic trace */
     cJSON *src = raw ? cJSON_Parse(raw) : NULL;
     free(raw);
@@ -1028,8 +1213,9 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
     double oc = 0, orv = 0;
     for (int i = 0; i < n; i++) if (p[i].role == RBPOWER_ROLE_MAIN_SUPPLY) { oc += t[i].open_cost; orv += t[i].open_rev; }
     uint32_t today0 = local_floor(now_s(), 'd');
-    bool whole_today = from <= today0;
-    if (mains && cx->open_hour && (whole_today || oc > 0 || orv > 0)) {
+    /* whole_today: the period reaches now (the open hour may hold nothing yet, e.g. just after a restart) */
+    bool whole_today = from <= today0 && to + 5 >= now_s() && rbtime_is_time_valid();
+    if (mains && (whole_today || (cx->open_hour && (oc > 0 || orv > 0)))) {
         rbgrid_system_totals_t st;
         rbpower_home_lock(); rbgrid_core_system_totals(&st, true); rbpower_home_unlock();
         double closed_c = 0, closed_r = 0;
@@ -1813,6 +1999,8 @@ static int ver_sync(const char *source, const char *summary)
         cJSON_ReplaceItemInObject(v, "next", cJSON_CreateNumber(next + 1));
         ver_save(v);
         num = next;
+        char inf[40]; snprintf(inf, sizeof(inf), "%d|%s", next, source ? source : "?");
+        ev_add(EV_CONFIG, SEV_INFO, 0, inf);
     }
     cJSON_Delete(cap);
     cJSON_Delete(v);
@@ -2351,6 +2539,179 @@ typedef struct {
                  "\"from\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"additionalProperties\":false}"
 #define S_CHANNELS "{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Channel ids from list_channels; omit for all.\"}"
 
+/* ============================================================================================ identify_channel
+ * Two calls: start (baseline = power now, then a 1 s sampler keeps min/max per point for the window) and result (rank
+ * the points by their step). The sampler is an esp_timer; it takes the home lock with a short timeout and skips a tick
+ * rather than wait. State is small and lives in PSRAM; s_id_mux guards it between the timer and the worker. */
+#define ID_MAX_WIN_S   120
+#define ID_MIN_STEP_W  60.0f
+typedef struct {
+    bool     active;          /* a session exists (running or finished) */
+    bool     running;         /* the sampler is still sampling */
+    int64_t  t0_us, last_us;
+    uint32_t win_s, samples;
+    int      n;
+    uint16_t uid[RBLLM_MAX_POINTS];
+    uint8_t  role[RBLLM_MAX_POINTS];
+    float    base[RBLLM_MAX_POINTS], mn[RBLLM_MAX_POINTS], mx[RBLLM_MAX_POINTS], now[RBLLM_MAX_POINTS];
+    float    gbase, gmn, gmx, gnow;   /* grid (system) power */
+} id_state_t;
+static EXT_RAM_BSS_ATTR id_state_t s_id;
+static EXT_RAM_BSS_ATTR rbgrid_point_snap_t s_id_snap[RBLLM_MAX_POINTS];
+static portMUX_TYPE s_id_mux = portMUX_INITIALIZER_UNLOCKED;
+static esp_timer_handle_t s_id_timer;
+
+/* Take one sample into s_id (base = true: this sample is the baseline). Returns false if the lock was busy. */
+static bool id_sample(bool base)
+{
+    if (!rbpower_home_lock_timeout(50)) return false;
+    int n = rbgrid_core_points_snapshot(s_id_snap, RBLLM_MAX_POINTS);
+    rbgrid_system_totals_t st;
+    rbgrid_core_system_totals(&st, false);
+    rbpower_home_unlock();
+    int64_t t = esp_timer_get_time();
+    portENTER_CRITICAL(&s_id_mux);
+    if (base) { s_id.n = 0; s_id.gbase = s_id.gmn = s_id.gmx = (float)st.p_w; }
+    for (int i = 0; i < n; i++) {
+        float w = s_id_snap[i].p_w;
+        int k = 0;
+        while (k < s_id.n && s_id.uid[k] != s_id_snap[i].unit_id) k++;
+        if (k == s_id.n) {                     /* new point (or the baseline pass) */
+            if (s_id.n >= RBLLM_MAX_POINTS) continue;
+            s_id.n++; s_id.uid[k] = s_id_snap[i].unit_id; s_id.base[k] = s_id.mn[k] = s_id.mx[k] = w;
+        }
+        s_id.role[k] = s_id_snap[i].role;
+        if (w < s_id.mn[k]) s_id.mn[k] = w;
+        if (w > s_id.mx[k]) s_id.mx[k] = w;
+        s_id.now[k] = w;
+    }
+    float g = (float)st.p_w;
+    if (g < s_id.gmn) s_id.gmn = g;
+    if (g > s_id.gmx) s_id.gmx = g;
+    s_id.gnow = g;
+    s_id.samples++; s_id.last_us = t;
+    bool done = (t - s_id.t0_us) >= (int64_t)s_id.win_s * 1000000LL;
+    if (done) s_id.running = false;
+    portEXIT_CRITICAL(&s_id_mux);
+    if (done && s_id_timer) esp_timer_stop(s_id_timer);
+    return true;
+}
+
+static void id_tick(void *arg) { (void)arg; if (s_id.running) id_sample(false); }
+
+/* The signed step of a point: the larger excursion from its baseline (on = positive, off = negative). */
+static float id_step(float base, float mn, float mx) { return (mx - base) >= (base - mn) ? mx - base : mn - base; }
+
+static cJSON *t_identify_channel(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *act = cJSON_GetStringValue(cJSON_GetObjectItem(a, "action"));
+    if (!act || (strcmp(act, "start") && strcmp(act, "result")))
+        return fail(cx, "invalid_args", "action: \"start\" or \"result\" required", "Call start, ask the user to switch one appliance on or off, then call result.");
+    if (!strcmp(act, "start")) {
+        const cJSON *jw = cJSON_GetObjectItem(a, "window_s");
+        uint32_t win = cJSON_IsNumber(jw) ? (uint32_t)(jw->valuedouble < 10 ? 10 : jw->valuedouble > ID_MAX_WIN_S ? ID_MAX_WIN_S : jw->valuedouble) : 60;
+        if (!s_id_timer) {
+            const esp_timer_create_args_t ta = { .callback = id_tick, .name = "llm_ident" };
+            if (esp_timer_create(&ta, &s_id_timer) != ESP_OK) return fail(cx, "internal", "sampler not available", NULL);
+        }
+        esp_timer_stop(s_id_timer);                  /* a new start replaces the previous session */
+        portENTER_CRITICAL(&s_id_mux);
+        memset(&s_id, 0, sizeof(s_id));
+        s_id.active = true; s_id.running = true; s_id.win_s = win; s_id.t0_us = esp_timer_get_time();
+        portEXIT_CRITICAL(&s_id_mux);
+        bool ok = false;
+        for (int i = 0; i < 5 && !(ok = id_sample(true)); i++) vTaskDelay(pdMS_TO_TICKS(20));
+        if (!ok) { s_id.active = s_id.running = false; return fail(cx, "busy", "the hub is busy; the baseline could not be taken", "Retry in a second."); }
+        esp_timer_start_periodic(s_id_timer, 1000000);
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "status", "sampling");
+        cJSON_AddNumberToObject(r, "window_s", win);
+        cJSON_AddNumberToObject(r, "points", s_id.n);
+        cJSON_AddStringToObject(r, "next", "Ask the user to switch ONE appliance of at least about 100 W on (or off) now and leave it for 10 s. "
+                                           "Then call identify_channel with action \"result\". Other big loads should stay as they are.");
+        cx->as_of = now_s(); cx->resolution = "live";
+        return r;
+    }
+    /* result */
+    id_state_t s;
+    portENTER_CRITICAL(&s_id_mux);
+    memcpy(&s, &s_id, sizeof(s));
+    portEXIT_CRITICAL(&s_id_mux);
+    if (!s.active) return fail(cx, "invalid_args", "no identification is running", "Call identify_channel with action \"start\" first.");
+    int64_t el_us = esp_timer_get_time() - s.t0_us;
+    rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
+    if (!p) return fail(cx, "internal", "out of memory", NULL);
+    int n = snapshot(p, RBLLM_MAX_POINTS);
+    /* rank the non-main points by |step| */
+    int ord[RBLLM_MAX_POINTS]; int m = 0;
+    for (int k = 0; k < s.n; k++) if (s.role[k] != RBPOWER_ROLE_MAIN_SUPPLY) ord[m++] = k;
+    for (int i = 1; i < m; i++) {                    /* insertion sort, m ≤ 24 */
+        int v = ord[i], j = i;
+        float sv = fabsf(id_step(s.base[v], s.mn[v], s.mx[v]));
+        while (j > 0 && fabsf(id_step(s.base[ord[j - 1]], s.mn[ord[j - 1]], s.mx[ord[j - 1]])) < sv) { ord[j] = ord[j - 1]; j--; }
+        ord[j] = v;
+    }
+    float gstep = id_step(s.gbase, s.gmn, s.gmx);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "status", s.running ? "sampling" : "finished");
+    cJSON_AddNumberToObject(r, "elapsed_s", (double)(el_us / 1000000LL));
+    cJSON_AddNumberToObject(r, "window_s", s.win_s);
+    cJSON_AddNumberToObject(r, "samples", s.samples);
+    cJSON *g = cJSON_AddObjectToObject(r, "grid");
+    cJSON_AddNumberToObject(g, "baseline_w", r2(s.gbase));
+    cJSON_AddNumberToObject(g, "step_w", r2(gstep));
+    cJSON_AddNumberToObject(g, "now_w", r2(s.gnow));
+    cJSON *arr = cJSON_AddArrayToObject(r, "candidates");
+    for (int i = 0; i < m && i < 5; i++) {
+        int k = ord[i];
+        float st = id_step(s.base[k], s.mn[k], s.mx[k]);
+        if (fabsf(st) < 5.0f) break;                 /* noise */
+        cJSON *o = cJSON_CreateObject();
+        char h[5]; uid_hex(s.uid[k], h);
+        cJSON_AddStringToObject(o, "id", h);
+        for (int q = 0; q < n; q++) if (p[q].unit_id == s.uid[k]) { add_name(o, p[q].name); break; }
+        cJSON_AddStringToObject(o, "role", role_class(s.role[k]));
+        cJSON_AddNumberToObject(o, "baseline_w", r2(s.base[k]));
+        cJSON_AddNumberToObject(o, "step_w", r2(st));
+        cJSON_AddNumberToObject(o, "now_w", r2(s.now[k]));
+        cJSON_AddItemToArray(arr, o);
+    }
+    free(p);
+    /* the verdict */
+    const char *verdict = "no_step";
+    if (m > 0) {
+        int k = ord[0];
+        float s1 = id_step(s.base[k], s.mn[k], s.mx[k]);
+        float s2 = m > 1 ? fabsf(id_step(s.base[ord[1]], s.mn[ord[1]], s.mx[ord[1]])) : 0.0f;
+        if (fabsf(s1) >= ID_MIN_STEP_W) {
+            verdict = (fabsf(s1) >= 2.0f * s2) ? "identified" : "ambiguous";
+            char h[5]; uid_hex(s.uid[k], h);
+            if (!strcmp(verdict, "identified")) cJSON_AddStringToObject(r, "channel_id", h);
+            /* the grid sees the same appliance: opposite signs on a load point = a clamp the wrong way round */
+            if (fabsf(gstep) >= ID_MIN_STEP_W && s1 * gstep < 0 && !strcmp(role_class(s.role[k]), "load")) {
+                cJSON_AddBoolToObject(r, "reversed_ct_suspected", true);
+                note(cx, "The channel moved against the grid: its clamp is probably on the wrong way round (fix at the clamp, then check again).");
+            }
+            if (fabsf(gstep) >= ID_MIN_STEP_W) {
+                float ratio = fabsf(s1) / fabsf(gstep);
+                cJSON_AddNumberToObject(r, "step_vs_grid", round(ratio * 100.0) / 100.0);
+                if (ratio < 0.6f || ratio > 1.6f) note(cx, "The channel's step differs from the grid's: another load changed at the same time, or the clamp's model or phase is set wrong.");
+            } else if (s.n && fabsf(s1) >= ID_MIN_STEP_W) {
+                note(cx, "The grid did not move with the channel: the channel may be on a circuit the grid point does not see, or the main clamp is missing.");
+            }
+        }
+    }
+    cJSON_AddStringToObject(r, "verdict", verdict);
+    if (!strcmp(verdict, "no_step") && s.running)
+        note(cx, "No step of 60 W or more yet. Ask the user whether the appliance is on, then call result again (the window is still open).");
+    else if (!strcmp(verdict, "no_step"))
+        note(cx, "No step of 60 W or more in the window. Start again with a bigger appliance (kettle, heater).");
+    else if (!strcmp(verdict, "ambiguous"))
+        note(cx, "Two channels moved by a similar amount: ask the user to switch the appliance off again and call start once more.");
+    cx->as_of = now_s(); cx->resolution = "live";
+    return r;
+}
+
 static const rbllm_tool_t TOOLS[] = {
     { "get_hub_info", RBLLM_SCOPE_READ,
       "When to call: first, to learn the hub's time zone, currency, firmware and what it can do. What it returns: hub id, name, firmware, "
@@ -2376,10 +2737,21 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"uptime_s\":{\"type\":\"number\"},\"modules\":{\"type\":\"array\"},\"modules_online\":{\"type\":\"integer\"}}}",
       t_get_health },
+    { "identify_channel", RBLLM_SCOPE_READ,
+      "When to call: to find which channel an appliance is on (setting up, naming channels, checking a clamp). Two steps: action start "
+      "(takes the baseline and samples every second for window_s), then the user switches one appliance on or off, then action result. "
+      "What it returns: verdict identified | ambiguous | no_step, channel_id, candidates with their power step, the grid's step, and "
+      "reversed_ct_suspected when a load channel moved against the grid. Read-only: it measures, it changes nothing.",
+      "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"start\",\"result\"]},"
+      "\"window_s\":{\"type\":\"integer\",\"minimum\":10,\"maximum\":120,\"description\":\"start only; default 60\"}},\"required\":[\"action\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\"},\"verdict\":{\"type\":\"string\"},\"channel_id\":{\"type\":\"string\"},\"candidates\":{\"type\":\"array\"},\"grid\":{\"type\":\"object\"}}}",
+      t_identify_channel },
     { "get_events", RBLLM_SCOPE_READ,
-      "When to call: to explain a gap, a missing module or a warning. What it returns: the hub's event and warning lines of this boot, newest "
-      "last, with a cursor (next) for the following call.",
+      "When to call: to explain a gap, a missing module, a restart or a warning, or to see what changed since you last looked. What it "
+      "returns: typed events kept across restarts (reboot, config_changed, module_lost, module_back, clock_unsynced, price_missing), oldest "
+      "first, with a cursor (next) to pass as since next time. source \"log\" gives the hub's raw log lines of this boot instead.",
       "{\"type\":\"object\",\"properties\":{\"since\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"next from the previous call; omit for the oldest kept\"},"
+      "\"source\":{\"type\":\"string\",\"enum\":[\"events\",\"log\"],\"description\":\"default events\"},"
       "\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":50}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"events\":{\"type\":\"array\"},\"next\":{\"type\":\"integer\"},\"more\":{\"type\":\"boolean\"}}}",
       t_get_events },
@@ -2755,7 +3127,9 @@ static void worker(void *arg)
     (void)arg;
     rbllm_job_t j;
     for (;;) {
-        if (xQueueReceive(s_q, &j, portMAX_DELAY) != pdTRUE) continue;
+        bool got = xQueueReceive(s_q, &j, pdMS_TO_TICKS(10000)) == pdTRUE;
+        ev_watch();                       /* rate-limited inside: about every 10 s, busy or idle */
+        if (!got) continue;
         s_busy = true;
         char *rep = (esp_timer_get_time() > j.deadline_us)
                         ? rbllm_error_json(NULL, "timeout", "the call waited too long in the queue", "Retry.", 0)
@@ -2766,12 +3140,18 @@ static void worker(void *arg)
     }
 }
 
+static void ensure_task(void)
+{
+    if (s_task) return;
+    s_q = xQueueCreateStatic(sizeof(s_q_store) / sizeof(rbllm_job_t), sizeof(rbllm_job_t), s_q_store, &s_q_buf);
+    s_task = xTaskCreateStatic(worker, "rbllm", RBLLM_STACK, NULL, 2, s_task_stack, &s_task_buf);
+}
+
 bool rbllm_submit(char *body, size_t len, const rbllm_caller_t *caller, void (*done)(char *, void *), void *ctx)
 {
     if (!s_task) {
         if (!s_mx) rbllm_init();
-        s_q = xQueueCreateStatic(sizeof(s_q_store) / sizeof(rbllm_job_t), sizeof(rbllm_job_t), s_q_store, &s_q_buf);
-        s_task = xTaskCreateStatic(worker, "rbllm", RBLLM_STACK, NULL, 2, s_task_stack, &s_task_buf);
+        ensure_task();
     }
     rbllm_job_t j = { .body = body, .len = len, .done = done, .ctx = ctx,
                       .deadline_us = esp_timer_get_time() + (int64_t)RBLLM_CALL_TIMEOUT_MS * 1000 };

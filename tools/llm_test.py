@@ -266,6 +266,24 @@ def main():
             check(okc and oke, f"today = hub page: cost {rt.get('total_cost')} vs cost_day {sd.get('cost_day')}, "
                                f"{rt.get('import_kwh')} kWh vs e_day_in {sd.get('e_day_in')} Wh")
 
+        # ---- identify_channel: the two-step shape (no load switched: the verdict is whatever the bench does)
+        code, j, *_ = call("identify_channel", {"action": "result"})
+        check(j and not j.get("ok") and j["error"]["code"] == "invalid_args" or (j and j.get("ok")), "identify_channel result before start: refused or a previous session")
+        code, j, *_ = call("identify_channel", {"action": "start", "window_s": 10})
+        check(j and j.get("ok") and j["result"].get("status") == "sampling" and j["result"].get("points", 0) > 0, "identify_channel start: sampling")
+        time.sleep(4)
+        code, j, *_ = call("identify_channel", {"action": "result"})
+        r = (j or {}).get("result") or {}
+        check(j and j.get("ok") and r.get("status") == "sampling" and r.get("samples", 0) >= 3 and r.get("verdict") in ("identified", "ambiguous", "no_step"),
+              f"identify_channel result mid-window: {r.get('status')} {r.get('samples')} samples, verdict {r.get('verdict')}")
+        time.sleep(8)
+        code, j, *_ = call("identify_channel", {"action": "result"})
+        r = (j or {}).get("result") or {}
+        check(j and j.get("ok") and r.get("status") == "finished" and 9 <= r.get("samples", 0) <= 12, f"identify_channel after the window: {r.get('status')}, {r.get('samples')} samples (sampler stopped)")
+        print("   identify:", json.dumps(r)[:400])
+        code, j, *_ = call("identify_channel", {"action": "go"})
+        check(j and not j.get("ok") and j["error"]["code"] == "invalid_args", "identify_channel bad action: invalid_args")
+
         # ---- concurrency: 4 parallel calls → all ok, or ok + busy
         out = []
         def worker(i):
