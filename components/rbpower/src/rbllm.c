@@ -431,7 +431,7 @@ static bool select_points(rbllm_cx_t *cx, const cJSON *ch, const rbgrid_point_sn
         bool hit = false;
         for (int i = 0; v && i < n; i++) {
             char h[5]; uid_hex(p[i].unit_id, h);
-            if (!strcasecmp(v, h) || !strcmp(v, p[i].point)) { sel[i] = true; hit = true; }
+            if (!strcasecmp(v, h) || (p[i].point[0] && !strcmp(v, p[i].point))) { sel[i] = true; hit = true; }
         }
         if (!hit) {
             char m[96]; snprintf(m, sizeof(m), "unknown channel '%.40s'", v ? v : "?");

@@ -30,7 +30,7 @@ static esp_err_t send_json(httpd_req_t *req, int status, char *body)
     httpd_resp_set_status(req, st);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    if (status == 429) httpd_resp_set_hdr(req, "Retry-After", "2");
+    if (status == 429) httpd_resp_set_hdr(req, "Retry-After", "1");   /* = the envelope's retry_after_ms 1000 */
     esp_err_t e = httpd_resp_sendstr(req, body ? body : "{\"ok\":false,\"error\":{\"code\":\"internal\",\"message\":\"out of memory\"}}");
     free(body);
     return e;
