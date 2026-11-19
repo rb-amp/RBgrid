@@ -434,6 +434,9 @@ char *rbgrid_build_schema_json(void)
     cJSON_AddBoolToObject(cap, "summary", true);
     cJSON_AddBoolToObject(cap, "exportCsv", true);
     cJSON_AddBoolToObject(cap, "telemetryConfigPost", true);
+#if CONFIG_RBGRID_IF_HTTP
+    cJSON_AddBoolToObject(cap, "llm", true);   /* LLM protocol v1: the /api/llm/v1 routes + the hub page API /api/v1/llm */
+#endif
     cJSON_AddBoolToObject(cap, "mqttConfig", true);
     cJSON_AddBoolToObject(cap, "adcUnboundDiscovery", false);   // known gap: /api/v1/sensors lists i2c-unbound only
     cJSON_AddBoolToObject(cap, "historyTimeRange", true);
@@ -598,6 +601,9 @@ char *rbgrid_build_schema_json(void)
         { "/api/v1/rules",              "GET,POST", "composite", true,  false, "cheap windows (threshold|cheapest|deadline)" },
         { "/api/v1/signal",             "GET",      "composite", false, false, "price_signal v1" },
         { "/api/v1/peaks",              "GET,POST", "composite", true,  false, "cycle_day(1..28) | reset" },
+#if CONFIG_RBGRID_IF_HTTP
+        { "/api/v1/llm",                "GET,POST", "composite", true,  false, "AI / LLM page: enabled, read_only, pairing codes, tokens, call log | revoke" },
+#endif
     };
     cJSON *eps = cJSON_AddArrayToObject(root, "endpoints");
     for (unsigned i = 0; i < sizeof(EP) / sizeof(EP[0]); i++) {

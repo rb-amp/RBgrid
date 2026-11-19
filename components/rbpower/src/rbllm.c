@@ -80,7 +80,7 @@ typedef struct {
 
 typedef struct {
     uint32_t ts;
-    char     client[24];
+    char     client[33];   /* the whole client name (≤ 32 B, as the token's) */
     char     tool[28];
     char     code[20];     /* "ok" or the error code */
     uint16_t ms;
@@ -2595,7 +2595,7 @@ static void log_call(const char *client, const char *tool, const char *code, int
     lk();
     if (S.log) {
         rbllm_log_t *l = &S.log[S.log_head];
-        l->ts = now_s();
+        l->ts = rbtime_is_time_valid() ? now_s() : 0;   /* 0 = before the clock synced */
         strlcpy(l->client, client ? client : "", sizeof(l->client));
         strlcpy(l->tool, tool ? tool : "", sizeof(l->tool));
         strlcpy(l->code, code, sizeof(l->code));
@@ -2866,7 +2866,7 @@ char *rbllm_admin_json(void)
     for (int k = 0; S.log && k < S.log_n && k < 50; k++) {   /* newest 50 */
         const rbllm_log_t *l = &S.log[(S.log_head + RBLLM_LOG_N - 1 - k) % RBLLM_LOG_N];
         cJSON *o = cJSON_CreateObject();
-        cJSON_AddNumberToObject(o, "ts", l->ts);
+        if (l->ts > RBGRID_TS_SANE_MIN) cJSON_AddNumberToObject(o, "ts", l->ts); else cJSON_AddNumberToObject(o, "ts", 0);
         cJSON_AddStringToObject(o, "client", l->client);
         cJSON_AddStringToObject(o, "tool", l->tool);
         cJSON_AddStringToObject(o, "result", l->code);
