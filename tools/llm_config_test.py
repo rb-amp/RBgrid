@@ -22,6 +22,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("host")
     ap.add_argument("--admin-token-file", required=True)
+    ap.add_argument("--ct", action="store_true", help="also change a clamp model and back (restarts the module twice)")
     a = ap.parse_args()
     admin = [l.split("=", 1)[1].strip() for l in open(a.admin_token_file, encoding="utf-8") if "_ADMIN_TOKEN=" in l][0]
     base = f"http://{a.host}"
@@ -45,7 +46,11 @@ def main():
     tok = pj["token"]
 
     def call(tool, args=None):
-        c, j = req("/api/llm/v1/call", "POST", {"tool": tool, "args": args or {}, "request_id": tool}, bearer=tok)
+        for _ in range(8):   # another client (a user simulation) may hold the hub's two call slots: busy -> retry
+            c, j = req("/api/llm/v1/call", "POST", {"tool": tool, "args": args or {}, "request_id": tool}, bearer=tok)
+            if not (j and not j.get("ok") and j.get("error", {}).get("code") == "busy"):
+                return j
+            time.sleep(1.1)
         return j
 
     def err(j):
@@ -129,6 +134,26 @@ def main():
     cfg2 = call("get_config")["result"]
     check(cfg2["channels"][0]["name"] == orig_name and cfg2["notifications"]["peaks_cycle_day"] == pk0,
           f"after rollback: name '{cfg2['channels'][0]['name']}', cycle day {cfg2['notifications']['peaks_cycle_day']}")
+    # ---- schema + clamp model (optional: restarts the module)
+    sch = call("get_config_schema", {"section": "channels"})
+    wr = sch.get("result", {}).get("writable", {})
+    check(sch.get("ok") and "ct_model" in wr and "main_supply" not in wr["role"]["enum"], f"get_config_schema channels: ct models {wr.get('ct_model', {}).get('enum')}, settable on {wr.get('ct_model', {}).get('channels')}")
+    check(err(call("get_config_schema", {"section": "x"})) == "invalid_args", "get_config_schema bad section: invalid_args")
+    if a.ct and cid in wr.get("ct_model", {}).get("channels", []):
+        ct0 = call("get_config", {"section": "channels"})["result"]["channels"][0]["source"]["ct_model"].split(",")[0]
+        other = "SCT-013-050" if ct0 != "SCT-013-050" else "SCT-013-030"
+        check(err(call("propose_config", {"patch": {"channels": {cid: {"ct_model": "SCT-999"}}}})) == "invalid_args", "unknown clamp model: invalid_args")
+        p4 = call("propose_config", {"patch": {"channels": {cid: {"ct_model": other}}}})
+        a4 = call("apply_config", {"confirm_token": p4["result"]["confirm_token"]}) if p4.get("ok") else p4
+        time.sleep(3)
+        ct1 = call("get_config", {"section": "channels"})["result"]["channels"][0]["source"]["ct_model"].split(",")[0]
+        check(a4.get("ok") and ct1 == other, f"clamp model {ct0} -> {ct1} (warnings {p4.get('result', {}).get('warnings')})")
+        vnow = call("list_config_versions")["result"]["versions"][1]["version"]
+        rb4 = call("propose_config", {"rollback_to": vnow})
+        r4 = call("rollback_config", {"version": vnow, "confirm_token": rb4["result"]["confirm_token"]}) if rb4.get("ok") else rb4
+        time.sleep(3)
+        ct2 = call("get_config", {"section": "channels"})["result"]["channels"][0]["source"]["ct_model"].split(",")[0]
+        check(r4.get("ok") and ct2 == ct0, f"clamp model rolled back to {ct2}")
     h = call("get_health")["result"]["heap"]
     print(f"   llm worker stack free (high-water): {h.get('llm_stack_free_b')} B; internal free {h['internal_free_b']} min {h['internal_min_b']}")
     check(h.get("llm_stack_free_b", 0) > 2048, "worker stack keeps more than 2 KB after apply/rollback")

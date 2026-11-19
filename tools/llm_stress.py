@@ -94,8 +94,14 @@ def main():
     tok, c, _ = pair("stress")
     check(bool(tok), "paired client 'stress'")
 
-    def call(tool, args=None, rid="s", timeout=20):
-        return h.req("/api/llm/v1/call", "POST", {"tool": tool, "args": args or {}, "request_id": rid}, bearer=tok, timeout=timeout)
+    def call(tool, args=None, rid="s", timeout=20, retry=True):
+        for _ in range(8 if retry else 1):   # another client may hold the two call slots: busy -> retry
+            r = h.req("/api/llm/v1/call", "POST", {"tool": tool, "args": args or {}, "request_id": rid}, bearer=tok, timeout=timeout)
+            j = r[1]
+            if not (j and not j.get("ok") and (j.get("error") or {}).get("code") == "busy"):
+                return r
+            time.sleep(1.1)
+        return r
     call.manifest = lambda: h.req("/api/llm/v1/manifest", bearer=tok)
 
     code, man, nb, *_ = h.req("/api/llm/v1/manifest", bearer=tok)
@@ -194,7 +200,7 @@ def main():
 
     def hammer():
         while not stop.is_set():
-            code, j, *_ = call("get_energy_summary", {"period": {"preset": "last_30_days"}, "resolution": "day"}, rid="h")
+            code, j, *_ = call("get_energy_summary", {"period": {"preset": "last_30_days"}, "resolution": "day"}, rid="h", retry=False)
             k = "ok" if j and j.get("ok") else ("busy" if j and j.get("error", {}).get("code") == "busy" else "other")
             counts[k] += 1
     th = [threading.Thread(target=hammer) for _ in range(3)]

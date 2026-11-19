@@ -131,9 +131,15 @@ def main():
         check(man2 and man2["manifest_hash"] == man["manifest_hash"], "manifest_hash stable")
         maxb = man["limits"]["max_response_bytes"]
 
-        def call(tool, args=None, rid=None):
+        def call(tool, args=None, rid=None, retry=True):
             body = {"tool": tool, "args": args or {}, "request_id": rid or f"t-{tool}"}
-            return h.req("/api/llm/v1/call", "POST", body, bearer=tok, timeout=20)
+            for _ in range(8 if retry else 1):   # another client may hold the two call slots: busy -> retry
+                r = h.req("/api/llm/v1/call", "POST", body, bearer=tok, timeout=20)
+                j = r[1]
+                if not (j and not j.get("ok") and (j.get("error") or {}).get("code") == "busy"):
+                    return r
+                time.sleep(1.1)
+            return r
 
         # ---- every tool, sizes
         sizes = []
@@ -231,7 +237,7 @@ def main():
         # ---- concurrency: 4 parallel calls → all ok, or ok + busy
         out = []
         def worker(i):
-            out.append(call("get_energy_summary", {"period": {"preset": "last_7_days"}}, rid=f"c{i}"))
+            out.append(call("get_energy_summary", {"period": {"preset": "last_7_days"}}, rid=f"c{i}", retry=False))
         th = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
         [t.start() for t in th]; [t.join() for t in th]
         kinds = [("ok" if j and j.get("ok") else (j or {}).get("error", {}).get("code", str(code))) for code, j, _, _ in out]

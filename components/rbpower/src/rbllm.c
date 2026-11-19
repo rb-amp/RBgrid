@@ -1619,7 +1619,49 @@ static bool s_cfg_changed;   /* set by apply for the call log (worker task only)
 typedef struct { char token[33]; char client[33]; int64_t exp_us; char base[17]; cJSON *patch; char summary[120]; } prop_t;
 static EXT_RAM_BSS_ATTR prop_t s_prop[PROP_N];
 
-/* Current state of the writable fields: {"channels":{"0006":{"name","role","inside"}}, "peaks_cycle_day":n} */
+/* CT models the user can pick (schema enums.ct_model: code -> "SCT-013-030, 30 A"). */
+static cJSON *ct_models(void)
+{
+    char *sc = rbgrid_build_schema_json();
+    cJSON *j = sc ? cJSON_Parse(sc) : NULL;
+    free(sc);
+    cJSON *m = j ? cJSON_DetachItemFromObject(cJSON_GetObjectItem(j, "enums"), "ct_model") : NULL;
+    cJSON_Delete(j);
+    return m ? m : cJSON_CreateObject();
+}
+static void ct_short(const char *desc, char out[24])   /* "SCT-013-030, 30 A" -> "SCT-013-030" */
+{
+    strlcpy(out, desc ? desc : "", 24);
+    char *c = strchr(out, ','); if (c) *c = '\0';
+}
+/* Per channel: its CT model (short name, "" if none) and whether the module lets the user pick one. */
+typedef struct { char id[5]; char ct[24]; bool settable; } ct_info_t;
+static int ct_infos(ct_info_t *out, int max)
+{
+    char *sj = rbgrid_core_json_ctx() ? rbgrid_json_create_sensors_list(rbgrid_core_json_ctx()) : NULL;
+    cJSON *sl = sj ? cJSON_Parse(sj) : NULL;
+    free(sj);
+    int n = 0;
+    const cJSON *e;
+    cJSON_ArrayForEach(e, cJSON_GetObjectItem(sl, "sensors")) {
+        if (n >= max) break;
+        const char *uid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
+        const char *lbl = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ch_label"));
+        if (!uid || (lbl && !strcmp(lbl, "V"))) continue;   /* the voltage input has no clamp */
+        ct_info_t *c = &out[n++];
+        strlcpy(c->id, uid, sizeof(c->id)); for (char *q = c->id; *q; q++) if (*q >= 'a' && *q <= 'f') *q -= 32;
+        ct_short(cJSON_GetStringValue(cJSON_GetObjectItem(e, "ct_name")), c->ct);
+        int mod = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "module"));
+        const cJSON *m;
+        c->settable = false;
+        cJSON_ArrayForEach(m, cJSON_GetObjectItem(sl, "modules"))
+            if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(m, "module")) == mod) c->settable = cJSON_IsTrue(cJSON_GetObjectItem(m, "ct_settable"));
+    }
+    cJSON_Delete(sl);
+    return n;
+}
+
+/* Current state of the writable fields: {"channels":{"0006":{"name","role","inside","ct_model"}}, "peaks_cycle_day":n} */
 static cJSON *cfg_capture(void)
 {
     cJSON *r = cJSON_CreateObject();
@@ -1637,6 +1679,12 @@ static cJSON *cfg_capture(void)
             else cJSON_AddStringToObject(o, "inside", "");
         }
         free(p);
+    }
+    ct_info_t ci[RBLLM_MAX_POINTS];
+    int nci = ct_infos(ci, RBLLM_MAX_POINTS);
+    for (int k = 0; k < nci; k++) {
+        cJSON *o = cJSON_GetObjectItem(ch, ci[k].id);
+        if (o && ci[k].ct[0]) cJSON_AddStringToObject(o, "ct_model", ci[k].ct);
     }
     cJSON *pk = rbpeak_json();
     const cJSON *cd = pk ? cJSON_GetObjectItem(pk, "cycle_day") : NULL;
@@ -1751,7 +1799,16 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
                     char iid[5]; strlcpy(iid, iv, sizeof(iid)); for (char *q = iid; *q; q++) if (*q >= 'a' && *q <= 'f') *q -= 32;
                     if (!cJSON_GetObjectItem(cch, iid) || !strcmp(iid, id)) { snprintf(m, sizeof(m), "channels.%s.inside: another existing channel id", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
                 }
-            } else { snprintf(m, sizeof(m), "channels.%s.%.20s: not writable over LLM (name, role, inside)", id, k); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+            } else if (!strcmp(k, "ct_model")) {
+                const char *nv = cJSON_GetStringValue(f);
+                ct_info_t ci[RBLLM_MAX_POINTS]; int nci = ct_infos(ci, RBLLM_MAX_POINTS); bool settable = false;
+                for (int q = 0; q < nci; q++) if (!strcmp(ci[q].id, id)) settable = ci[q].settable;
+                if (!settable) { snprintf(m, sizeof(m), "channels.%s.ct_model: this channel's module has a fixed clamp (or none)", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                cJSON *cm = ct_models(); const cJSON *x; bool known = false;
+                cJSON_ArrayForEach(x, cm) { char sh[24]; ct_short(x->valuestring, sh); if (nv && !strcmp(sh, nv)) known = true; }
+                cJSON_Delete(cm);
+                if (!known) { snprintf(m, sizeof(m), "channels.%s.ct_model: one of the models in get_config_schema (e.g. SCT-013-030)", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+            } else { snprintf(m, sizeof(m), "channels.%s.%.20s: not writable over LLM (name, role, inside, ct_model)", id, k); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
             const char *nv = cJSON_GetStringValue(f);
             if (was && nv && !strcmp(was, nv)) continue;   /* no change */
             if (!o) o = cJSON_AddObjectToObject(nch, id);
@@ -1764,6 +1821,7 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
             cJSON_AddItemToArray(diff, d);
             if (!strcmp(k, "role")) cJSON_AddItemToArray(warn, cJSON_CreateString("A role change regroups the point in the app and HA; its energy history stays."));
             if (!strcmp(k, "name")) cJSON_AddItemToArray(warn, cJSON_CreateString("A rename can create new entities in Home Assistant if it is connected."));
+            if (!strcmp(k, "ct_model")) cJSON_AddItemToArray(warn, cJSON_CreateString("Pick the model printed on the clamp. The module restarts (a few seconds); the 15-min period in progress is booked from the integrated power, and readings change by the ratio of the ratings."));
         }
     }
     if (pcd) {
@@ -1792,8 +1850,8 @@ static cJSON *patch_between(const cJSON *cur, const cJSON *target)
         const cJSON *c = cJSON_GetObjectItem(cJSON_GetObjectItem(cur, "channels"), t->string);
         if (!c) continue;   /* the point no longer exists: nothing to restore */
         cJSON *o = NULL;
-        const char *ks[] = { "name", "role", "inside" };
-        for (int k = 0; k < 3; k++) {
+        const char *ks[] = { "name", "role", "inside", "ct_model" };
+        for (int k = 0; k < 4; k++) {
             const char *a = cJSON_GetStringValue(cJSON_GetObjectItem(c, ks[k])), *b = cJSON_GetStringValue(cJSON_GetObjectItem(t, ks[k]));
             if (a && b && strcmp(a, b)) { if (!o) o = cJSON_AddObjectToObject(ch, t->string); cJSON_AddStringToObject(o, ks[k], b); }
         }
@@ -1877,6 +1935,10 @@ static bool apply_patch(rbllm_cx_t *cx, const cJSON *norm, const cJSON *before)
                 cJSON_AddStringToObject(body, "role", up);
             } else if (!strcmp(f->string, "inside")) {
                 if (f->valuestring[0]) cJSON_AddStringToObject(body, "inside", f->valuestring); else cJSON_AddNumberToObject(body, "inside", 0);
+            } else if (!strcmp(f->string, "ct_model")) {
+                cJSON *cm = ct_models(); const cJSON *x;
+                cJSON_ArrayForEach(x, cm) { char sh[24]; ct_short(x->valuestring, sh); if (!strcmp(sh, f->valuestring)) cJSON_AddNumberToObject(body, "ct_code", atoi(x->string)); }
+                cJSON_Delete(cm);
             } else cJSON_AddStringToObject(body, f->string, f->valuestring);
         }
         char *js = cJSON_PrintUnformatted(body);
@@ -1977,7 +2039,7 @@ static cJSON *t_list_config_versions(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_Delete(v);
-    note(cx, "Versions cover what can be changed over LLM: channel names, roles, inside and the peaks cycle day.");
+    note(cx, "Versions cover what can be changed over LLM: channel names, roles, inside, clamp models and the peaks cycle day.");
     cx->as_of = now_s();
     return r;
 }
@@ -1987,6 +2049,48 @@ static cJSON *t_rollback_config(const cJSON *a, rbllm_cx_t *cx)
     if (!cJSON_GetObjectItem(a, "confirm_token"))
         return fail(cx, "confirm_required", "a rollback takes two steps", "Call propose_config {rollback_to: <version>}, show the diff, then rollback_config with its confirm_token.");
     return t_apply_config(a, cx);
+}
+
+static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *sec = cJSON_GetStringValue(cJSON_GetObjectItem(a, "section"));
+    if (!sec || (strcmp(sec, "channels") && strcmp(sec, "notifications") && strcmp(sec, "tariff") && strcmp(sec, "region")))
+        return fail(cx, "invalid_args", "section: channels, notifications, tariff or region", NULL);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "section", sec);
+    cJSON *w = cJSON_AddObjectToObject(r, "writable");
+    if (!strcmp(sec, "channels")) {
+        cJSON *f = cJSON_AddObjectToObject(w, "name");
+        cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 31);
+        cJSON_AddStringToObject(f, "description", "The user's name for the point, shown in the app and HA.");
+        f = cJSON_AddObjectToObject(w, "role");
+        cJSON_AddStringToObject(f, "type", "string");
+        cJSON *en = cJSON_AddArrayToObject(f, "enum");
+        for (int q = 0; q < 10; q++) if (q != RBPOWER_ROLE_MAIN_SUPPLY && q != RBPOWER_ROLE_ALTERNATIVE_SUPPLY) cJSON_AddItemToArray(en, cJSON_CreateString(role_name((uint8_t)q)));
+        cJSON_AddStringToObject(f, "description", "What the point measures. main_supply / alternative_supply are set on the hub page, not here.");
+        f = cJSON_AddObjectToObject(w, "inside");
+        cJSON_AddStringToObject(f, "type", "string");
+        cJSON_AddStringToObject(f, "description", "The channel id this point is measured inside (a sub-meter of it), or \"\" for top level.");
+        f = cJSON_AddObjectToObject(w, "ct_model");
+        cJSON_AddStringToObject(f, "type", "string");
+        cJSON *ce = cJSON_AddArrayToObject(f, "enum");
+        cJSON *cm = ct_models(); const cJSON *x;
+        cJSON_ArrayForEach(x, cm) { char sh[24]; ct_short(x->valuestring, sh); cJSON_AddItemToArray(ce, cJSON_CreateString(sh)); }
+        cJSON_Delete(cm);
+        cJSON *on = cJSON_AddArrayToObject(f, "channels");
+        ct_info_t ci[RBLLM_MAX_POINTS]; int nci = ct_infos(ci, RBLLM_MAX_POINTS);
+        for (int q = 0; q < nci; q++) if (ci[q].settable) cJSON_AddItemToArray(on, cJSON_CreateString(ci[q].id));
+        cJSON_AddStringToObject(f, "description", "The clamp model on the channel (printed on the clamp); only for the channels listed, whose module lets the user pick it.");
+    } else if (!strcmp(sec, "notifications")) {
+        cJSON *f = cJSON_AddObjectToObject(w, "peaks_cycle_day");
+        cJSON_AddStringToObject(f, "type", "integer"); cJSON_AddNumberToObject(f, "minimum", 1); cJSON_AddNumberToObject(f, "maximum", 28);
+        cJSON_AddStringToObject(f, "description", "Day of the month the import-peak cycle starts (the grid operator's billing day).");
+    } else {
+        note(cx, "Nothing in this section is writable over LLM yet; the user changes it on the hub page.");
+    }
+    cJSON_AddStringToObject(r, "how", "propose_config {patch: {channels: {<id>: {field: value}}}} or {patch: {peaks_cycle_day: n}}");
+    cx->as_of = now_s();
+    return r;
 }
 
 static cJSON *t_get_analysis_playbook(const cJSON *a, rbllm_cx_t *cx);
@@ -2100,10 +2204,16 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"tariff\",\"notifications\",\"region\"]}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"string\"},\"channels\":{\"type\":\"array\"},\"tariff\":{\"type\":\"object\"}}}",
       t_get_config },
+    { "get_config_schema", RBLLM_SCOPE_CONFIG,
+      "When to call: before propose_config, to learn which fields of a section can be changed and their allowed values (roles, clamp "
+      "models). What it returns: the writable fields with type, limits, enums and descriptions.",
+      "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"notifications\",\"tariff\",\"region\"]}},\"required\":[\"section\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"writable\":{\"type\":\"object\"}}}",
+      t_get_config_schema },
     { "propose_config", RBLLM_SCOPE_CONFIG,
-      "When to call: when the user wants to rename a channel, change its role or parent, set the peaks cycle day, or undo a change. "
+      "When to call: when the user wants to rename a channel, change its role, parent or clamp model, set the peaks cycle day, or undo a change. "
       "What it returns: the diff, warnings and a one-time confirm_token (10 min). Changes nothing; show the diff and ask the user.",
-      "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,role?,inside?}}, peaks_cycle_day?}\"},"
+      "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,role?,inside?,ct_model?}}, peaks_cycle_day?}\"},"
       "\"rollback_to\":{\"type\":\"integer\",\"description\":\"a version from list_config_versions\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"}}}",
       t_propose_config },
