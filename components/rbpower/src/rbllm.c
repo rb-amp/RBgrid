@@ -23,6 +23,7 @@
 #include "rbdynprice.h"
 #include "rbactivation.h"
 #include "rbpeak.h"
+#include "rbgrid_config_storage.h"   /* rbgrid_storage_save_tariffs */
 #include "rbextflash_operations.h"   /* rbpower_flash_unit_has_history */
 #include "littlefs_raw.h"
 #include "rbamp.h"                   /* rbamp_basic_fw_name */
@@ -1690,6 +1691,26 @@ static cJSON *cfg_capture(void)
     const cJSON *cd = pk ? cJSON_GetObjectItem(pk, "cycle_day") : NULL;
     cJSON_AddNumberToObject(r, "peaks_cycle_day", cd ? cd->valuedouble : 1);
     cJSON_Delete(pk);
+    static const char *ZN[RBPOWER_TARIFF_ZONE_COUNT] = { "night", "morning_peak", "day", "evening_peak", "late_evening", "weekend", "holiday", "critical_peak" };
+    const rbpower_tariff_plan_t *tp = rbpower_tariff_get_current_plan();
+    if (tp) {
+        cJSON *t = cJSON_AddObjectToObject(r, "tariff");
+        char b[48];
+        utf8_clean(tp->plan_name, b, sizeof(b)); cJSON_AddStringToObject(t, "plan_name", b);
+        utf8_clean(tp->provider_name, b, sizeof(b)); cJSON_AddStringToObject(t, "provider", b);
+        cJSON_AddStringToObject(t, "currency", tp->currency_code);
+        cJSON_AddNumberToObject(t, "vat_percent", r4(tp->vat_percent));
+        cJSON_AddNumberToObject(t, "energy_tax_per_kwh", r4(tp->energy_tax_per_kwh));
+        cJSON_AddNumberToObject(t, "grid_fee_per_kwh", r4(tp->grid_usage_fee_per_kwh));
+        cJSON_AddNumberToObject(t, "levy_per_kwh", r4(tp->renewable_levy_per_kwh));
+        cJSON *zs = cJSON_AddObjectToObject(t, "zones");
+        for (int z = 0; z < RBPOWER_TARIFF_ZONE_COUNT; z++) {
+            if (!tp->zones[z].is_enabled) continue;
+            cJSON *o = cJSON_AddObjectToObject(zs, ZN[z]);
+            cJSON_AddNumberToObject(o, "buy_per_kwh", r4(tp->zones[z].rate_buying_per_kwh));
+            cJSON_AddNumberToObject(o, "sell_per_kwh", r4(tp->zones[z].rate_selling_per_kwh));
+        }
+    }
     return r;
 }
 static void cfg_hash(const cJSON *cap, char out[17])
@@ -1764,8 +1785,17 @@ static int role_from_name(const char *s)
 /* Validate a channels patch against the current state; fill diff/warnings; return a normalized patch or NULL (fail set). */
 static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, cJSON *diff, cJSON *warn)
 {
-    const cJSON *pch = cJSON_GetObjectItem(patch, "channels"), *pcd = cJSON_GetObjectItem(patch, "peaks_cycle_day");
-    if (!pch && !pcd) return fail(cx, "invalid_args", "patch: {channels: {<id>: {name?, role?, inside?}}} and/or {peaks_cycle_day}", NULL);
+    const cJSON *pch = cJSON_GetObjectItem(patch, "channels"), *pcd = cJSON_GetObjectItem(patch, "peaks_cycle_day"),
+                *ptf = cJSON_GetObjectItem(patch, "tariff");
+    if (!pch && !pcd && !ptf) return fail(cx, "invalid_args", "patch: {channels: {<id>: {...}}}, {tariff: {...}} and/or {peaks_cycle_day}", NULL);
+    {   /* unknown top-level keys */
+        const cJSON *k;
+        cJSON_ArrayForEach(k, patch)
+            if (strcmp(k->string, "channels") && strcmp(k->string, "peaks_cycle_day") && strcmp(k->string, "tariff")) {
+                char mm[96]; snprintf(mm, sizeof(mm), "patch.%.30s: not writable over LLM (channels, tariff, peaks_cycle_day)", k->string);
+                return fail(cx, "invalid_args", mm, NULL);
+            }
+    }
     if (pch && !cJSON_IsObject(pch)) return fail(cx, "invalid_args", "patch.channels must be an object keyed by channel id", NULL);
     cJSON *norm = cJSON_CreateObject();
     cJSON *nch = cJSON_AddObjectToObject(norm, "channels");
@@ -1836,8 +1866,127 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
             cJSON_AddItemToArray(warn, cJSON_CreateString("A new cycle day starts a new peak cycle; the current figures move to the previous cycle."));
         }
     }
+    if (ptf) {
+        if (!cJSON_IsObject(ptf)) { cJSON_Delete(norm); return fail(cx, "invalid_args", "patch.tariff must be an object", NULL); }
+        const cJSON *ct = cJSON_GetObjectItem(cur, "tariff");
+        cJSON *nt = cJSON_CreateObject();
+        const cJSON *f;
+        char path[64];
+        static const struct { const char *k; double lo, hi; } NUMS[] = {
+            { "vat_percent", 0, 50 }, { "energy_tax_per_kwh", 0, 10 }, { "grid_fee_per_kwh", 0, 10 }, { "levy_per_kwh", 0, 10 } };
+        cJSON_ArrayForEach(f, ptf) {
+            const char *k = f->string;
+            if (!strcmp(k, "plan_name") || !strcmp(k, "provider")) {
+                if (!valid_name(cJSON_GetStringValue(f))) { snprintf(m, sizeof(m), "tariff.%s: 1..31 bytes of UTF-8 text", k); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                const char *was = cJSON_GetStringValue(cJSON_GetObjectItem(ct, k));
+                if (was && !strcmp(was, f->valuestring)) continue;
+                cJSON_AddStringToObject(nt, k, f->valuestring);
+                cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.%s", k);
+                cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", was ? was : ""); cJSON_AddStringToObject(d, "to", f->valuestring);
+                cJSON_AddItemToArray(diff, d);
+            } else if (!strcmp(k, "currency")) {
+                const char *v = cJSON_GetStringValue(f);
+                bool ok3 = v && strlen(v) == 3 && v[0] >= 'A' && v[0] <= 'Z' && v[1] >= 'A' && v[1] <= 'Z' && v[2] >= 'A' && v[2] <= 'Z';
+                if (!ok3) { cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", "tariff.currency: ISO 4217 code, e.g. EUR", NULL); }
+                const char *was = cJSON_GetStringValue(cJSON_GetObjectItem(ct, k));
+                if (was && !strcmp(was, v)) continue;
+                cJSON_AddStringToObject(nt, k, v);
+                cJSON *d = cJSON_CreateObject();
+                cJSON_AddStringToObject(d, "path", "tariff.currency"); cJSON_AddStringToObject(d, "from", was ? was : ""); cJSON_AddStringToObject(d, "to", v);
+                cJSON_AddItemToArray(diff, d);
+                cJSON_AddItemToArray(warn, cJSON_CreateString("Money already booked keeps its old currency figures; only new costs use the new currency label."));
+            } else if (!strcmp(k, "zones")) {
+                const cJSON *z;
+                cJSON *nz = cJSON_AddObjectToObject(nt, "zones");
+                cJSON_ArrayForEach(z, f) {
+                    const cJSON *cz = cJSON_GetObjectItem(cJSON_GetObjectItem(ct, "zones"), z->string);
+                    if (!cz) { snprintf(m, sizeof(m), "tariff.zones.%.20s: not a zone of the plan (see get_config tariff)", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "Zone time windows are set on the hub's tariff page."); }
+                    const cJSON *r;
+                    cJSON *oz = NULL;
+                    cJSON_ArrayForEach(r, z) {
+                        if (strcmp(r->string, "buy_per_kwh") && strcmp(r->string, "sell_per_kwh")) { snprintf(m, sizeof(m), "tariff.zones.%s.%.20s: buy_per_kwh or sell_per_kwh", z->string, r->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                        if (!cJSON_IsNumber(r) || r->valuedouble < 0 || r->valuedouble > 100) { snprintf(m, sizeof(m), "tariff.zones.%s.%s: 0..100 per kWh (before fees and VAT)", z->string, r->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "A price per MWh must be divided by 1000."); }
+                        double was = cJSON_GetNumberValue(cJSON_GetObjectItem(cz, r->string));
+                        if (fabs(was - r->valuedouble) < 1e-6) continue;
+                        if (!oz) oz = cJSON_AddObjectToObject(nz, z->string);
+                        cJSON_AddNumberToObject(oz, r->string, r->valuedouble);
+                        cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s.%s", z->string, r->string);
+                        cJSON_AddStringToObject(d, "path", path); cJSON_AddNumberToObject(d, "from", was); cJSON_AddNumberToObject(d, "to", r->valuedouble);
+                        cJSON_AddItemToArray(diff, d);
+                    }
+                }
+            } else {
+                size_t q; bool hit = false;
+                for (q = 0; q < sizeof(NUMS) / sizeof(NUMS[0]); q++) if (!strcmp(k, NUMS[q].k)) { hit = true; break; }
+                if (!hit) { snprintf(m, sizeof(m), "tariff.%.24s: not writable over LLM (plan_name, provider, currency, vat_percent, energy_tax_per_kwh, grid_fee_per_kwh, levy_per_kwh, zones)", k); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                if (!cJSON_IsNumber(f) || f->valuedouble < NUMS[q].lo || f->valuedouble > NUMS[q].hi) { snprintf(m, sizeof(m), "tariff.%s: %g..%g", k, NUMS[q].lo, NUMS[q].hi); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                double was = cJSON_GetNumberValue(cJSON_GetObjectItem(ct, k));
+                if (fabs(was - f->valuedouble) < 1e-6) continue;
+                cJSON_AddNumberToObject(nt, k, f->valuedouble);
+                cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.%s", k);
+                cJSON_AddStringToObject(d, "path", path); cJSON_AddNumberToObject(d, "from", was); cJSON_AddNumberToObject(d, "to", f->valuedouble);
+                cJSON_AddItemToArray(diff, d);
+            }
+        }
+        cJSON *zz = cJSON_GetObjectItem(nt, "zones");
+        if (zz && !cJSON_GetArraySize(zz)) cJSON_DeleteItemFromObject(nt, "zones");
+        if (cJSON_GetArraySize(nt)) {
+            cJSON_AddItemToObject(norm, "tariff", nt);
+            cJSON_AddItemToArray(warn, cJSON_CreateString("New prices apply from now on; costs already booked stay as they were."));
+            cJSON_AddItemToArray(warn, cJSON_CreateString("Zone prices are before fees and VAT; the hub adds the per-kWh fees and VAT on top."));
+            const char *pn = cJSON_GetStringValue(cJSON_GetObjectItem(ct, "plan_name")), *pv = cJSON_GetStringValue(cJSON_GetObjectItem(ct, "provider"));
+            if (rbpower_tariff_plan_is_placeholder(pn ? pn : "", pv ? pv : "") && !cJSON_GetObjectItem(nt, "plan_name") && !cJSON_GetObjectItem(nt, "provider"))
+                cJSON_AddItemToArray(warn, cJSON_CreateString("The hub still runs its demo plan: also set plan_name and provider (the user's supplier) so money stops counting as demo figures."));
+        } else cJSON_Delete(nt);
+    }
     if (!cJSON_GetArraySize(diff)) { cJSON_Delete(norm); return fail(cx, "invalid_args", "the patch changes nothing", "Read get_config first."); }
     return norm;
+}
+
+/* Write the tariff part of a normalized patch into the hub's plan document, then save + apply it (the HTTP path). */
+static bool apply_tariff(rbllm_cx_t *cx, const cJSON *nt, char *m, size_t mlen)
+{
+    char *doc = rbgrid_core_json_ctx() ? rbgrid_json_create_rbpower_tariff_plan_config(rbgrid_core_json_ctx()) : NULL;
+    cJSON *d = doc ? cJSON_Parse(doc) : NULL;
+    free(doc);
+    cJSON *plan = d ? cJSON_GetArrayItem(cJSON_GetObjectItem(cJSON_GetObjectItem(d, "data"), "list"), 0) : NULL;
+    if (!plan) { cJSON_Delete(d); snprintf(m, mlen, "tariff: the plan document could not be read"); return false; }
+    static const struct { const char *patch, *doc; } MAP[] = {
+        { "plan_name", "plan_name" }, { "provider", "provider_name" }, { "currency", "currency_code" }, { "vat_percent", "vat_percent" },
+        { "energy_tax_per_kwh", "energy_tax_per_kwh" }, { "grid_fee_per_kwh", "grid_usage_fee_per_kwh" }, { "levy_per_kwh", "renewable_levy_per_kwh" } };
+    for (size_t q = 0; q < sizeof(MAP) / sizeof(MAP[0]); q++) {
+        const cJSON *v = cJSON_GetObjectItem(nt, MAP[q].patch);
+        if (!v) continue;
+        cJSON_ReplaceItemInObject(plan, MAP[q].doc, cJSON_Duplicate(v, false));
+    }
+    if (cJSON_GetObjectItem(nt, "plan_name") || cJSON_GetObjectItem(nt, "provider")) cJSON_ReplaceItemInObject(plan, "is_placeholder", cJSON_CreateFalse());
+    /* the demo plan built at boot before the clock synced carries 1970 validity stamps (metadata only, never read by the
+     * engine): don't persist them */
+    const cJSON *vf = cJSON_GetObjectItem(plan, "valid_from_timestamp");
+    if (vf && vf->valuedouble < RBGRID_TS_SANE_MIN && now_s() > RBGRID_TS_SANE_MIN) {
+        cJSON_ReplaceItemInObject(plan, "valid_from_timestamp", cJSON_CreateNumber(now_s()));
+        cJSON_ReplaceItemInObject(plan, "valid_until_timestamp", cJSON_CreateNumber((double)now_s() + 365.0 * 86400.0));
+    }
+    const cJSON *z;
+    cJSON_ArrayForEach(z, cJSON_GetObjectItem(nt, "zones")) {
+        char up[24]; strlcpy(up, z->string, sizeof(up)); for (char *q = up; *q; q++) if (*q >= 'a' && *q <= 'z') *q -= 32;
+        cJSON *dz = NULL, *e;
+        cJSON_ArrayForEach(e, cJSON_GetObjectItem(plan, "zones")) { const char *zid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "zone_id")); if (zid && !strcmp(zid, up)) dz = e; }
+        if (!dz) { cJSON_Delete(d); snprintf(m, mlen, "tariff.zones.%s: zone not in the plan document", z->string); return false; }
+        const cJSON *b = cJSON_GetObjectItem(z, "buy_per_kwh"), *sl = cJSON_GetObjectItem(z, "sell_per_kwh");
+        if (b) cJSON_ReplaceItemInObject(dz, "rate_buying_per_kwh", cJSON_CreateNumber(b->valuedouble));
+        if (sl) cJSON_ReplaceItemInObject(dz, "rate_selling_per_kwh", cJSON_CreateNumber(sl->valuedouble));
+    }
+    char *out = cJSON_PrintUnformatted(d);
+    cJSON_Delete(d);
+    if (!out) { snprintf(m, mlen, "tariff: out of memory"); return false; }
+    esp_err_t se = rbgrid_storage_save_tariffs(out);
+    rbgrid_json_err_t pe = se == ESP_OK ? rbgrid_json_parse_tariff_plan_config(out) : RBGRID_JSON_OK;
+    free(out);
+    if (se != ESP_OK) { snprintf(m, mlen, "tariff: not saved (%s)", esp_err_to_name(se)); return false; }
+    if (pe != RBGRID_JSON_OK) { snprintf(m, mlen, "tariff: saved, but the hub could not apply it (%d); it applies after a restart", (int)pe); return false; }
+    (void)cx;
+    return true;
 }
 
 /* Patch that turns `cur` into `target` (both captures). */
@@ -1858,6 +2007,32 @@ static cJSON *patch_between(const cJSON *cur, const cJSON *target)
     }
     double a = cJSON_GetNumberValue(cJSON_GetObjectItem(cur, "peaks_cycle_day")), b = cJSON_GetNumberValue(cJSON_GetObjectItem(target, "peaks_cycle_day"));
     if ((int)a != (int)b && b >= 1) cJSON_AddNumberToObject(p, "peaks_cycle_day", b);
+    const cJSON *tc = cJSON_GetObjectItem(cur, "tariff"), *tt = cJSON_GetObjectItem(target, "tariff");
+    if (tc && tt) {
+        cJSON *o = cJSON_CreateObject();
+        const cJSON *f;
+        cJSON_ArrayForEach(f, tt) {
+            if (!strcmp(f->string, "zones")) continue;
+            const cJSON *c = cJSON_GetObjectItem(tc, f->string);
+            bool diff = !c || (cJSON_IsString(f) ? strcmp(f->valuestring, cJSON_GetStringValue(c) ? cJSON_GetStringValue(c) : "") != 0
+                                                 : fabs(f->valuedouble - c->valuedouble) > 1e-6);
+            if (diff) cJSON_AddItemToObject(o, f->string, cJSON_Duplicate(f, false));
+        }
+        cJSON *zo = cJSON_CreateObject();
+        const cJSON *z;
+        cJSON_ArrayForEach(z, cJSON_GetObjectItem(tt, "zones")) {
+            const cJSON *cz = cJSON_GetObjectItem(cJSON_GetObjectItem(tc, "zones"), z->string);
+            if (!cz) continue;
+            cJSON *one = NULL;
+            const char *ks[] = { "buy_per_kwh", "sell_per_kwh" };
+            for (int q = 0; q < 2; q++) {
+                double x = cJSON_GetNumberValue(cJSON_GetObjectItem(z, ks[q])), y = cJSON_GetNumberValue(cJSON_GetObjectItem(cz, ks[q]));
+                if (fabs(x - y) > 1e-6) { if (!one) one = cJSON_AddObjectToObject(zo, z->string); cJSON_AddNumberToObject(one, ks[q], x); }
+            }
+        }
+        if (cJSON_GetArraySize(zo)) cJSON_AddItemToObject(o, "zones", zo); else cJSON_Delete(zo);
+        if (cJSON_GetArraySize(o)) cJSON_AddItemToObject(p, "tariff", o); else cJSON_Delete(o);
+    }
     return p;
 }
 
@@ -1958,6 +2133,8 @@ static bool apply_patch(rbllm_cx_t *cx, const cJSON *norm, const cJSON *before)
         cJSON_AddItemToArray(done, cJSON_CreateString(e->string));
     }
     const cJSON *pcd = cJSON_GetObjectItem(norm, "peaks_cycle_day");
+    const cJSON *ntf = cJSON_GetObjectItem(norm, "tariff");
+    if (ok && ntf && !apply_tariff(cx, ntf, m, sizeof(m))) ok = false;
     if (ok && pcd) {
         cJSON *d = cJSON_CreateObject(); cJSON_AddNumberToObject(d, "cycle_day", pcd->valuedouble);
         char em[64] = "";
@@ -2039,7 +2216,7 @@ static cJSON *t_list_config_versions(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_Delete(v);
-    note(cx, "Versions cover what can be changed over LLM: channel names, roles, inside, clamp models and the peaks cycle day.");
+    note(cx, "Versions cover what can be changed over LLM: channel names, roles, inside, clamp models, the tariff prices/VAT/fees and the peaks cycle day.");
     cx->as_of = now_s();
     return r;
 }
@@ -2085,10 +2262,22 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
         cJSON *f = cJSON_AddObjectToObject(w, "peaks_cycle_day");
         cJSON_AddStringToObject(f, "type", "integer"); cJSON_AddNumberToObject(f, "minimum", 1); cJSON_AddNumberToObject(f, "maximum", 28);
         cJSON_AddStringToObject(f, "description", "Day of the month the import-peak cycle starts (the grid operator's billing day).");
+    } else if (!strcmp(sec, "tariff")) {
+        const char *ss[] = { "plan_name", "provider" };
+        for (int q = 0; q < 2; q++) { cJSON *f = cJSON_AddObjectToObject(w, ss[q]); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 31); }
+        cJSON *f = cJSON_AddObjectToObject(w, "currency"); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddStringToObject(f, "description", "ISO 4217 code, e.g. EUR");
+        const struct { const char *k; double hi; const char *d; } NN[] = {
+            { "vat_percent", 50, "VAT in percent, added on top of energy price and fees" },
+            { "energy_tax_per_kwh", 10, "energy tax per kWh" }, { "grid_fee_per_kwh", 10, "grid usage fee per kWh" }, { "levy_per_kwh", 10, "renewable levy per kWh" } };
+        for (int q = 0; q < 4; q++) { f = cJSON_AddObjectToObject(w, NN[q].k); cJSON_AddStringToObject(f, "type", "number"); cJSON_AddNumberToObject(f, "minimum", 0); cJSON_AddNumberToObject(f, "maximum", NN[q].hi); cJSON_AddStringToObject(f, "description", NN[q].d); }
+        f = cJSON_AddObjectToObject(w, "zones");
+        cJSON_AddStringToObject(f, "type", "object");
+        cJSON_AddStringToObject(f, "description", "{<zone>: {buy_per_kwh?, sell_per_kwh?}} for the zones get_config lists; 0..100 per kWh, before fees and VAT. Zone time windows are set on the hub page.");
+        note(cx, "A flat tariff on a two-zone plan: give every zone the same price.");
     } else {
         note(cx, "Nothing in this section is writable over LLM yet; the user changes it on the hub page.");
     }
-    cJSON_AddStringToObject(r, "how", "propose_config {patch: {channels: {<id>: {field: value}}}} or {patch: {peaks_cycle_day: n}}");
+    cJSON_AddStringToObject(r, "how", "propose_config {patch: {channels: {<id>: {field: value}}}}, {patch: {tariff: {field: value}}} or {patch: {peaks_cycle_day: n}}");
     cx->as_of = now_s();
     return r;
 }
@@ -2211,9 +2400,9 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"writable\":{\"type\":\"object\"}}}",
       t_get_config_schema },
     { "propose_config", RBLLM_SCOPE_CONFIG,
-      "When to call: when the user wants to rename a channel, change its role, parent or clamp model, set the peaks cycle day, or undo a change. "
+      "When to call: when the user wants to rename a channel, change its role, parent or clamp model, enter their tariff (prices, VAT, fees), set the peaks cycle day, or undo a change. "
       "What it returns: the diff, warnings and a one-time confirm_token (10 min). Changes nothing; show the diff and ask the user.",
-      "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,role?,inside?,ct_model?}}, peaks_cycle_day?}\"},"
+      "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,role?,inside?,ct_model?}}, tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?}}}, peaks_cycle_day?}\"},"
       "\"rollback_to\":{\"type\":\"integer\",\"description\":\"a version from list_config_versions\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"}}}",
       t_propose_config },

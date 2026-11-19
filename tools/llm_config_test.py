@@ -125,6 +125,24 @@ def main():
     pk1 = call("get_config", {"section": "notifications"})["result"]["notifications"]["peaks_cycle_day"]
     check(a3.get("ok") and pk1 == nd, f"peaks_cycle_day {pk0} -> {pk1}")
 
+    # ---- tariff: the user's plan, then back to what it was via the rollback below
+    t0 = call("get_config", {"section": "tariff"})["result"]["tariff"]
+    zones = [z["zone"] for z in t0["zones"]]
+    check(err(call("propose_config", {"patch": {"tariff": {"zones": {zones[0]: {"buy_per_kwh": 320}}}}})) == "invalid_args", "tariff price 320 per kWh (a MWh figure): invalid_args")
+    check(err(call("propose_config", {"patch": {"tariff": {"zones": {"critical_peak": {"buy_per_kwh": 0.5}}}}})) == "invalid_args" or "critical_peak" in zones, "tariff zone not in the plan: invalid_args")
+    check(err(call("propose_config", {"patch": {"tariff": {"currency": "euro"}}})) == "invalid_args", "tariff currency 'euro': invalid_args")
+    check(err(call("propose_config", {"patch": {"tariff": {"standing_charge": 5}}})) == "invalid_args", "tariff non-writable field: invalid_args")
+    pt = call("propose_config", {"patch": {"tariff": {"plan_name": "LLM Test Plan", "provider": "Test Supplier", "vat_percent": 19,
+                                                     "zones": {zones[0]: {"buy_per_kwh": 0.3512}}}}})
+    check(pt.get("ok") and len(pt["result"]["diff"]) == 4, f"propose tariff: {len(pt.get('result', {}).get('diff', []))} changes, warnings {pt.get('result', {}).get('warnings')}")
+    at = call("apply_config", {"confirm_token": pt["result"]["confirm_token"]}) if pt.get("ok") else pt
+    t1 = call("get_config", {"section": "tariff"})["result"]["tariff"]
+    z1 = [z for z in t1["zones"] if z["zone"] == zones[0]][0]
+    check(at.get("ok") and t1["plan_name"] == "LLM Test Plan" and t1["vat_percent"] == 19 and abs(z1["buy_per_kwh"] - 0.3512) < 1e-4 and t1["plan_saved"] is True,
+          f"tariff applied: plan '{t1['plan_name']}', saved {t1['plan_saved']}, VAT {t1['vat_percent']}, {zones[0]} buy {z1['buy_per_kwh']}")
+    cb = call("get_cost_breakdown", {"period": {"preset": "today"}})
+    check(cb.get("ok") and not any("demo plan" in n for n in cb["meta"].get("notes", [])), "cost breakdown no longer says demo plan")
+
     # ---- rollback to the first recorded version: name and cycle day come back
     rb = call("propose_config", {"rollback_to": first_ver})
     check(rb.get("ok") and len(rb["result"]["diff"]) >= 1, f"propose rollback_to {first_ver}: diff {rb.get('result', {}).get('diff')}")
@@ -132,6 +150,7 @@ def main():
         r2 = call("rollback_config", {"version": first_ver, "confirm_token": rb["result"]["confirm_token"]})
         check(r2.get("ok"), f"rollback applied: version {r2.get('result', {}).get('version')}")
     cfg2 = call("get_config")["result"]
+    check(cfg2["tariff"]["plan_name"] == t0["plan_name"] and cfg2["tariff"]["vat_percent"] == t0["vat_percent"], f"after rollback: tariff '{cfg2['tariff']['plan_name']}', VAT {cfg2['tariff']['vat_percent']}")
     check(cfg2["channels"][0]["name"] == orig_name and cfg2["notifications"]["peaks_cycle_day"] == pk0,
           f"after rollback: name '{cfg2['channels'][0]['name']}', cycle day {cfg2['notifications']['peaks_cycle_day']}")
     # ---- schema + clamp model (optional: restarts the module)
