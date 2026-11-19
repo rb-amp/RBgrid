@@ -196,6 +196,8 @@ def main():
         check(j and j["error"]["code"] == "invalid_args", "invalid_args: from after to")
         code, j, _, _ = call("get_energy_summary", {"period": {"from": "2020-01-01", "to": "2020-02-01"}})
         check(j and j["error"]["code"] == "out_of_history", "out_of_history")
+        code, j, _, _ = call("get_energy_summary", {"period": {"preset": "last_year"}, "resolution": "hour"})
+        check(j and j.get("ok") and j["meta"]["truncated"] and j["meta"]["resolution"] != "hour", f"hour beyond 60 days is coarsened, not refused (res {j and j.get('meta', {}).get('resolution')})")
         code, j, _, _ = call("read_live", {"channels": ["FFFF"]})
         check(j and j["error"]["code"] == "not_found", "not_found: unknown channel")
 

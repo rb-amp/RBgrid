@@ -833,7 +833,10 @@ static cJSON *t_get_events(const cJSON *a, rbllm_cx_t *cx)
         if (ts > RBGRID_TS_SANE_MIN) { add_time(o, "time", ts); last_ts = ts; }
         else cJSON_AddNullToObject(o, "time");
         const char *lv = cJSON_GetStringValue(cJSON_GetObjectItem(e, "lvl"));
-        cJSON_AddStringToObject(o, "severity", lv && !strcmp(lv, "fail") ? "warning" : "info");
+        const char *mm = cJSON_GetStringValue(cJSON_GetObjectItem(e, "msg"));
+        /* a line with a security consequence is a warning even though the log files it as an event */
+        bool sec = mm && (strstr(mm, "AP password = setup password") || strstr(mm, "should change it"));
+        cJSON_AddStringToObject(o, "severity", (lv && !strcmp(lv, "fail")) || sec ? "warning" : "info");
         cJSON_AddStringToObject(o, "type", "log");
         char mc[224];
         utf8_clean(cJSON_GetStringValue(cJSON_GetObjectItem(e, "msg")), mc, sizeof(mc));
@@ -901,8 +904,10 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
     if (rs && !u) return fail(cx, "invalid_args", "resolution: hour, day, week, month, year or total", NULL);
     uint32_t span = to - from;
     if (!u) u = span <= 2u * 86400u ? 'h' : span <= 62u * 86400u ? 'd' : span <= 3u * 366u * 86400u ? 'm' : 'y';
-    if (u == 'h' && now_s() - from > HOUR_DEPTH_S)
-        return fail(cx, "out_of_history", "hourly history is kept for 60 days", "Use resolution=day for older ranges.");
+    if (u == 'h' && now_s() - from > HOUR_DEPTH_S) {   /* §5: coarsen to the finest stored resolution, don't refuse */
+        u = 'd'; cx->truncated = true;
+        note(cx, "Hourly history is kept for 60 days; this older range is answered per day.");
+    }
 
     rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
     if (!p) return fail(cx, "internal", "out of memory", NULL);
@@ -1137,7 +1142,10 @@ static cJSON *t_get_load_profile(const cJSON *a, rbllm_cx_t *cx)
     const char *rs = cJSON_GetStringValue(cJSON_GetObjectItem(a, "resolution"));
     bool hour = !rs || !strcmp(rs, "hour");
     if (rs && !hour && strcmp(rs, "day")) return fail(cx, "invalid_args", "resolution: hour or day", NULL);
-    if (hour && now_s() - from > HOUR_DEPTH_S) return fail(cx, "out_of_history", "hourly history is kept for 60 days", "Use resolution=day.");
+    if (hour && now_s() - from > HOUR_DEPTH_S) {   /* §5: coarsen, don't refuse */
+        hour = false; cx->truncated = true;
+        note(cx, "Hourly history is kept for 60 days; this older range is answered per day.");
+    }
     rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
     if (!p) return fail(cx, "internal", "out of memory", NULL);
     int n = snapshot(p, RBLLM_MAX_POINTS);
