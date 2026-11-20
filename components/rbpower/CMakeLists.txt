@@ -26,7 +26,6 @@ set(RBPOWER_SRCS
     "src/rbpower_lifetime_accumulators.c"   # lifetime energy accumulators
     "src/rbstats_v4_convert.c"              # pure v3->v4 record converters (phase-0 T2.1; unit-tested)
     "src/rbpoint.c"                         # T7 point-slug utils + caps mapping (pure; unit-tested)
-    "src/otp_manager.c"                      # flash-chip OTP validation (CONFIG partition too)
     "src/external_flash_manager.c"           # SPI NOR chip driver (CONFIG partition too)
     "src/rbstorage_media.c"                  # internal-first media routing (stats partition shims)
     "src/littlefs_raw.c"                     # raw littlefs IO for config/token/registry
@@ -51,7 +50,7 @@ set(RBPOWER_SRCS
     "src/rbstats_migrate.c"                  # deferred breaking-format migration engine (phase-0 T1)
     "src/rbstats_v4_read.c"                  # v4-facing record reader shim (phase-0 T2.4a)
     "src/rbstats_migrate_v3v4.c"             # v3->v4 region migrator (phase-0 T2.4c)
-    "src/otp_external_flash_test.c"
+    "src/ext_flash_spi.c"
     "src/rbgrid_period_stats_api.c"          # history / DAY+ on-demand aggregation API
 )
 

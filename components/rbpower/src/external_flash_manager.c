@@ -3,83 +3,64 @@
  */
 /**
  * @file external_flash_manager.c
- * @brief Consolidated external Flash management
+ * @brief Storage medium selection: the internal flash always holds the config; the statistics rings
+ *        live on the internal `stats` partition, or on an external SPI NOR chip when one is fitted.
+ *
+ * Boot order (external_flash_init):
+ *   1. internal `stats` partition + internal `config` LittleFS — mandatory; without them the hub
+ *      keeps statistics in RAM only;
+ *   2. external NOR probe on SPI2 (MISO 12, MOSI 13, CLK 14, CS 15). A chip is ADOPTED for the
+ *      statistics when it answers a plausible JEDEC ID and its stats region is larger than the
+ *      internal one (a W25Q128 holds about 49 points with history, the internal 4 MB partition 12).
+ *      Adoption = erase the chip's stats region where it is not blank, then copy the internal stats
+ *      region onto it at the same offsets: the slot layout (flash_slots.json, /stats_fmt in the
+ *      internal config) stays valid unchanged, so the history recorded so far moves with it.
+ *      The marker /stats_media (internal config) names the adopted chip by its unique ID.
+ *   3. later boots: marker + the same chip → external at once, no copy;
+ *      marker + no chip → statistics RAM-only (the history is on the chip; the internal copy is
+ *      stale, writing there would split it), reported as an error;
+ *      marker + a DIFFERENT chip → adopted again from the internal copy (the history recorded on
+ *      the old chip since its adoption stays on that chip).
+ * There is no authenticity check of the chip: any W25Q-class NOR of 8 MB or more is used.
  */
 
 #include "external_flash_config.h"
-#include "otp_manager.h"
-#include "littlefs_raw.h"  // Use raw LittleFS instead
-#include "rbstorage_media.h"   // internal-first media routing
+#include "littlefs_raw.h"
+#include "rbstorage_media.h"
+#include "rbextflash_structures.h"   /* RBPOWER_RECORD_FORMAT_VERSION */
 #include "esp_partition.h"
 #include "esp_log.h"
 #include "esp_flash.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
 #include <stdio.h>
+#include <inttypes.h>
 
 static const char *TAG = "FLASH_MGR";
 
+/** @brief LittleFS path (internal config) of the adopted-chip marker: "external <uid hex16> <size>". */
+#define STATS_MEDIA_MARKER "/stats_media"
+/** @brief LittleFS path of the stats record-format marker (same file as in rbextflash_operations.c). */
+#define STATS_FORMAT_MARKER "/stats_fmt"
+
 /** @brief One entry of the fixed partition table of the storage medium. */
 typedef struct {
-    const char* name;    ///< Partition name ("partition_table", "nvs", "config", "log", "stats")
+    const char* name;    ///< Partition name ("config", "stats")
     uint32_t offset;     ///< Offset in the external-layout address space, bytes
     uint32_t size;       ///< Size, bytes
-    bool is_filesystem;  ///< true for LittleFS, false for raw
     bool mounted;        ///< Filesystem mounted on this partition
     bool available;      ///< Partition verified and usable
 } flash_partition_info_t;
 
-// Global partition table - using values from partition_layout.h
-// These partitions are pre-configured in production, we only verify them
 static flash_partition_info_t g_partitions[] = {
-    {
-        .name = "partition_table",
-        .offset = PARTITION_TABLE_OFFSET,    // 0x000000 (4KB)
-        .size = PARTITION_TABLE_SIZE,
-        .is_filesystem = false,
-        .mounted = false,
-        .available = false
-    },
-    {
-        .name = "nvs",
-        .offset = PARTITION_NVS_OFFSET,      // 0x001000 (16KB), to be verified
-        .size = PARTITION_NVS_SIZE,
-        .is_filesystem = false,
-        .mounted = false,
-        .available = false
-    },
-    {
-        .name = "config",
-        .offset = PARTITION_CONFIG_OFFSET,    // 0x005000 (256KB)
-        .size = PARTITION_CONFIG_SIZE,
-        .is_filesystem = true,  // LittleFS
-        .mounted = false,
-        .available = false
-    },
-    // (The former external "ota" partition was removed and its space given to STATS; see partition_layout.h.)
-    {
-        .name = "log",
-        .offset = PARTITION_LOG_OFFSET,       // 0x045000 (128KB) process/diagnostic log
-        .size = PARTITION_LOG_SIZE,
-        .is_filesystem = true,  // Could be LittleFS or raw
-        .mounted = false,
-        .available = false
-    },
-    {
-        .name = "stats",
-        .offset = PARTITION_STATS_OFFSET,     // 0x065000 → end of chip; .size set at runtime from flash_size
-        .size = PARTITION_STATS_SIZE,         // 4MB fallback; overridden in external_flash_init()
-        .is_filesystem = true,  // Could be LittleFS or raw
-        .mounted = false,
-        .available = false
-    }
+    { .name = "config", .offset = PARTITION_CONFIG_OFFSET, .size = PARTITION_CONFIG_SIZE },
+    { .name = "stats",  .offset = PARTITION_STATS_OFFSET,  .size = PARTITION_STATS_SIZE  },
 };
-
 /** @brief Number of entries in the partition table. */
 #define NUM_PARTITIONS (sizeof(g_partitions)/sizeof(g_partitions[0]))
 
-// Global Flash state - single source of truth
 static external_flash_state_t g_flash_state = {
     .pins = {
         .miso_pin = DEFAULT_FLASH_MISO_PIN,
@@ -87,188 +68,21 @@ static external_flash_state_t g_flash_state = {
         .sclk_pin = DEFAULT_FLASH_SCLK_PIN,
         .cs_pin = DEFAULT_FLASH_CS_PIN
     },
-    .status = {
-        .initialized = false,
-        .otp_validated = false,
-        .filesystem_mounted = false,
-        .device_serial = 0,
-        .flash_id = 0,
-        .flash_size = 0,
-        .error_message = NULL
-    },
-    .flash_handle = NULL,
-    .partitions = {0}
 };
 
-// External functions from otp_external_flash_test.c (documented in external_flash_config.h)
-/** @brief Initialise the external SPI NOR flash device (see external_flash_config.h).
- *  @return ESP_OK on success, an ESP-IDF error code otherwise. */
-extern esp_err_t init_external_flash(void);
-/** @brief Release the external SPI NOR flash device. */
-extern void deinit_external_flash(void);
-/** @brief Handle of the external SPI NOR flash device.
- *  @return The device handle, or NULL when it is not initialised. */
-extern esp_flash_t* get_external_flash_handle(void);
-
-/**
- * @brief Check if partition table exists at the beginning of Flash
- */
-static esp_err_t verify_partition_table(void)
+static flash_partition_info_t *part(const char *name)
 {
-    if (!g_flash_state.flash_handle) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    
-    // Read first 4 bytes to check for partition table magic
-    uint32_t magic = 0;
-    esp_err_t ret = esp_flash_read(g_flash_state.flash_handle, 
-                                   &magic, 
-                                   PARTITION_TABLE_OFFSET, 
-                                   sizeof(magic));
-    
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to read partition table magic: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    
-    if (magic == PARTITION_TABLE_MAGIC) {
-        ESP_LOGD(TAG, "Partition table found (magic: 0x%08lx)", (unsigned long)magic);
-        return ESP_OK;
-    } else {
-        ESP_LOGW(TAG, "Partition table not found or invalid (read: 0x%08lx, expected: 0x%08lx)",
-                 (unsigned long)magic, (unsigned long)PARTITION_TABLE_MAGIC);
-        // Continue anyway - partitions might still be usable
-        return ESP_OK;
-    }
+    for (size_t i = 0; i < NUM_PARTITIONS; i++) if (strcmp(g_partitions[i].name, name) == 0) return &g_partitions[i];
+    return NULL;
 }
 
-/**
- * @brief Verify partition boundaries and availability
- */
-static esp_err_t verify_partition(flash_partition_info_t* partition)
+/** Bootstrap of the config LittleFS: the backup directory and a default /config.json on a fresh partition. */
+static void create_config_file_structure(void)
 {
-    if (!partition || !g_flash_state.flash_handle) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    
-    ESP_LOGD(TAG, "Verifying partition '%s' at 0x%08lx, size: %lu KB",
-             partition->name, (unsigned long)partition->offset,
-             (unsigned long)(partition->size / 1024));
-    
-    // Check partition boundaries
-    if (partition->offset + partition->size > g_flash_state.status.flash_size) {
-        ESP_LOGE(TAG, "Partition '%s' exceeds flash size!", partition->name);
-        return ESP_ERR_INVALID_SIZE;
-    }
-    
-    // Skip partition table verification - it's special
-    if (strcmp(partition->name, "partition_table") == 0) {
-        partition->available = true;
-        return ESP_OK;
-    }
-    
-    // Test read access
-    uint8_t test_buf[256];
-    esp_err_t ret = esp_flash_read(g_flash_state.flash_handle, 
-                                   test_buf, 
-                                   partition->offset, 
-                                   sizeof(test_buf));
-    
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to read partition '%s': %s", 
-                 partition->name, esp_err_to_name(ret));
-        return ret;
-    }
-    
-    partition->available = true;
-    ESP_LOGD(TAG, "Partition '%s' verified OK", partition->name);
-    return ESP_OK;
-}
-
-/**
- * @brief Verify all partitions
- */
-static esp_err_t verify_all_partitions(void)
-{
-    ESP_LOGD(TAG, "Verifying Flash partitions...");
-
-    int available_count = 0;
-    for (int i = 0; i < NUM_PARTITIONS; i++) {
-        esp_err_t ret = verify_partition(&g_partitions[i]);
-        if (ret == ESP_OK) {
-            available_count++;
-        }
-    }
-
-    ESP_LOGD(TAG, "Partitions verified: %d/%d available",
-             available_count, NUM_PARTITIONS);
-
-    return (available_count > 0) ? ESP_OK : ESP_FAIL;
-}
-
-/**
- * @brief Mount LittleFS on config partition
- */
-static esp_err_t mount_config_partition(void)
-{
-    flash_partition_info_t* config_part = NULL;
-    
-    // Find config partition
-    for (int i = 0; i < NUM_PARTITIONS; i++) {
-        if (strcmp(g_partitions[i].name, "config") == 0) {
-            config_part = &g_partitions[i];
-            break;
-        }
-    }
-    
-    if (!config_part || !config_part->available) {
-        ESP_LOGE(TAG, "Config partition not available");
-        return ESP_ERR_NOT_FOUND;
-    }
-    
-    if (!g_flash_state.flash_handle) {
-        ESP_LOGE(TAG, "Flash handle not available");
-        return ESP_ERR_INVALID_STATE;
-    }
-    
-    ESP_LOGD(TAG, "Mounting RAW LittleFS on EXTERNAL config partition at offset 0x%08lx, size: %lu KB",
-             (unsigned long)config_part->offset,
-             (unsigned long)(config_part->size / 1024));
-    
-    // IMPORTANT: Use raw LittleFS to ensure we're using external Flash
-    esp_err_t ret = littlefs_raw_mount(g_flash_state.flash_handle);
-    
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount raw LittleFS on external config partition: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    
-    // Mark as mounted
-    config_part->mounted = true;
-    g_flash_state.status.filesystem_mounted = true;
-
-    ESP_LOGD(TAG, "Raw LittleFS mounted successfully on EXTERNAL Flash config partition");
-    return ESP_OK;
-}
-
-/**
- * @brief Create initial JSON config files structure
- */
-static esp_err_t create_config_file_structure(void)
-{
-    ESP_LOGD(TAG, "Creating config file structure on EXTERNAL Flash...");
-
-    // Create backup directory first
-    esp_err_t ret = littlefs_raw_mkdir("/backup");
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Backup directory may already exist");
-    }
-    
-    // Create single compact config file
+    littlefs_raw_mkdir("/backup");
     const char* config_path = "/config.json";
     if (!littlefs_raw_exists(config_path)) {
-        // Create default compact config with all sections
-        const char* default_config = 
+        const char* default_config =
             "{"
             "\"system\":{\"version\":\"1.0.0\",\"device_id\":\"ESP32\",\"initialized\":false,"
                        "\"home_name\":\"Default\",\"location\":\"Unknown\",\"home_enabled\":false},"
@@ -279,306 +93,257 @@ static esp_err_t create_config_file_structure(void)
             "\"sensors\":{\"count\":0},"
             "\"units\":{\"power\":\"kW\",\"energy\":\"kWh\"}"
             "}";
-        
-        ret = littlefs_raw_write(config_path, default_config, strlen(default_config));
-        if (ret != ESP_OK) {
+        if (littlefs_raw_write(config_path, default_config, strlen(default_config)) != ESP_OK)
             ESP_LOGE(TAG, "Failed to create %s", config_path);
-        } else {
-            ESP_LOGD(TAG, "Created compact config file: %s (%zu bytes)",
-                     config_path, strlen(default_config));
-        }
-    } else {
-        ESP_LOGD(TAG, "Compact config file already exists: %s", config_path);
     }
+}
 
-    ESP_LOGD(TAG, "Config file structure created successfully on EXTERNAL Flash");
+/* ================================================================================================
+ * EXTERNAL CHIP ADOPTION
+ * ================================================================================================ */
+
+static bool all_ff(const uint8_t *b, size_t n)
+{
+    const uint32_t *w = (const uint32_t *)b;
+    for (size_t i = 0; i < n / 4; i++) if (w[i] != 0xFFFFFFFFu) return false;
+    return true;
+}
+
+/** Erase the chip's stats region [STATS_OFFSET, STATS_OFFSET+size) where it is not blank (a new chip
+ *  costs one read pass, about 7 s for 16 MB at 20 MHz; a used one also its block erases). */
+static esp_err_t ext_clean_region(esp_flash_t *h, uint32_t size, uint8_t *buf)
+{
+    uint32_t addr = PARTITION_STATS_OFFSET, end = PARTITION_STATS_OFFSET + size, erased = 0;
+    while (addr < end) {
+        uint32_t chunk = 0x10000u - (addr & 0xFFFFu);          /* up to the next 64 KB boundary */
+        if (chunk > end - addr) chunk = end - addr;
+        bool blank = true;
+        for (uint32_t o = 0; o < chunk && blank; o += 4096) {
+            esp_err_t e = esp_flash_read(h, buf, addr + o, 4096);
+            if (e != ESP_OK) return e;
+            blank = all_ff(buf, 4096);
+        }
+        if (!blank) {
+            esp_err_t e = esp_flash_erase_region(h, addr, chunk);
+            if (e != ESP_OK) return e;
+            erased += chunk;
+        }
+        addr += chunk;
+        vTaskDelay(1);
+    }
+    ESP_LOGI(TAG, "external stats region checked: %lu KB erased", (unsigned long)(erased / 1024));
     return ESP_OK;
 }
 
-/* Initialize external Flash subsystem with OTP validation (documented in external_flash_config.h). */
+/** Copy the internal stats region onto the chip at the same offsets (blank sectors skipped), verify
+ *  each written sector. *any = at least one non-blank sector was copied. */
+static esp_err_t ext_copy_internal(esp_flash_t *h, uint8_t *buf, uint8_t *chk, bool *any)
+{
+    *any = false;
+    uint32_t isz = rbmedia_stats_region_size(), copied = 0;
+    for (uint32_t off = 0; off < isz; off += 4096) {
+        esp_err_t e = rbmedia_stats_read(PARTITION_STATS_OFFSET + off, buf, 4096);
+        if (e != ESP_OK) return e;
+        if (all_ff(buf, 4096)) continue;
+        e = esp_flash_write(h, buf, PARTITION_STATS_OFFSET + off, 4096);
+        if (e == ESP_OK) e = esp_flash_read(h, chk, PARTITION_STATS_OFFSET + off, 4096);
+        if (e != ESP_OK) return e;
+        if (memcmp(buf, chk, 4096) != 0) return ESP_ERR_INVALID_CRC;
+        copied += 4096;
+        *any = true;
+        if ((off & 0xFFFFu) == 0) vTaskDelay(1);
+    }
+    ESP_LOGI(TAG, "internal stats copied to the external chip: %lu KB", (unsigned long)(copied / 1024));
+    return ESP_OK;
+}
+
+static bool read_marker(uint64_t *uid)
+{
+    char m[64] = {0};
+    size_t n = 0;
+    if (!littlefs_raw_exists(STATS_MEDIA_MARKER) ||
+        littlefs_raw_read(STATS_MEDIA_MARKER, m, sizeof(m) - 1, &n) != ESP_OK) return false;
+    m[n < sizeof(m) ? n : sizeof(m) - 1] = 0;
+    unsigned long long u = 0;
+    if (sscanf(m, "external %llx", &u) != 1) return false;
+    *uid = (uint64_t)u;
+    return true;
+}
+
+static void ext_attach(esp_flash_t *h, uint32_t id, uint32_t size)
+{
+    uint32_t ssz = size - PARTITION_STATS_OFFSET;
+    rbmedia_attach_external(h, ssz);
+    g_flash_state.flash_handle = h;
+    g_flash_state.status.flash_id = id;
+    g_flash_state.status.flash_size = size;
+    g_flash_state.partitions.stats_size = ssz;
+    part("stats")->size = ssz;
+    ESP_LOGI(TAG, "statistics on the EXTERNAL chip: ID 0x%06" PRIX32 ", %" PRIu32 " MB, stats region %" PRIu32 " KB",
+             id, size >> 20, ssz >> 10);
+}
+
+/** Probe the external chip and adopt it for the statistics when it is larger than the internal region. */
+static void ext_stats_select(void)
+{
+    uint64_t want_uid = 0;
+    bool want_ext = read_marker(&want_uid);
+
+    esp_flash_t *h = NULL;
+    uint32_t id = 0, size = 0;
+    bool chip = false;
+    if (init_external_flash() == ESP_OK && (h = get_external_flash_handle()) != NULL) {
+        id = 0;
+        esp_flash_read_id(h, &id);
+        id &= 0xFFFFFF;
+        if (esp_flash_get_physical_size(h, &size) != ESP_OK) size = 0;
+        chip = id != 0 && id != 0xFFFFFF && size > PARTITION_STATS_OFFSET;
+    }
+    uint32_t isz = rbmedia_stats_region_size();
+    bool big = chip && (size - PARTITION_STATS_OFFSET) > isz;
+
+    if (!big) {
+        deinit_external_flash();
+        if (chip) ESP_LOGW(TAG, "external NOR ID 0x%06" PRIX32 " (%" PRIu32 " KB) is not larger than the internal "
+                                "stats region — statistics stay internal", id, size >> 10);
+        if (want_ext) {
+            /* The history is on the adopted chip: writing the stale internal copy would split it. */
+            rbmedia_detach();
+            g_flash_state.status.error_message = "external statistics flash missing";
+            ESP_LOGE(TAG, "the statistics chip is missing (marker %s) — statistics RAM-only until it is back",
+                     STATS_MEDIA_MARKER);
+        }
+        return;
+    }
+
+    uint64_t uid = 0;
+    if (esp_flash_read_unique_chip_id(h, &uid) != ESP_OK) uid = 0;
+
+    if (want_ext && uid == want_uid) {
+        ext_attach(h, id, size);
+        return;
+    }
+    if (want_ext)
+        ESP_LOGW(TAG, "a DIFFERENT statistics chip (uid %016" PRIx64 ", adopted %016" PRIx64 ") — adopting it from "
+                      "the internal copy; the history recorded since the first adoption stays on the old chip",
+                 uid, want_uid);
+
+    /* Adoption: clean the chip's region, copy the internal one, then write the marker. A failure leaves the
+     * statistics on the internal flash, untouched. */
+    ESP_LOGW(TAG, "adopting external NOR ID 0x%06" PRIX32 " (%" PRIu32 " MB) for the statistics — one-time copy",
+             id, size >> 20);
+    uint8_t *buf = heap_caps_malloc(4096, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    uint8_t *chk = heap_caps_malloc(4096, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    bool any = false;
+    esp_err_t e = (buf && chk) ? ESP_OK : ESP_ERR_NO_MEM;
+    if (e == ESP_OK) e = ext_clean_region(h, size - PARTITION_STATS_OFFSET, buf);
+    if (e == ESP_OK) e = ext_copy_internal(h, buf, chk, &any);
+    free(buf);
+    free(chk);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "adoption failed (%s) — statistics stay on the internal flash", esp_err_to_name(e));
+        deinit_external_flash();
+        if (want_ext) rbmedia_detach();
+        g_flash_state.status.error_message = "external statistics flash adoption failed";
+        return;
+    }
+    /* A fresh hub (nothing copied, no format marker yet): the region is clean, stamp the format so the ring
+     * layer does not blind-wipe 16 MB once more. */
+    if (!any && !littlefs_raw_exists(STATS_FORMAT_MARKER)) {
+        uint32_t v = RBPOWER_RECORD_FORMAT_VERSION;
+        littlefs_raw_write(STATS_FORMAT_MARKER, &v, sizeof(v));
+    }
+    char m[64];
+    int n = snprintf(m, sizeof(m), "external %016" PRIx64 " %" PRIu32, uid, size);
+    e = littlefs_raw_write(STATS_MEDIA_MARKER, m, (size_t)n);
+    if (e != ESP_OK) ESP_LOGE(TAG, "marker %s not written (%s) — the copy repeats next boot", STATS_MEDIA_MARKER,
+                              esp_err_to_name(e));
+    ext_attach(h, id, size);
+}
+
+/* ================================================================================================
+ * PUBLIC
+ * ================================================================================================ */
+
+/* Select the storage medium (documented in external_flash_config.h). */
 esp_err_t external_flash_init(void)
 {
-    /* === INTERNAL FIRST ===
-     * The internal 16MB flash is the PRIMARY store: raw `stats` partition for the statistics
-     * rings (rbmedia shims translate the external-layout offsets) + `config` partition for the
-     * littlefs config/metadata files. The external NOR is an OPTIONAL extension, to be re-enabled
-     * later via rbmedia_attach_external(); its probe/OTP path below is kept intact and serves as
-     * a FALLBACK on devices still running the old partition table (no `stats` partition). */
-    if (rbmedia_init_internal() == ESP_OK) {
-        esp_err_t lfs = littlefs_raw_mount_internal();
-        if (lfs != ESP_OK) {
-            ESP_LOGE(TAG, "internal littlefs mount failed: %s", esp_err_to_name(lfs));
-            g_flash_state.status.error_message = "internal config littlefs mount failed";
-            return lfs;
-        }
-        g_flash_state.flash_handle = NULL;            /* no external chip in use */
-        g_flash_state.status.flash_id = 0;            /* 0 = internal media */
-        esp_flash_get_size(esp_flash_default_chip, &g_flash_state.status.flash_size);
-        g_flash_state.status.otp_validated = true;    /* authenticity gate is N/A on internal */
-        g_flash_state.status.filesystem_mounted = true;
-        g_flash_state.partitions.stats_size = rbmedia_stats_region_size();
-        {
-            const esp_partition_t *cfg = esp_partition_find_first(
-                ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "config");
-            g_flash_state.partitions.config_size = cfg ? cfg->size : 0;
-        }
-        /* Keep the legacy g_partitions entries coherent: "stats" for info surfaces, and "config"
-         * MUST be marked mounted — every rbgrid_config_storage save/LOAD path gates on
-         * external_flash_is_config_mounted(). With this flag unset, config saves fail (HTTP 500)
-         * and boot-time config loads silently fall back to defaults. */
-        for (int i = 0; i < NUM_PARTITIONS; i++) {
-            if (strcmp(g_partitions[i].name, "stats") == 0) {
-                g_partitions[i].size = g_flash_state.partitions.stats_size;
-                g_partitions[i].available = true;
-            } else if (strcmp(g_partitions[i].name, "config") == 0) {
-                g_partitions[i].size = g_flash_state.partitions.config_size;
-                g_partitions[i].available = true;
-                g_partitions[i].mounted = true;
-            }
-        }
-        if (g_flash_state.status.filesystem_mounted) {
-            create_config_file_structure();   /* same bootstrap as the external path */
-        }
-        g_flash_state.status.initialized = true;
-        ESP_LOGI(TAG, "storage media = INTERNAL flash (stats %lu KB, config %lu KB); "
-                      "external NOR optional/disabled",
-                 (unsigned long)(g_flash_state.partitions.stats_size / 1024),
-                 (unsigned long)(g_flash_state.partitions.config_size / 1024));
-        return ESP_OK;
+    if (rbmedia_init_internal() != ESP_OK) {
+        g_flash_state.status.error_message = "internal stats partition missing (old partition table)";
+        return ESP_ERR_NOT_FOUND;
     }
-    ESP_LOGW(TAG, "internal `stats` partition absent (old layout) — falling back to the "
-                  "EXTERNAL NOR path");
+    esp_err_t lfs = littlefs_raw_mount_internal();
+    if (lfs != ESP_OK) {
+        ESP_LOGE(TAG, "internal littlefs mount failed: %s", esp_err_to_name(lfs));
+        g_flash_state.status.error_message = "internal config littlefs mount failed";
+        return lfs;
+    }
+    g_flash_state.flash_handle = NULL;
+    g_flash_state.status.flash_id = 0;            /* 0 = internal media */
+    esp_flash_get_size(esp_flash_default_chip, &g_flash_state.status.flash_size);
+    g_flash_state.status.filesystem_mounted = true;
+    g_flash_state.partitions.stats_size = rbmedia_stats_region_size();
+    const esp_partition_t *cfg = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "config");
+    g_flash_state.partitions.config_size = cfg ? cfg->size : 0;
+    /* "config" MUST be marked mounted — every rbgrid_config_storage save/load path gates on
+     * external_flash_is_config_mounted(). */
+    part("stats")->size = g_flash_state.partitions.stats_size;
+    part("stats")->available = true;
+    part("config")->size = g_flash_state.partitions.config_size;
+    part("config")->available = true;
+    part("config")->mounted = true;
+    create_config_file_structure();
 
-    ESP_LOGD(TAG, "Initializing external Flash subsystem...");
+    ext_stats_select();
 
-    // Step 1: Initialize Flash hardware
-    esp_err_t ret = init_external_flash();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize Flash hardware: %s", esp_err_to_name(ret));
-        g_flash_state.status.error_message = "Flash hardware init failed";
-        return ret;
-    }
-    
-    g_flash_state.flash_handle = get_external_flash_handle();
-    
-    // Get Flash info
-    if (g_flash_state.flash_handle) {
-        esp_flash_get_size(g_flash_state.flash_handle, &g_flash_state.status.flash_size);
-        esp_flash_read_id(g_flash_state.flash_handle, &g_flash_state.status.flash_id);
-        ESP_LOGD(TAG, "Flash detected: ID=0x%08lx, Size=%lu MB",
-                 (unsigned long)g_flash_state.status.flash_id,
-                 (unsigned long)(g_flash_state.status.flash_size / (1024*1024)));
-
-        // STATS extends to the END OF THE DETECTED CHIP: one firmware serves the 4 MB
-        // test chip and a 16 MB production chip. Override the static fallback size in the partition
-        // table so verify/bounds-checks and the slot allocator see the real region.
-        if (g_flash_state.status.flash_size > PARTITION_STATS_OFFSET) {
-            uint32_t stats_size = g_flash_state.status.flash_size - PARTITION_STATS_OFFSET;
-            for (int i = 0; i < NUM_PARTITIONS; i++) {
-                if (strcmp(g_partitions[i].name, "stats") == 0) {
-                    g_partitions[i].size = stats_size;
-                    break;
-                }
-            }
-            ESP_LOGI(TAG, "STATS region sized to 0x%06lX (%lu KB) from 0x%06X to chip end",
-                     (unsigned long)stats_size, (unsigned long)(stats_size / 1024), PARTITION_STATS_OFFSET);
-        }
-    }
-
-    // Step 2: Validate OTP
-    ESP_LOGD(TAG, "Reading OTP for device identification...");
-    if (!otp_verify_authenticity()) {
-        ESP_LOGE(TAG, "OTP validation would fail in production mode");
-        g_flash_state.status.otp_validated = false;
-        g_flash_state.status.error_message = "OTP validation failed";
-        // In production, return error here
-        // return ESP_ERR_INVALID_STATE;
-    } else {
-        g_flash_state.status.otp_validated = true;
-    }
-    
-    // Get serial number regardless of validation status (for testing)
-    g_flash_state.status.device_serial = otp_get_serial_number();
-    if (g_flash_state.status.device_serial != 0) {
-        ESP_LOGD(TAG, "Device serial from OTP: 0x%08lx",
-                 (unsigned long)g_flash_state.status.device_serial);
-    }
-
-    // Step 3: Re-initialize Flash after OTP (important!)
-    ESP_LOGD(TAG, "Re-initializing Flash after OTP operations...");
-    deinit_external_flash();
-    vTaskDelay(pdMS_TO_TICKS(50));
-    
-    ret = init_external_flash();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to re-init Flash after OTP: %s", esp_err_to_name(ret));
-        g_flash_state.status.error_message = "Flash re-init after OTP failed";
-        return ret;
-    }
-    
-    g_flash_state.flash_handle = get_external_flash_handle();
-    
-    // Step 4: Verify Flash is working
-    if (g_flash_state.flash_handle) {
-        uint32_t flash_id = 0;
-        ret = esp_flash_read_id(g_flash_state.flash_handle, &flash_id);
-        if (ret != ESP_OK || flash_id == 0) {
-            ESP_LOGE(TAG, "Flash not responding after OTP!");
-            g_flash_state.status.error_message = "Flash not responding";
-            return ESP_FAIL;
-        }
-        ESP_LOGD(TAG, "Flash verified after OTP: ID=0x%08lx", (unsigned long)flash_id);
-    }
-
-    // Step 5: Check if partition table exists (optional - might not be present)
-    ret = verify_partition_table();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Partition table check failed, continuing anyway");
-    }
-    
-    // Step 6: Verify all partitions
-    ret = verify_all_partitions();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Partition verification failed");
-        // Continue anyway for development
-    }
-    
-    // Step 6: Mount config partition
-    ret = mount_config_partition();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount config partition");
-        // Continue anyway for development
-    }
-    
-    // Step 7: Create JSON config files structure
-    if (g_flash_state.status.filesystem_mounted) {
-        ret = create_config_file_structure();
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to create config file structure");
-        }
-    }
-    
-    // Update global state with partition info and mark all partitions as available
-    for (int i = 0; i < NUM_PARTITIONS; i++) {
-        // Mark all partitions as available after successful Flash init
-        g_partitions[i].available = true;
-
-        if (strcmp(g_partitions[i].name, "config") == 0) {
-            g_flash_state.partitions.config_size = g_partitions[i].size;
-            g_flash_state.partitions.config_used = 0; // TODO: Calculate actual usage
-        } else if (strcmp(g_partitions[i].name, "log") == 0) {
-            g_flash_state.partitions.log_size = g_partitions[i].size;
-            g_flash_state.partitions.log_used = 0;
-        } else if (strcmp(g_partitions[i].name, "stats") == 0) {
-            g_flash_state.partitions.stats_size = g_partitions[i].size;
-            g_flash_state.partitions.stats_used = 0;
-        }
-    }
-    
     g_flash_state.status.initialized = true;
-    /* Legacy external path succeeded → route the stats media shims to the external chip. */
-    rbmedia_attach_external(g_flash_state.flash_handle);
-    ESP_LOGI(TAG, "External Flash subsystem initialized successfully");
-
+    ESP_LOGI(TAG, "storage: config INTERNAL %u KB, statistics %s %u KB",
+             (unsigned)(g_flash_state.partitions.config_size / 1024),
+             rbmedia_mode() == RBMEDIA_EXTERNAL ? "EXTERNAL" : rbmedia_mode() == RBMEDIA_INTERNAL ? "INTERNAL" : "NONE (RAM-only)",
+             (unsigned)(g_flash_state.partitions.stats_size / 1024));
     return ESP_OK;
 }
 
-/* Deinitialize external Flash subsystem (documented in external_flash_config.h). */
+/* Deinitialize (documented in external_flash_config.h). */
 esp_err_t external_flash_deinit(void)
 {
-    ESP_LOGD(TAG, "Deinitializing external Flash subsystem...");
-
-    // Unmount filesystem if mounted
     if (g_flash_state.status.filesystem_mounted) {
-        esp_err_t ret = littlefs_raw_unmount();
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to unmount raw LittleFS: %s", esp_err_to_name(ret));
-        } else {
-            ESP_LOGD(TAG, "Raw LittleFS unmounted successfully");
-        }
+        littlefs_raw_unmount();
         g_flash_state.status.filesystem_mounted = false;
-        
-        // Mark config partition as not mounted
-        for (int i = 0; i < NUM_PARTITIONS; i++) {
-            if (strcmp(g_partitions[i].name, "config") == 0) {
-                g_partitions[i].mounted = false;
-                break;
-            }
-        }
+        part("config")->mounted = false;
     }
-    
-    // Deinitialize Flash hardware
-    deinit_external_flash();
-    
+    if (g_flash_state.flash_handle) deinit_external_flash();
     g_flash_state.flash_handle = NULL;
     g_flash_state.status.initialized = false;
-
-    ESP_LOGD(TAG, "External Flash subsystem deinitialized");
     return ESP_OK;
 }
 
-/* Get external Flash state (documented in external_flash_config.h). */
-external_flash_state_t* external_flash_get_state(void)
-{
-    return &g_flash_state;
-}
+external_flash_state_t* external_flash_get_state(void) { return &g_flash_state; }
 
-/* Check if external Flash is available (documented in external_flash_config.h). */
-bool external_flash_is_available(void)
-{
-    return g_flash_state.status.initialized && 
-           g_flash_state.status.otp_validated;
-}
+bool external_flash_is_available(void) { return g_flash_state.status.initialized; }
 
-/* Get device serial number from OTP (documented in external_flash_config.h). */
-uint32_t external_flash_get_serial(void)
-{
-    return g_flash_state.status.device_serial;
-}
-
-/* Check if specific partition is available (documented in external_flash_config.h). */
 bool external_flash_is_partition_available(const char* partition_name)
 {
-    if (!partition_name) return false;
-    
-    for (int i = 0; i < NUM_PARTITIONS; i++) {
-        if (strcmp(g_partitions[i].name, partition_name) == 0) {
-            return g_partitions[i].available;
-        }
-    }
-    return false;
+    flash_partition_info_t *p = partition_name ? part(partition_name) : NULL;
+    return p && p->available;
 }
 
-/* Get partition info (documented in external_flash_config.h). */
-bool external_flash_get_partition_info(const char* partition_name, 
-                                       uint32_t* offset, 
-                                       uint32_t* size)
+bool external_flash_get_partition_info(const char* partition_name, uint32_t* offset, uint32_t* size)
 {
-    if (!partition_name) return false;
-    
-    for (int i = 0; i < NUM_PARTITIONS; i++) {
-        if (strcmp(g_partitions[i].name, partition_name) == 0) {
-            if (offset) *offset = g_partitions[i].offset;
-            if (size) *size = g_partitions[i].size;
-            return g_partitions[i].available;
-        }
-    }
-    return false;
+    flash_partition_info_t *p = partition_name ? part(partition_name) : NULL;
+    if (!p) return false;
+    if (offset) *offset = p->offset;
+    if (size) *size = p->size;
+    return p->available;
 }
 
-/* Get config partition mount point (documented in external_flash_config.h). */
 const char* external_flash_get_config_mount_point(void)
 {
     return g_flash_state.status.filesystem_mounted ? "/config" : NULL;
 }
 
-/* Check if config partition is mounted (documented in external_flash_config.h). */
 bool external_flash_is_config_mounted(void)
 {
-    for (int i = 0; i < NUM_PARTITIONS; i++) {
-        if (strcmp(g_partitions[i].name, "config") == 0) {
-            return g_partitions[i].mounted;
-        }
-    }
-    return false;
+    flash_partition_info_t *p = part("config");
+    return p && p->mounted;
 }

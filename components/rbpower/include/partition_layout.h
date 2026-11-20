@@ -17,18 +17,16 @@
 #define PARTITION_TABLE_MAGIC 0x50415254
 
 /*
- * External-flash partition layout (sized for 64-unit statistics).
+ * External-flash layout (statistics only).
  *
- * One unit's statistics = 50 data sectors + 1 header ≈ 208 KB (matrix RBPOWER_BUFFER_SECTORS).
- * 64 units need about 13 MB of STATS, so:
- *   - There is no external "ota" partition: OTA images are staged in the internal flash, and the
- *     space is used for STATS instead.
- *   - "log" (process/diagnostic event log, a serial-port replacement, not measurement data) sits at 0x45000.
- *   - STATS starts at 0x65000 and extends to the END OF THE CHIP. Its size is set at runtime from
- *     the detected flash size (external_flash_init → esp_flash_get_size); PARTITION_STATS_SIZE is only
- *     a 4 MB fallback. One firmware therefore serves a 4 MB chip (~17 units) and a 16 MB chip
- *     (64 units); the live slot count = min(64, STATS size / 208 KB).
- * config stays at 0x5000, so /stats_fmt and flash_slots.json survive layout changes.
+ * The external chip holds ONLY the statistics rings; the config LittleFS always stays on the
+ * internal `config` partition. The offsets below are the "external layout" address space the ring
+ * layer was written against: STATS starts at 0x65000 and extends to the END OF THE CHIP (size from
+ * esp_flash_get_physical_size at adoption). One unit's statistics = one 320 KB slot (v4 format), so a
+ * W25Q128 (16 MB) holds about 49 points with history, the internal 4 MB `stats` partition 12. The
+ * internal partition uses the same offsets (rbstorage_media translates them), which is what lets the
+ * one-time adoption copy the internal region onto the chip byte for byte. The table/NVS/config/log
+ * entries below are kept as reserved address ranges only.
  */
 #define PARTITION_TABLE_OFFSET 0x000000 ///< Partition table offset, bytes (4 KB area)
 #define PARTITION_TABLE_SIZE 0x001000   ///< Partition table size, bytes

@@ -15,6 +15,7 @@ static const char *TAG = "rbmedia";
 static rbmedia_mode_t         s_mode = RBMEDIA_NONE;
 static const esp_partition_t *s_stats_part = NULL;   /* internal mode */
 static esp_flash_t           *s_ext_handle = NULL;   /* external mode (optional) */
+static uint32_t               s_ext_size = 0;        /* external stats region size, bytes */
 
 esp_err_t rbmedia_init_internal(void)
 {
@@ -27,21 +28,27 @@ esp_err_t rbmedia_init_internal(void)
         return ESP_ERR_NOT_FOUND;
     }
     s_mode = RBMEDIA_INTERNAL;
-    ESP_LOGI(TAG, "media = INTERNAL: stats partition @0x%06lX, %lu KB (%lu slots of %u KB); "
-                  "external NOR = optional, not used",
-             (unsigned long)s_stats_part->address,
-             (unsigned long)(s_stats_part->size / 1024),
-             (unsigned long)(s_stats_part->size / (208u * 1024u)), 208u);
+    ESP_LOGI(TAG, "media = INTERNAL: stats partition @0x%06lX, %lu KB",
+             (unsigned long)s_stats_part->address, (unsigned long)(s_stats_part->size / 1024));
     return ESP_OK;
 }
 
-esp_err_t rbmedia_attach_external(esp_flash_t *handle)
+esp_err_t rbmedia_attach_external(esp_flash_t *handle, uint32_t region_size)
 {
-    if (!handle) return ESP_ERR_INVALID_ARG;
+    if (!handle || !region_size) return ESP_ERR_INVALID_ARG;
     s_ext_handle = handle;
+    s_ext_size = region_size;
     s_mode = RBMEDIA_EXTERNAL;
-    ESP_LOGI(TAG, "media = EXTERNAL NOR (optional path)");
+    ESP_LOGI(TAG, "media = EXTERNAL NOR, stats region %lu KB", (unsigned long)(region_size / 1024));
     return ESP_OK;
+}
+
+void rbmedia_detach(void)
+{
+    s_ext_handle = NULL;
+    s_ext_size = 0;
+    s_mode = RBMEDIA_NONE;
+    ESP_LOGW(TAG, "media = NONE: statistics RAM-only");
 }
 
 rbmedia_mode_t rbmedia_mode(void) { return s_mode; }
@@ -49,7 +56,7 @@ rbmedia_mode_t rbmedia_mode(void) { return s_mode; }
 uint32_t rbmedia_stats_region_size(void)
 {
     if (s_mode == RBMEDIA_INTERNAL) return (uint32_t)s_stats_part->size;
-    if (s_mode == RBMEDIA_EXTERNAL) return PARTITION_STATS_SIZE;  /* overridden by chip size upstream */
+    if (s_mode == RBMEDIA_EXTERNAL) return s_ext_size;
     return 0;
 }
 

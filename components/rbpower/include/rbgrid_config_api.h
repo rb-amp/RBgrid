@@ -156,8 +156,6 @@ extern "C"
     typedef struct
     {
         bool external_flash_available; ///< External flash chip detected and usable.
-        bool otp_validated;            ///< OTP validation passed.
-        uint32_t device_serial;        ///< Device serial number read from OTP (0 if unavailable).
         bool config_partition_mounted; ///< Configuration partition is mounted.
         size_t config_partition_size;  ///< Configuration partition size, bytes.
         size_t config_used_space;      ///< Used space in the configuration partition, bytes.
@@ -1155,17 +1153,6 @@ extern "C"
      */
     bool rbgrid_flash_is_available(void);
 
-    /**
-     * @brief Check the OTP validation status.
-     * @return true if OTP validation passed, false otherwise.
-     */
-    bool rbgrid_otp_is_validated(void);
-
-    /**
-     * @brief Get the device serial number.
-     * @return Device serial number from OTP, or 0 on error.
-     */
-    uint32_t rbgrid_get_device_serial(void);
 
     /**
      * @brief Get the extended external flash status.

@@ -22,7 +22,6 @@
 #include "rbstorage.h"
 #include "rbstorage_types.h"
 #include "rbextflash_operations.h"  // Flash buffer initialization
-#include "otp_manager.h"
 #include "partition_layout.h"
 
 #include <string.h>
@@ -38,24 +37,23 @@
 #include "esp_littlefs.h"
 #include "esp_flash.h"
 
-// External Flash functions from otp_external_flash_test.c
-esp_err_t init_external_flash(void);          ///< Initialise the external flash chip (otp_external_flash_test.c). @return ESP_OK or an ESP-IDF error code
-void deinit_external_flash(void);              ///< Release the external flash chip (otp_external_flash_test.c)
-esp_flash_t* get_external_flash_handle(void);  ///< esp_flash handle of the external chip (otp_external_flash_test.c). @return Handle, or NULL
+// External Flash functions from ext_flash_spi.c
+esp_err_t init_external_flash(void);          ///< Initialise the external flash chip (ext_flash_spi.c). @return ESP_OK or an ESP-IDF error code
+void deinit_external_flash(void);              ///< Release the external flash chip (ext_flash_spi.c)
+esp_flash_t* get_external_flash_handle(void);  ///< esp_flash handle of the external chip (ext_flash_spi.c). @return Handle, or NULL
 
 //static const char *TAG = "RBPOWER";
 
 /* ================================================================================================
- * EXTERNAL FLASH AND OTP - NOW MANAGED BY external_flash_manager.c
+ * EXTERNAL FLASH - MANAGED BY external_flash_manager.c
  * ================================================================================================ */
 
 // Use consolidated Flash management
-extern esp_err_t external_flash_init(void);                    ///< Initialise the external flash with OTP validation. @return ESP_OK or an ESP-IDF error code
+extern esp_err_t external_flash_init(void);                    ///< Select the storage medium (internal / external statistics). @return ESP_OK or an ESP-IDF error code
 extern esp_err_t external_flash_deinit(void);                  ///< Deinitialise the external flash. @return ESP_OK or an ESP-IDF error code
 extern external_flash_state_t* external_flash_get_state(void); ///< Consolidated external-flash state. @return State pointer, or NULL
-extern bool external_flash_is_available(void);                 ///< Flash availability. @return true if initialised and OTP-validated
+extern bool external_flash_is_available(void);                 ///< Storage medium availability. @return true if initialised
 extern bool external_flash_is_config_mounted(void);            ///< Config partition state. @return true if mounted
-extern uint32_t external_flash_get_serial(void);               ///< Device serial from OTP. @return Serial, or 0
 
 /* ================================================================================================
  * PRIVATE TYPES - SIMPLIFIED
@@ -400,8 +398,7 @@ rbpower_err_t rbpower_init_extended(const rbpower_extended_config_t *extended_co
     rbpower_start_accumulation_system();
 
     // 5. Initialize Flash buffers (AFTER rbpower_start_accumulation_system!)
-    // Note: using external_flash_is_config_mounted() instead of external_flash_is_available()
-    // because external_flash_is_available() requires OTP validation which may not be ready in dev mode
+    // Gate on the config LittleFS (always internal); the statistics medium is checked by the ring layer.
     if (external_flash_is_config_mounted() && storage_enabled && extended_config->enable_home_network) {
         ESP_LOGD("RBPOWER", "Initializing Flash buffers...");
 
@@ -619,7 +616,7 @@ rbpower_err_t rbpower_resume(void)
 
 
 /* ================================================================================================
- * EXTERNAL FLASH MEMORY AND OTP VALIDATION - IMPLEMENTATION
+ * EXTERNAL FLASH MEMORY - IMPLEMENTATION
  * ================================================================================================ */
 
 // External functions already declared above
@@ -673,7 +670,7 @@ static bool verify_config_partition(void) {
 }
 
 /*
- * Initialize external Flash with OTP validation
+ * Select the storage medium (internal / external statistics chip)
  */
 esp_err_t rbpower_external_flash_init(void) {
     // Use consolidated Flash manager
@@ -687,20 +684,7 @@ bool rbpower_external_flash_is_available(void) {
     return external_flash_is_available();
 }
 
-/*
- * Check OTP validation status
- */
-bool rbpower_external_flash_otp_validated(void) {
-    external_flash_state_t* state = external_flash_get_state();
-    return state ? state->status.otp_validated : false;
-}
 
-/*
- * Get device serial number from OTP
- */
-uint32_t rbpower_external_flash_get_serial(void) {
-    return external_flash_get_serial();
-}
 
 /*
  * Get external Flash memory status
@@ -711,8 +695,6 @@ rbpower_flash_status_t rbpower_external_flash_get_status(void) {
     
     if (state) {
         status.external_flash_available = state->status.initialized;
-        status.otp_validated = state->status.otp_validated;
-        status.device_serial = state->status.device_serial;
         status.config_partition_mounted = state->status.filesystem_mounted;
         status.config_partition_size = state->partitions.config_size;
         status.config_used_space = state->partitions.config_used;

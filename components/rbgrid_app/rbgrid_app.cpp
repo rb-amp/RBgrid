@@ -150,6 +150,7 @@ extern "C" void add_cors_headers(httpd_req_t *req);  // rbwebserver CORS policy 
 #include "rbstats_v4_types.h"     // statmeta: raw v4 record view (set_meta check)
 #include "rbstorage_transfer_types.h"   /* rbpower_electrical_transfer_t — stattest known-record */
 #include "external_flash_config.h"
+#include "rbstorage_media.h"
 
 //#include "rbpower_console.h"
 
@@ -1055,9 +1056,8 @@ static int rbgrid_dbg_rbampcfg(int argc, char **argv) {
 }
 
 /* ===== External-flash STATISTICS test harness =========================
- * flashinfo                    — ext-flash status + gating (init/otp/fs/id/size/serial/available).
- * flashen <0|1> [enf 0|1]      — runtime toggle: "use external flash" + OTP-enforce (with/without
- *                                flash + anti-foreign-chip tests).
+ * flashinfo                    — storage medium (internal / external chip), chip id/size, slots, gating.
+ * flashen <0|1>                — runtime toggle: "persist statistics" (with/without flash tests).
  * forceperiod <idx> <per>      — ACCELERATED long-period test: finalize a period NOW (store to
  *                                flash + roll up to the next level) without waiting real time.
  *                                per = stat-period: 1=15min 2=1h 3=day 4=week 5=month 6=year.
@@ -1069,27 +1069,25 @@ static int rbgrid_dbg_flashinfo(int argc, char **argv) {
     (void)argc; (void)argv;
     external_flash_state_t *st = external_flash_get_state();
     if (!st) { rbbench_reply("flashinfo: no state (ext-flash subsystem not initialized)"); return 1; }
-    rbbench_reply("flash hw: init=%d otp_valid=%d fs_mounted=%d id=0x%08lx size=%luMB serial=0x%08lx",
-                  (int)st->status.initialized, (int)st->status.otp_validated,
-                  (int)st->status.filesystem_mounted, (unsigned long)st->status.flash_id,
-                  (unsigned long)(st->status.flash_size / (1024 * 1024)),
-                  (unsigned long)st->status.device_serial);
-    rbbench_reply("flash gate: enabled=%d enforce_otp=%d => available=%d (last_err=%s)",
-                  (int)rbpower_flash_get_enabled(), (int)rbpower_flash_get_enforce_otp(),
-                  (int)rbpower_flash_is_available(),
+    rbmedia_mode_t md = rbmedia_mode();
+    rbbench_reply("flash media=%s init=%d fs_mounted=%d id=0x%06lx size=%luMB stats=%luKB slots=%d",
+                  md == RBMEDIA_EXTERNAL ? "external" : md == RBMEDIA_INTERNAL ? "internal" : "none",
+                  (int)st->status.initialized, (int)st->status.filesystem_mounted,
+                  (unsigned long)st->status.flash_id, (unsigned long)(st->status.flash_size / (1024 * 1024)),
+                  (unsigned long)(st->partitions.stats_size / 1024), rbpower_flash_max_usable_slots());
+    rbbench_reply("flash gate: enabled=%d => available=%d (last_err=%s)",
+                  (int)rbpower_flash_get_enabled(), (int)rbpower_flash_is_available(),
                   st->status.error_message ? st->status.error_message : "none");
     return 0;
 }
-/** `flashen <0|1> [enforce_otp 0|1]`: toggle external-flash use and OTP enforcement at runtime. */
+/** `flashen <0|1>`: toggle statistics persistence at runtime. */
 static int rbgrid_dbg_flashen(int argc, char **argv) {
-    if (argc < 2) { rbbench_reply("usage: flashen <0|1> [enforce_otp 0|1]"); return 1; }
-    uint32_t en = 1, enf = 1;
+    if (argc < 2) { rbbench_reply("usage: flashen <0|1>"); return 1; }
+    uint32_t en = 1;
     if (!rbbench_parse_uint(argv[1], &en, 1)) { rbbench_reply("bad <0|1>"); return 1; }
     rbpower_flash_set_enabled(en != 0);
-    if (argc >= 3 && rbbench_parse_uint(argv[2], &enf, 1)) rbpower_flash_set_enforce_otp(enf != 0);
-    rbbench_reply("flashen: enabled=%d enforce_otp=%d => available=%d",
-                  (int)rbpower_flash_get_enabled(), (int)rbpower_flash_get_enforce_otp(),
-                  (int)rbpower_flash_is_available());
+    rbbench_reply("flashen: enabled=%d => available=%d",
+                  (int)rbpower_flash_get_enabled(), (int)rbpower_flash_is_available());
     return 0;
 }
 /** `forceperiod <idx> <per>`: finalize a period of a unit (by index) now. */
@@ -3059,8 +3057,7 @@ static rbpower_extended_config_t* app_core_init(void)
     // base_hardware_config->external_flash_config = &external_flash_config;  // DEPRECATED - now using consolidated Flash manager
 
     // Set Flash status flag for rbpower modules
-    // Note: external_flash_is_available() checks both initialized AND otp_validated
-    // For development/testing, we check only if config is mounted (Flash is physically working)
+    // The config LittleFS (internal) is the storage health signal here.
     if (external_flash_is_config_mounted()) {
         base_hardware_config->external_flash.status.initialized = true;
         ESP_LOGI(TAG, "External Flash status set: initialized = true (config mounted)");

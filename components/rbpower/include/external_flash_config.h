@@ -66,9 +66,7 @@ typedef struct
 typedef struct
 {
     bool initialized;          ///< Storage medium initialized (internal partitions found, or external SPI chip up)
-    bool otp_validated;        ///< OTP authenticity check passed (always true on the internal medium, where it does not apply)
     bool filesystem_mounted;   ///< Config LittleFS mounted
-    uint32_t device_serial;    ///< Device serial number read from the external chip's OTP (0 = not available)
     uint32_t flash_id;         ///< JEDEC ID of the external chip (0 = internal medium in use)
     uint32_t flash_size;       ///< Size of the flash chip in use, bytes
     const char *error_message; ///< Last error message (static string), NULL if none
@@ -101,19 +99,17 @@ typedef struct
 /**
  * @brief Select and initialize the storage medium, then mount the config LittleFS.
  *
- * The internal flash is tried first: when the internal `stats` partition exists, the statistics
- * rings and the config LittleFS live on internal flash and the external chip is not touched. Only
- * when that partition is absent (older partition table) does the function fall back to the
- * external NOR path: SPI init, OTP read, re-init, partition checks, LittleFS mount, and routing of
- * the statistics media to the external chip.
+ * The config LittleFS and, by default, the statistics rings live on the internal flash (`config`
+ * and `stats` partitions). An external SPI NOR chip (MISO 12, MOSI 13, CLK 14, CS 15) larger than
+ * the internal stats region is adopted for the statistics: once, the internal stats region is
+ * copied onto it, and the marker /stats_media remembers the chip. If the adopted chip is missing
+ * at a later boot, the statistics stay RAM-only (error_message says so). No authenticity check.
  *
  * Call once at boot, from the init task, before any other storage function. Not thread-safe.
  *
- * @return ESP_OK on success (partition-check or mount failures on the external path are logged
- *         but do not fail the call).
- * @retval ESP_OK   Medium selected and initialized.
- * @retval ESP_FAIL External chip did not answer its JEDEC ID after the OTP read.
- * @retval other    Error from the internal LittleFS mount or from the external SPI/flash driver init.
+ * @retval ESP_OK            Medium selected and initialized.
+ * @retval ESP_ERR_NOT_FOUND No internal `stats` partition (old partition table): RAM-only.
+ * @retval other             Error from the internal LittleFS mount.
  */
 esp_err_t external_flash_init(void);
 
@@ -131,15 +127,9 @@ external_flash_state_t *external_flash_get_state(void);
 
 /**
  * @brief Check whether the storage medium is usable.
- * @return true if the medium is initialized and the OTP check passed (always passes on the internal medium).
+ * @return true if the storage medium is initialized.
  */
 bool external_flash_is_available(void);
-
-/**
- * @brief Get the device serial number read from the external chip's OTP area.
- * @return Device serial number, or 0 if not available (for example, on the internal medium).
- */
-uint32_t external_flash_get_serial(void);
 
 /**
  * @brief Check whether a named partition is available.
