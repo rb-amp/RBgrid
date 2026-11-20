@@ -2648,8 +2648,11 @@ static cJSON *t_identify_channel(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(r, "status", "sampling");
         cJSON_AddNumberToObject(r, "window_s", win);
         cJSON_AddNumberToObject(r, "points", s_id.n);
-        cJSON_AddStringToObject(r, "next", "Ask the user to switch ONE appliance of at least about 100 W on (or off) now and leave it for 10 s. "
-                                           "Then call identify_channel with action \"result\". Other big loads should stay as they are.");
+        char nx[320];
+        snprintf(nx, sizeof(nx), "Ask the user to switch ONE appliance of at least about 100 W on (or off) now and leave it so until you call "
+                 "result (the hub watches for %u s; 10 s is enough). Then call identify_channel with action \"result\". "
+                 "Other big loads should stay as they are.", (unsigned)win);
+        cJSON_AddStringToObject(r, "next", nx);
         cx->as_of = now_s(); cx->resolution = "live";
         return r;
     }
@@ -3194,6 +3197,11 @@ static char *jerr(int *status, int st, const char *code, const char *msg)
     *status = st;
     return rbllm_error_json(NULL, code, msg, NULL, 0);
 }
+static char *jerr_h(int *status, int st, const char *code, const char *msg, const char *hint)
+{
+    *status = st;
+    return rbllm_error_json(NULL, code, msg, hint, 0);
+}
 
 char *rbllm_pair_start(const char *body, int *status)
 {
@@ -3203,7 +3211,7 @@ char *rbllm_pair_start(const char *body, int *status)
     uint8_t sc = b ? scopes_from_json(cJSON_GetObjectItem(b, "scopes")) : 0;
     if (!nm || !nm[0] || strlen(nm) > 32 || !sc) { cJSON_Delete(b); return jerr(status, 400, "invalid_args", "client_name (1..32 chars) and scopes [read|config] required"); }
     for (const char *c = nm; *c; c++) if ((unsigned char)*c < 0x20) { cJSON_Delete(b); return jerr(status, 400, "invalid_args", "client_name: no control characters"); }
-    if (!strcasecmp(nm, RBLLM_CLIENT_WEB)) { cJSON_Delete(b); return jerr(status, 400, "invalid_args", "client_name: \"web\" is reserved for the hub page"); }
+    if (!strcasecmp(nm, RBLLM_CLIENT_WEB)) { cJSON_Delete(b); return jerr_h(status, 400, "invalid_args", "client_name: \"web\" is reserved for the hub page", "Pair under the assistant's own name, e.g. \"Claude Desktop\"."); }
     lk();
     pair_gc_locked();
     if (esp_timer_get_time() < S.pair_block_until_us) { ulk(); cJSON_Delete(b); return jerr(status, 429, "busy", "pairing is blocked for 10 minutes after too many wrong codes"); }
