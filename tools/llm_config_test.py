@@ -151,8 +151,39 @@ def main():
         check(r2.get("ok"), f"rollback applied: version {r2.get('result', {}).get('version')}")
     cfg2 = call("get_config")["result"]
     check(cfg2["tariff"]["plan_name"] == t0["plan_name"] and cfg2["tariff"]["vat_percent"] == t0["vat_percent"], f"after rollback: tariff '{cfg2['tariff']['plan_name']}', VAT {cfg2['tariff']['vat_percent']}")
+    wb = {z["zone"]: z.get("window") for z in cfg2["tariff"]["zones"]}
+    wa = {z["zone"]: z.get("window") for z in t0["zones"]}
+    check(wb == wa, f"after rollback: zone windows as before ({wb})")
     check(cfg2["channels"][0]["name"] == orig_name and cfg2["notifications"]["peaks_cycle_day"] == pk0,
           f"after rollback: name '{cfg2['channels'][0]['name']}', cycle day {cfg2['notifications']['peaks_cycle_day']}")
+
+    # ---- zone time window (zones with a single time range), undone by its own rollback (5 versions are kept)
+    t1 = call("get_config", {"section": "tariff"})["result"]["tariff"]
+    vw0 = call("list_config_versions")["result"]["versions"][0]["version"]
+    wz = [z for z in t1["zones"] if z.get("window")]
+    nz = [z for z in t1["zones"] if "window" in z and z["window"] is None]
+    if check(wz, f"get_config tariff shows windows: {[(z['zone'], z.get('window')) for z in t1['zones']]}"):
+        z0 = wz[0]
+        for bad in ("22:10-06:00", "25:00-06:00", "06:00-06:00", "6:00-7:00"):
+            check(err(call("propose_config", {"patch": {"tariff": {"zones": {z0["zone"]: {"window": bad}}}}})) == "invalid_args", f"window '{bad}': invalid_args")
+        if nz:
+            check(err(call("propose_config", {"patch": {"tariff": {"zones": {nz[0]["zone"]: {"window": "10:00-12:00"}}}}})) == "invalid_args",
+                  f"window on zone '{nz[0]['zone']}' (no single time range): invalid_args")
+        neww = "21:45-06:15" if z0["window"] != "21:45-06:15" else "22:00-06:00"
+        pw = call("propose_config", {"patch": {"tariff": {"zones": {z0["zone"]: {"window": neww}}}}})
+        d = (pw.get("result") or {}).get("diff", [])
+        check(pw.get("ok") and d and d[0]["from"] == z0["window"] and d[0]["to"] == neww, f"propose window {z0['zone']}: {d}")
+        aw = call("apply_config", {"confirm_token": pw["result"]["confirm_token"]}) if pw.get("ok") else pw
+        t2 = call("get_config", {"section": "tariff"})["result"]["tariff"]
+        w2 = [z.get("window") for z in t2["zones"] if z["zone"] == z0["zone"]]
+        check(aw.get("ok") and w2 == [neww], f"window applied: {w2}")
+        p24 = call("propose_config", {"patch": {"tariff": {"zones": {z0["zone"]: {"window": "07:00-24:00"}}}}})
+        check(p24.get("ok") and p24["result"]["diff"][0]["to"] == "07:00-00:00", f"24:00 as an end -> 00:00 ({(p24.get('result') or {}).get('diff')})")
+        rw = call("propose_config", {"rollback_to": vw0})
+        r3 = call("rollback_config", {"version": vw0, "confirm_token": rw["result"]["confirm_token"]}) if rw.get("ok") else rw
+        t3 = call("get_config", {"section": "tariff"})["result"]["tariff"]
+        w3 = [z.get("window") for z in t3["zones"] if z["zone"] == z0["zone"]]
+        check(r3.get("ok") and w3 == [z0["window"]], f"window rollback to version {vw0}: {w3}")
     # ---- schema + clamp model (optional: restarts the module)
     sch = call("get_config_schema", {"section": "channels"})
     wr = sch.get("result", {}).get("writable", {})

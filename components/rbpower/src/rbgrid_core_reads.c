@@ -604,7 +604,8 @@ char *rbgrid_build_schema_json(void)
         { "/api/v1/signal",             "GET",      "composite", false, false, "price_signal v1" },
         { "/api/v1/peaks",              "GET,POST", "composite", true,  false, "cycle_day(1..28) | reset" },
 #if CONFIG_RBGRID_IF_HTTP
-        { "/api/v1/llm",                "GET,POST", "composite", true,  false, "AI / LLM page: enabled, read_only, pairing codes, tokens, call log | revoke" },
+        { "/api/v1/llm",                "GET,POST", "composite", true,  false, "AI / LLM page: enabled, read_only, pairing codes, tokens, call log, connect | revoke, pair_cancel", NULL },
+        { "/api/v1/llm/call",           "POST",     "composite", true,  false, "{tool,args}: an LLM tool run by the hub page (caller web)", NULL },
 #endif
     };
     cJSON *eps = cJSON_AddArrayToObject(root, "endpoints");

@@ -115,6 +115,7 @@ static void ev_boot(void);
 static void ev_watch(void);
 static void ev_add(uint8_t type, uint8_t sev, uint16_t chan, const char *info);
 static void ensure_task(void);
+static bool zone_window(const rbpower_tariff_zone_t *zo, char out[12]);
 
 static uint32_t now_s(void) { return (uint32_t)time(NULL); }
 
@@ -1816,9 +1817,11 @@ static void cfg_tariff(cJSON *r, rbllm_cx_t *cx)
         utf8_clean(zo->zone_name, b, sizeof(b)); cJSON_AddStringToObject(o, "name", b);
         cJSON_AddNumberToObject(o, "buy_per_kwh", r4(zo->rate_buying_per_kwh));
         cJSON_AddNumberToObject(o, "sell_per_kwh", r4(zo->rate_selling_per_kwh));
+        char w[12];
+        if (zone_window(zo, w)) cJSON_AddStringToObject(o, "window", w); else cJSON_AddNullToObject(o, "window");
         cJSON_AddItemToArray(zs, o);
     }
-    note(cx, "Zone rates are before fees and VAT; the zone time windows are shown on the hub's tariff page.");
+    note(cx, "Zone rates are before fees and VAT. window is the zone's time of day [from, to) in hub time; null = the zone is set by weekdays, dates or several windows (edit those on the hub's tariff page). Where zones overlap, the hub's zone priority decides.");
     cJSON *dp = rbdynprice_config_json();
     if (dp) {
         cJSON *d = cJSON_AddObjectToObject(t, "dynamic_price");
@@ -1964,10 +1967,36 @@ static cJSON *cfg_capture(void)
             cJSON *o = cJSON_AddObjectToObject(zs, ZN[z]);
             cJSON_AddNumberToObject(o, "buy_per_kwh", r4(tp->zones[z].rate_buying_per_kwh));
             cJSON_AddNumberToObject(o, "sell_per_kwh", r4(tp->zones[z].rate_selling_per_kwh));
+            char w[12]; if (zone_window(&tp->zones[z], w)) cJSON_AddStringToObject(o, "window", w);
         }
     }
     return r;
 }
+/* The zone's time window "HH:MM-HH:MM" when it has exactly one active TIME_RANGE condition (the only shape writable over
+ * LLM: other conditions — weekdays, dates, holidays — stay as they are). Half-open [from, to); to < from wraps midnight. */
+static bool zone_window(const rbpower_tariff_zone_t *zo, char out[12])
+{
+    int n = 0, k = -1;
+    for (int j = 0; j < 4 && j < zo->conditions_count; j++)
+        if (zo->conditions[j].is_active && zo->conditions[j].condition_type == RBPOWER_TARIFF_CONDITION_TIME_RANGE) { n++; k = j; }
+    if (n != 1) return false;
+    const typeof(zo->conditions[k].params.time_range) *tr = &zo->conditions[k].params.time_range;
+    snprintf(out, 12, "%02u:%02u-%02u:%02u", (unsigned)(tr->start_hour % 24), (unsigned)(tr->start_minute % 60),
+             (unsigned)(tr->end_hour % 24), (unsigned)(tr->end_minute % 60));
+    return true;
+}
+/* Parse "HH:MM-HH:MM" (minutes on the 15-min grid, 24:00 allowed as an end). */
+static bool parse_window(const char *w, int *sh, int *sm, int *eh, int *em)
+{
+    if (!w || strlen(w) != 11 || w[2] != ':' || w[5] != '-' || w[8] != ':') return false;
+    for (int i = 0; i < 11; i++) if (i != 2 && i != 5 && i != 8 && (w[i] < '0' || w[i] > '9')) return false;
+    *sh = (w[0] - '0') * 10 + (w[1] - '0'); *sm = (w[3] - '0') * 10 + (w[4] - '0');
+    *eh = (w[6] - '0') * 10 + (w[7] - '0'); *em = (w[9] - '0') * 10 + (w[10] - '0');
+    if (*eh == 24 && *em == 0) *eh = 0;
+    if (*sh > 23 || *eh > 23 || *sm % 15 || *em % 15 || *sm > 45 || *em > 45) return false;
+    return (*sh * 60 + *sm) != (*eh * 60 + *em);
+}
+
 static void cfg_hash(const cJSON *cap, char out[17])
 {
     char *t = cJSON_PrintUnformatted(cap);
@@ -2161,7 +2190,22 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
                     const cJSON *r;
                     cJSON *oz = NULL;
                     cJSON_ArrayForEach(r, z) {
-                        if (strcmp(r->string, "buy_per_kwh") && strcmp(r->string, "sell_per_kwh")) { snprintf(m, sizeof(m), "tariff.zones.%s.%.20s: buy_per_kwh or sell_per_kwh", z->string, r->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                        if (!strcmp(r->string, "window")) {
+                            int sh, sm, eh, em;
+                            const char *was = cJSON_GetStringValue(cJSON_GetObjectItem(cz, "window"));
+                            if (!was) { snprintf(m, sizeof(m), "tariff.zones.%.20s.window: this zone is not one time window (weekdays, dates or several windows)", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "Change it on the hub's tariff page."); }
+                            if (!cJSON_IsString(r) || !parse_window(r->valuestring, &sh, &sm, &eh, &em)) { snprintf(m, sizeof(m), "tariff.zones.%.20s.window: \"HH:MM-HH:MM\", minutes 00/15/30/45, from != to", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "Example \"22:00-06:00\" (wraps midnight); 24:00 is allowed as an end."); }
+                            char nw[12]; snprintf(nw, sizeof(nw), "%02d:%02d-%02d:%02d", sh, sm, eh, em);
+                            if (!strcmp(nw, was)) continue;
+                            if (!oz) oz = cJSON_AddObjectToObject(nz, z->string);
+                            cJSON_AddStringToObject(oz, "window", nw);
+                            cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s.window", z->string);
+                            cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", was); cJSON_AddStringToObject(d, "to", nw);
+                            cJSON_AddItemToArray(diff, d);
+                            cJSON_AddItemToArray(warn, cJSON_CreateString("A new zone window applies from the next 15-min period; hours already booked keep their zone. Hours no zone covers fall to the plan's default zone; overlaps go to the zone with the higher priority."));
+                            continue;
+                        }
+                        if (strcmp(r->string, "buy_per_kwh") && strcmp(r->string, "sell_per_kwh")) { snprintf(m, sizeof(m), "tariff.zones.%s.%.20s: buy_per_kwh, sell_per_kwh or window", z->string, r->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
                         if (!cJSON_IsNumber(r) || r->valuedouble < 0 || r->valuedouble > 100) { snprintf(m, sizeof(m), "tariff.zones.%s.%s: 0..100 per kWh (before fees and VAT)", z->string, r->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "A price per MWh must be divided by 1000."); }
                         double was = cJSON_GetNumberValue(cJSON_GetObjectItem(cz, r->string));
                         if (fabs(was - r->valuedouble) < 1e-6) continue;
@@ -2233,6 +2277,23 @@ static bool apply_tariff(rbllm_cx_t *cx, const cJSON *nt, char *m, size_t mlen)
         const cJSON *b = cJSON_GetObjectItem(z, "buy_per_kwh"), *sl = cJSON_GetObjectItem(z, "sell_per_kwh");
         if (b) cJSON_ReplaceItemInObject(dz, "rate_buying_per_kwh", cJSON_CreateNumber(b->valuedouble));
         if (sl) cJSON_ReplaceItemInObject(dz, "rate_selling_per_kwh", cJSON_CreateNumber(sl->valuedouble));
+        const char *wv = cJSON_GetStringValue(cJSON_GetObjectItem(z, "window"));
+        if (wv) {
+            int sh, sm, eh, em;
+            cJSON *tc = NULL, *c; int ntr = 0;
+            cJSON_ArrayForEach(c, cJSON_GetObjectItem(dz, "conditions")) {
+                const char *ty = cJSON_GetStringValue(cJSON_GetObjectItem(c, "condition_type"));
+                if (ty && !strcmp(ty, "TIME_RANGE") && cJSON_IsTrue(cJSON_GetObjectItem(c, "is_active"))) { tc = c; ntr++; }
+            }
+            if (!parse_window(wv, &sh, &sm, &eh, &em) || ntr != 1) { cJSON_Delete(d); snprintf(m, mlen, "tariff.zones.%s.window: the zone has no single time window in the plan document", z->string); return false; }
+            cJSON *pr = cJSON_GetObjectItem(tc, "params");
+            if (!pr) pr = cJSON_AddObjectToObject(tc, "params");
+            const char *ks[] = { "start_hour", "start_minute", "end_hour", "end_minute" };
+            int vs[] = { sh, sm, eh, em };
+            for (int q = 0; q < 4; q++) { cJSON_DeleteItemFromObject(pr, ks[q]); cJSON_AddNumberToObject(pr, ks[q], vs[q]); }
+            cJSON_DeleteItemFromObject(pr, "spans_midnight");
+            cJSON_AddBoolToObject(pr, "spans_midnight", (sh * 60 + sm) > (eh * 60 + em));
+        }
     }
     char *out = cJSON_PrintUnformatted(d);
     cJSON_Delete(d);
@@ -2244,6 +2305,15 @@ static bool apply_tariff(rbllm_cx_t *cx, const cJSON *nt, char *m, size_t mlen)
     if (pe != RBGRID_JSON_OK) { snprintf(m, mlen, "tariff: saved, but the hub could not apply it (%d); it applies after a restart", (int)pe); return false; }
     (void)cx;
     return true;
+}
+
+/* A patch that sets a clamp model restarts that metering module (a few seconds without data); the hub itself never
+ * restarts for any field writable in v1, so restart_required stays false. */
+static bool patch_restarts_module(const cJSON *patch)
+{
+    const cJSON *c;
+    cJSON_ArrayForEach(c, cJSON_GetObjectItem(patch, "channels")) if (cJSON_GetObjectItem(c, "ct_model")) return true;
+    return false;
 }
 
 /* Patch that turns `cur` into `target` (both captures). */
@@ -2286,6 +2356,8 @@ static cJSON *patch_between(const cJSON *cur, const cJSON *target)
                 double x = cJSON_GetNumberValue(cJSON_GetObjectItem(z, ks[q])), y = cJSON_GetNumberValue(cJSON_GetObjectItem(cz, ks[q]));
                 if (fabs(x - y) > 1e-6) { if (!one) one = cJSON_AddObjectToObject(zo, z->string); cJSON_AddNumberToObject(one, ks[q], x); }
             }
+            const char *wx = cJSON_GetStringValue(cJSON_GetObjectItem(z, "window")), *wy = cJSON_GetStringValue(cJSON_GetObjectItem(cz, "window"));
+            if (wx && wy && strcmp(wx, wy)) { if (!one) one = cJSON_AddObjectToObject(zo, z->string); cJSON_AddStringToObject(one, "window", wx); }
         }
         if (cJSON_GetArraySize(zo)) cJSON_AddItemToObject(o, "zones", zo); else cJSON_Delete(zo);
         if (cJSON_GetArraySize(o)) cJSON_AddItemToObject(p, "tariff", o); else cJSON_Delete(o);
@@ -2341,6 +2413,7 @@ static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddItemToObject(r, "diff", diff);
     cJSON_AddItemToObject(r, "warnings", w2);
     cJSON_AddBoolToObject(r, "restart_required", false);
+    cJSON_AddBoolToObject(r, "module_restart", patch_restarts_module(norm));
     cJSON_AddStringToObject(r, "confirm_token", tok);
     cJSON_AddNumberToObject(r, "expires_in", PROP_TTL_S);
     cJSON_AddStringToObject(r, "base_version", base);
@@ -2434,6 +2507,7 @@ static cJSON *t_apply_config(const cJSON *a, rbllm_cx_t *cx)
     char h[17]; cfg_hash(cur, h);
     if (strcmp(h, p.base)) { cJSON_Delete(cur); cJSON_Delete(p.patch); return fail(cx, "conflict", "the settings changed since the proposal", "Read get_config and propose again."); }
     ver_sync("hub", NULL);   /* the state before, if not yet recorded */
+    bool modr = patch_restarts_module(p.patch);
     bool ok = apply_patch(cx, p.patch, cur);
     cJSON_Delete(cur); cJSON_Delete(p.patch);
     if (!ok) return NULL;
@@ -2447,6 +2521,7 @@ static cJSON *t_apply_config(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddNumberToObject(r, "version", v);
     cJSON_AddBoolToObject(r, "applied", true);
     cJSON_AddBoolToObject(r, "restart_required", false);
+    cJSON_AddBoolToObject(r, "module_restart", modr);
     cJSON_AddStringToObject(r, "summary", p.summary);
     note(cx, "Applied. list_config_versions shows it; propose_config {rollback_to} undoes it.");
     cx->as_of = now_s();
@@ -2531,7 +2606,7 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
         for (int q = 0; q < 4; q++) { f = cJSON_AddObjectToObject(w, NN[q].k); cJSON_AddStringToObject(f, "type", "number"); cJSON_AddNumberToObject(f, "minimum", 0); cJSON_AddNumberToObject(f, "maximum", NN[q].hi); cJSON_AddStringToObject(f, "description", NN[q].d); }
         f = cJSON_AddObjectToObject(w, "zones");
         cJSON_AddStringToObject(f, "type", "object");
-        cJSON_AddStringToObject(f, "description", "{<zone>: {buy_per_kwh?, sell_per_kwh?}} for the zones get_config lists; 0..100 per kWh, before fees and VAT. Zone time windows are set on the hub page.");
+        cJSON_AddStringToObject(f, "description", "{<zone>: {buy_per_kwh?, sell_per_kwh?, window?}} for the zones get_config lists; prices 0..100 per kWh, before fees and VAT; window \"HH:MM-HH:MM\" (15-min grid, [from,to), wraps midnight when to < from) only for a zone get_config shows with a window. Weekdays, dates and priorities are set on the hub page.");
         note(cx, "A flat tariff on a two-zone plan: give every zone the same price.");
     } else {
         note(cx, "Nothing in this section is writable over LLM yet; the user changes it on the hub page.");
@@ -2700,15 +2775,29 @@ static cJSON *t_identify_channel(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddNumberToObject(o, "now_w", r2(s.now[k]));
         cJSON_AddItemToArray(arr, o);
     }
-    free(p);
     /* the verdict */
     const char *verdict = "no_step";
+    bool nested_pick = false, same_wire = false;
+    if (m > 1) {
+        /* two similar steps where one point is measured inside the other: the appliance is on the inner one */
+        int k0 = ord[0], k1 = ord[1];
+        float a0 = fabsf(id_step(s.base[k0], s.mn[k0], s.mx[k0])), a1 = fabsf(id_step(s.base[k1], s.mn[k1], s.mx[k1]));
+        if (a0 >= ID_MIN_STEP_W && a0 < 2.0f * a1) {
+            uint16_t in0 = 0, in1 = 0;
+            for (int q = 0; q < n; q++) { if (p[q].unit_id == s.uid[k0]) in0 = p[q].inside; if (p[q].unit_id == s.uid[k1]) in1 = p[q].inside; }
+            if (in1 == s.uid[k0]) { ord[0] = k1; ord[1] = k0; nested_pick = true; }        /* k1 is inside k0 */
+            else if (in0 == s.uid[k1]) nested_pick = true;                                  /* k0 already the inner */
+            else if (fabsf(gstep) >= ID_MIN_STEP_W && a0 / fabsf(gstep) > 0.8f && a1 / fabsf(gstep) > 0.8f) same_wire = true;
+        }
+    }
     if (m > 0) {
         int k = ord[0];
         float s1 = id_step(s.base[k], s.mn[k], s.mx[k]);
         float s2 = m > 1 ? fabsf(id_step(s.base[ord[1]], s.mn[ord[1]], s.mx[ord[1]])) : 0.0f;
         if (fabsf(s1) >= ID_MIN_STEP_W) {
-            verdict = (fabsf(s1) >= 2.0f * s2) ? "identified" : "ambiguous";
+            verdict = (nested_pick || fabsf(s1) >= 2.0f * s2) ? "identified" : "ambiguous";
+            if (nested_pick) note(cx, "The step shows on a channel and on the channel it is measured inside; the appliance is on the inner one (channel_id).");
+            if (same_wire) note(cx, "Both channels saw the whole step: one circuit feeds the other (set inside on the inner channel), or two clamps sit on the same cable.");
             char h[5]; uid_hex(s.uid[k], h);
             if (!strcmp(verdict, "identified")) cJSON_AddStringToObject(r, "channel_id", h);
             /* the grid sees the same appliance: opposite signs on a load point = a clamp the wrong way round */
@@ -2725,6 +2814,12 @@ static cJSON *t_identify_channel(const cJSON *a, rbllm_cx_t *cx)
             }
         }
     }
+    if (!strcmp(verdict, "no_step") && fabsf(gstep) >= ID_MIN_STEP_W) {
+        verdict = "grid_only";
+        char nb[200];
+        snprintf(nb, sizeof(nb), "The grid saw a step of %.0f W but no channel did: the appliance is on a circuit without its own clamp (only the main supply measures it).", fabsf(gstep));
+        note(cx, nb);
+    }
     cJSON_AddStringToObject(r, "verdict", verdict);
     if (!strcmp(verdict, "no_step") && s.running)
         note(cx, "No step of 60 W or more yet. Ask the user whether the appliance is on, then call result again (the window is still open).");
@@ -2732,6 +2827,7 @@ static cJSON *t_identify_channel(const cJSON *a, rbllm_cx_t *cx)
         note(cx, "No step of 60 W or more in the window. Start again with a bigger appliance (kettle, heater).");
     else if (!strcmp(verdict, "ambiguous"))
         note(cx, "Two channels moved by a similar amount: ask the user to switch the appliance off again and call start once more.");
+    free(p);
     cx->as_of = now_s(); cx->resolution = "live";
     return r;
 }
@@ -2848,7 +2944,7 @@ static const rbllm_tool_t TOOLS[] = {
     { "propose_config", RBLLM_SCOPE_CONFIG,
       "When to call: when the user wants to rename a channel, change its role, parent or clamp model, enter their tariff (prices, VAT, fees), set the peaks cycle day, or undo a change. "
       "What it returns: the diff, warnings and a one-time confirm_token (10 min). Changes nothing; show the diff and ask the user.",
-      "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,role?,inside?,ct_model?}}, tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?}}}, peaks_cycle_day?}\"},"
+      "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,role?,inside?,ct_model?}}, tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?,window?:\\\"HH:MM-HH:MM\\\"}}}, peaks_cycle_day?}\"},"
       "\"rollback_to\":{\"type\":\"integer\",\"description\":\"a version from list_config_versions\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"}}}",
       t_propose_config },
