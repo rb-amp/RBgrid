@@ -2825,7 +2825,7 @@ static cJSON *t_identify_channel(const cJSON *a, rbllm_cx_t *cx)
         note(cx, "No step of 60 W or more yet. Ask the user whether the appliance is on, then call result again (the window is still open).");
     else if (!strcmp(verdict, "no_step"))
         note(cx, "No step of 60 W or more in the window. Start again with a bigger appliance (kettle, heater).");
-    else if (!strcmp(verdict, "ambiguous"))
+    else if (!strcmp(verdict, "ambiguous") && !same_wire)   /* same cable: repeating won't separate them */
         note(cx, "Two channels moved by a similar amount: ask the user to switch the appliance off again and call start once more.");
     free(p);
     cx->as_of = now_s(); cx->resolution = "live";
