@@ -27,6 +27,7 @@
 #include "rbextflash_buffer_write.h"
 #include "rbstats_migrate.h"   /* pending queue: retry of failed / gated record sets */
 #include "rbextflash_operations.h"
+#include "rbstorage_media.h"   /* rbmedia_watch_tick: statistics chip drop-out watch */
 #include "rbstorage_transfer_types.h"  // For rbpower_electrical_transfer_t, rbpower_energy_transfer_t, etc.
 #include <string.h>
 #include <stdio.h>
@@ -459,6 +460,7 @@ static void rbpower_statistics_task(void* pvParameters)
         // Wait for events from queue
         BaseType_t got_event = xQueueReceive(g_stats_system.statistics_event_queue, &event, pdMS_TO_TICKS(1000));
         rbpower_stats_service_tick();   /* open-hour restore at boot + hour boundary timeout (rate-limited, 1 s) */
+        rbmedia_watch_tick();           /* external statistics chip still there? (10 s, same task as the writes) */
         if (got_event != pdTRUE) {
             /* No period event for a second. The 3-s chain runs on the esp_timer task under the home
              * lock, so a long console/flash operation holding that lock stalls the chain and this
