@@ -309,10 +309,14 @@ esp_err_t external_flash_init(void)
     ext_stats_select();
 
     g_flash_state.status.initialized = true;
-    ESP_LOGI(TAG, "storage: config INTERNAL %u KB, statistics %s %u KB",
-             (unsigned)(g_flash_state.partitions.config_size / 1024),
-             rbmedia_mode() == RBMEDIA_EXTERNAL ? "EXTERNAL" : rbmedia_mode() == RBMEDIA_INTERNAL ? "INTERNAL" : "NONE (RAM-only)",
-             (unsigned)(g_flash_state.partitions.stats_size / 1024));
+    if (rbmedia_mode() == RBMEDIA_NONE)
+        ESP_LOGW(TAG, "storage: config INTERNAL %u KB, statistics NONE (chip missing, RAM-only)",
+                 (unsigned)(g_flash_state.partitions.config_size / 1024));
+    else
+        ESP_LOGI(TAG, "storage: config INTERNAL %u KB, statistics %s %u KB",
+                 (unsigned)(g_flash_state.partitions.config_size / 1024),
+                 rbmedia_mode() == RBMEDIA_EXTERNAL ? "EXTERNAL" : "INTERNAL",
+                 (unsigned)(g_flash_state.partitions.stats_size / 1024));
     return ESP_OK;
 }
 

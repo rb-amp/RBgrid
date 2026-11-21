@@ -2606,6 +2606,13 @@ esp_err_t rbpower_flash_init_buffers_from_network(void)
 
     ESP_LOGD(TAG, "✓ External Flash available (initialized, filesystem mounted)");
 
+    if (rbmedia_mode() == RBMEDIA_NONE) {
+        /* The adopted statistics chip is missing: no slots to place units in (each unit would log a false
+         * "slot limit reached"). The history stays on the chip; units get their slots once it is back. */
+        ESP_LOGW(TAG, "statistics chip missing — no unit slots placed, history RAM-only");
+        return ESP_OK;
+    }
+
    // 2. Check that the home network is initialized
     extern rbpower_electrical_network_t g_home_network;
 

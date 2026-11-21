@@ -53,6 +53,11 @@ void rbmedia_detach(void)
 
 rbmedia_mode_t rbmedia_mode(void) { return s_mode; }
 
+const char *rbmedia_stats_media_str(void)
+{
+    return s_mode == RBMEDIA_EXTERNAL ? "external" : s_mode == RBMEDIA_INTERNAL ? "internal" : "none";
+}
+
 uint32_t rbmedia_stats_region_size(void)
 {
     if (s_mode == RBMEDIA_INTERNAL) return (uint32_t)s_stats_part->size;

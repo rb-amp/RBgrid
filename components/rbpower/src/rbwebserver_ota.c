@@ -29,6 +29,7 @@ extern int rbpower_stats_flush_open_hours(void);   /* rbhome_types.h — open-ho
 #include <stdio.h>
 
 #include "rbgrid_core.h"
+#include "rbstorage_media.h"   /* stats_media */
 
 static const char *TAG = "RBWEBSERVER_OTA";
 
@@ -45,10 +46,11 @@ esp_err_t rbwebserver_api_version_handler(httpd_req_t *req)
     char body[400];
     snprintf(body, sizeof(body),
              "{\"version\":\"%s\",\"project\":\"%s\",\"idf\":\"%s\",\"build_date\":\"%s %s\",\"partition\":\"%s\","
-             "\"storage_state\":\"%s\",\"storage_progress\":%u,\"image_md5\":\"%s\"}",
+             "\"storage_state\":\"%s\",\"storage_progress\":%u,\"stats_media\":\"%s\",\"image_md5\":\"%s\"}",
              app ? app->version : "?", app ? app->project_name : "?", app ? app->idf_ver : "?",
              app ? app->date : "?", app ? app->time : "?", running ? running->label : "?",
-             rbstats_store_state_str(), (unsigned)rbstats_migrate_progress(), rbwebserver_running_image_md5());
+             rbstats_store_state_str(), (unsigned)rbstats_migrate_progress(), rbmedia_stats_media_str(),
+             rbwebserver_running_image_md5());
     httpd_resp_sendstr(req, body);
     return ESP_OK;
 }

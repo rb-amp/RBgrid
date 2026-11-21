@@ -72,6 +72,12 @@ void rbmedia_detach(void);
 rbmedia_mode_t rbmedia_mode(void);
 
 /**
+ * @brief Statistics medium for the API: "internal", "external" or "none" (after boot: the adopted external
+ *        chip is missing, statistics are RAM-only and the history reads empty until it is back).
+ */
+const char *rbmedia_stats_media_str(void);
+
+/**
  * @brief Size of the stats region in the EXTERNAL-layout convention.
  *
  * The ring layer computes the slot count as region_size / slot size and the bounds as
