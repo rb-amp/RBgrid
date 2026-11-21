@@ -27,7 +27,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define RBAMP_MAX_MODULES   8   /**< Maximum rbAmp modules in the fleet (all on bus 0). 8 x UI7 = 56 current points fits RBPOWER_MAX_HOME_UNITS (64) and RBPOWER_MODULE_DESC_MAX (8); unit ids carry the module in 4 bits */
+#define RBAMP_MAX_MODULES   8   /**< Maximum rbAmp modules in the fleet (on one or two I2C buses). 8 x UI7 = 56 current points fits RBPOWER_MAX_HOME_UNITS (64) and RBPOWER_MODULE_DESC_MAX (8); unit ids carry the module in 4 bits */
 #define RBAMP_MAX_ENTRIES   8   /**< Inject entries per module: voltage + up to 7 current channels */
 #define RBAMP_ENTRY_VOLTAGE 0xFF /**< entry.source sentinel: feed the module voltage (not a current channel) */
 #define RBAMP_ENTRY_PHASES  0xFE /**< entry.source sentinel: ALL current channels of the module are

@@ -1208,13 +1208,9 @@ int rbgrid_config_bind_unit(const rbgrid_create_unit_req_t* req, rbpower_unit_id
     float rated;
 
     if (strcmp(req->iface, "i2c") == 0) {
-        /* Bus is FORCED to 0 to match add_rbamp_module's canonical id (the fleet is single-bus and the
-         * fleet match below is module/ch only). A client-supplied bus!=0 would otherwise compute a
-         * non-canonical uid that the duplicate guard misses → a phantom unit. */
-        if (req->bus != 0) {
-            ESP_LOGE(TAG, "bind: only i2c bus 0 supported (got %u)", req->bus);
-            return RBGRID_CONFIG_ERR_INVALID_PARAM;
-        }
+        /* The fleet module index identifies the sensor on either bus (two-bus fleet); the unit id is an opaque
+         * handle, so the bus no longer enters it. req->bus is only cross-checked against the fleet entry below.
+         * (Until 1.3.0 a bus != 0 was refused here, so bus-1 sensors could not get a point.) */
 
         /* Sensor occupancy is decided by scanning live units' PHYSICAL binding
          * (device_uid=module, channel_idx=ch), not by id equality — ids are opaque now. */
@@ -1239,6 +1235,9 @@ int rbgrid_config_bind_unit(const rbgrid_create_unit_req_t* req, rbpower_unit_id
         if (rbgrid_storage_load_rbamp(&fleet) == ESP_OK &&
             req->module < fleet.module_count && req->module < RBAMP_MAX_MODULES) {
             const rbamp_module_cfg_t* fm = &fleet.modules[req->module];
+            if (fm->bus != req->bus)
+                ESP_LOGW(TAG, "bind: module %u sits on bus %u, request said bus %u — the module index wins",
+                         req->module, fm->bus, req->bus);
             for (uint8_t e = 0; e < fm->entry_count && e < RBAMP_MAX_ENTRIES; ++e) {
                 if (fm->entries[e].source == req->ch) { ct_code = fm->entries[e].ct_code; found = true; break; }
             }
