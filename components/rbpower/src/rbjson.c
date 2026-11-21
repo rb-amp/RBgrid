@@ -2276,6 +2276,11 @@ char* rbgrid_json_create_wifi_config(const rbgrid_json_context_t* context) {
  * ================================================================================================ */
 #define RBAMP_CONFIG_JSON_VERSION 1   ///< Format version written to /rbamp.json ("version")
 
+/* Module -> I2C bus, refreshed whenever the fleet config is parsed or serialized, so per-frame JSON (telemetry
+ * source objects) can name the real bus without loading the fleet from flash. */
+static uint8_t s_module_bus[RBAMP_MAX_MODULES];
+static int rbjson_module_bus(int m) { return (m >= 0 && m < RBAMP_MAX_MODULES) ? s_module_bus[m] : 0; }
+
 char* rbgrid_json_create_rbamp_config(const rbamp_bridge_config_t* cfg) {
     if (!cfg) {
         ESP_LOGE(TAG, "create_rbamp_config: cfg is NULL");
@@ -2322,6 +2327,7 @@ char* rbgrid_json_create_rbamp_config(const rbamp_bridge_config_t* cfg) {
         cJSON* mod_obj = cJSON_CreateObject();
         if (!mod_obj) continue;
         cJSON_AddNumberToObject(mod_obj, "addr", mod->addr);
+        s_module_bus[m] = mod->bus;
         if (mod->bus) cJSON_AddNumberToObject(mod_obj, "bus", mod->bus);
         if (mod->drdy_p1) cJSON_AddNumberToObject(mod_obj, "drdy_gpio", mod->drdy_p1 - 1);
         if (mod->phase) cJSON_AddNumberToObject(mod_obj, "phase", mod->phase);
@@ -2421,6 +2427,7 @@ rbgrid_json_err_t rbgrid_json_parse_rbamp_config(const char* json_str, rbamp_bri
             mod->drdy_p1 = ((it = cJSON_GetObjectItem(mod_obj, "drdy_gpio")) && cJSON_IsNumber(it) && it->valueint >= 0 &&
                             it->valueint <= 39) ? (uint8_t)(it->valueint + 1) : 0;
             mod->bus = ((it = cJSON_GetObjectItem(mod_obj, "bus")) && cJSON_IsNumber(it) && it->valueint == 1) ? 1 : 0;
+            s_module_bus[m] = mod->bus;
             if ((it = cJSON_GetObjectItem(mod_obj, "phase")) && cJSON_IsNumber(it) && it->valueint >= 0 && it->valueint <= 3) mod->phase = (uint8_t)it->valueint;
             cJSON* entries = cJSON_GetObjectItem(mod_obj, "entries");
             uint8_t e = 0;
@@ -3283,11 +3290,11 @@ static void rbgrid_telemetry_add_source(cJSON* obj, uint16_t unit_id) {
     if (is_i2c || feed) {
         cJSON_AddStringToObject(obj, "src", "i2c");
         cJSON_AddStringToObject(obj, "src_class", "rbamp");
-        cJSON_AddNumberToObject(obj, "bus",    0);  /* fleet is single-bus */
-        /* ch: current channel 0..2; 255 = module voltage; 254 = all current channels grouped (PHASES) */
-        cJSON_AddNumberToObject(obj, "module", feed  ? (int)feed_module :
-                                               t7def ? (int)t7def->device_uid
-                                                     : (int)RBGRID_I2C_GET_MODULE(unit_id));
+        {   /* ch: current channel 0..2; 255 = module voltage; 254 = all current channels grouped (PHASES) */
+            int mod_i = feed ? (int)feed_module : t7def ? (int)t7def->device_uid : (int)RBGRID_I2C_GET_MODULE(unit_id);
+            cJSON_AddNumberToObject(obj, "bus",    rbjson_module_bus(mod_i));   /* two-bus fleet */
+            cJSON_AddNumberToObject(obj, "module", mod_i);
+        }
         {
             int chv = feed  ? (int)feed_source : t7def ? (int)t7def->channel_idx : (int)RBGRID_I2C_GET_CHANNEL(unit_id);
             cJSON_AddNumberToObject(obj, "ch", chv);
@@ -3596,7 +3603,7 @@ char* rbgrid_json_create_telemetry_frame(uint8_t frame) {
                 cJSON_AddBoolToObject(vbus_obj, "present", true);
                 cJSON_AddStringToObject(vbus_obj, "src", "i2c");
                 cJSON_AddStringToObject(vbus_obj, "src_class", "rbamp");
-                cJSON_AddNumberToObject(vbus_obj, "bus",    0);
+                cJSON_AddNumberToObject(vbus_obj, "bus",    rbjson_module_bus(gp[0].src_module));
                 cJSON_AddNumberToObject(vbus_obj, "module", gp[0].src_module);
                 cJSON_AddNumberToObject(vbus_obj, "ch",     255);   /* module voltage input(s), see ph[].vch */
                 cJSON_AddNumberToObject(vbus_obj, "n_ph",   ng);
