@@ -49,6 +49,15 @@ menu "RBPower Configuration"
             firmware, where core 1 is otherwise free. A host that runs its own loop on core 1 (ESPHome: loopTask,
             priority 1) sets it higher (5), so the poll cadence and the energy timestamps don't wait for the host.
 
+    config RBGRID_EXTFLASH_TEST_MIN_KB
+        int "Bench only: adopt an external statistics chip smaller than the internal region (KB, 0 = off)"
+        range 0 16384
+        default 0
+        help
+            0 (product): the external chip takes the statistics only when its region is larger than the internal
+            stats partition. A bench build sets e.g. 1024 to test with a 4 MB chip; the one-time copy then refuses
+            (statistics stay internal) if the recorded history does not fit on the chip.
+
     config RBGRID_PANIC_FORENSICS
         bool "Record the crash PC/backtrace in RTC memory for the next boot's event log"
         default y

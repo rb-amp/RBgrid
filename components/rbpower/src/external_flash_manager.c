@@ -24,6 +24,7 @@
  * There is no authenticity check of the chip: any W25Q-class NOR of 8 MB or more is used.
  */
 
+#include "sdkconfig.h"
 #include "external_flash_config.h"
 #include "littlefs_raw.h"
 #include "rbstorage_media.h"
@@ -137,7 +138,7 @@ static esp_err_t ext_clean_region(esp_flash_t *h, uint32_t size, uint8_t *buf)
 
 /** Copy the internal stats region onto the chip at the same offsets (blank sectors skipped), verify
  *  each written sector. *any = at least one non-blank sector was copied. */
-static esp_err_t ext_copy_internal(esp_flash_t *h, uint8_t *buf, uint8_t *chk, bool *any)
+static esp_err_t ext_copy_internal(esp_flash_t *h, uint32_t ext_size, uint8_t *buf, uint8_t *chk, bool *any)
 {
     *any = false;
     uint32_t isz = rbmedia_stats_region_size(), copied = 0;
@@ -145,6 +146,11 @@ static esp_err_t ext_copy_internal(esp_flash_t *h, uint8_t *buf, uint8_t *chk, b
         esp_err_t e = rbmedia_stats_read(PARTITION_STATS_OFFSET + off, buf, 4096);
         if (e != ESP_OK) return e;
         if (all_ff(buf, 4096)) continue;
+        if (off + 4096 > ext_size) {   /* only with a smaller bench chip (RBGRID_EXTFLASH_TEST_MIN_KB) */
+            ESP_LOGE(TAG, "recorded history reaches %lu KB, the chip region holds %lu KB — not adopted",
+                     (unsigned long)((off + 4096) / 1024), (unsigned long)(ext_size / 1024));
+            return ESP_ERR_INVALID_SIZE;
+        }
         e = esp_flash_write(h, buf, PARTITION_STATS_OFFSET + off, 4096);
         if (e == ESP_OK) e = esp_flash_read(h, chk, PARTITION_STATS_OFFSET + off, 4096);
         if (e != ESP_OK) return e;
@@ -201,6 +207,12 @@ static void ext_stats_select(void)
     }
     uint32_t isz = rbmedia_stats_region_size();
     bool big = chip && (size - PARTITION_STATS_OFFSET) > isz;
+#if CONFIG_RBGRID_EXTFLASH_TEST_MIN_KB > 0
+    if (chip && !big && (size - PARTITION_STATS_OFFSET) >= CONFIG_RBGRID_EXTFLASH_TEST_MIN_KB * 1024u) {
+        ESP_LOGW(TAG, "BENCH BUILD: accepting a %" PRIu32 " KB chip smaller than the internal region", size >> 10);
+        big = true;
+    }
+#endif
 
     if (!big) {
         deinit_external_flash();
@@ -237,7 +249,7 @@ static void ext_stats_select(void)
     bool any = false;
     esp_err_t e = (buf && chk) ? ESP_OK : ESP_ERR_NO_MEM;
     if (e == ESP_OK) e = ext_clean_region(h, size - PARTITION_STATS_OFFSET, buf);
-    if (e == ESP_OK) e = ext_copy_internal(h, buf, chk, &any);
+    if (e == ESP_OK) e = ext_copy_internal(h, size - PARTITION_STATS_OFFSET, buf, chk, &any);
     free(buf);
     free(chk);
     if (e != ESP_OK) {
