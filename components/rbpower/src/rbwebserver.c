@@ -1167,6 +1167,15 @@ static esp_err_t register_uri_handlers(wifi_mode_t wifi_mode)
     httpd_uri_t lang_post_uri = { .uri = "/api/system/lang", .method = HTTP_POST, .handler = rbwebserver_ui_lang_handler, .user_ctx = NULL };
     httpd_register_uri_handler(g_server_handle, &lang_get_uri);
     httpd_register_uri_handler(g_server_handle, &lang_post_uri);
+    /* the app's dashboard layout (stored, never interpreted) */
+    {
+        static const httpd_method_t ui_state_methods[] = { HTTP_GET, HTTP_PUT, HTTP_DELETE, HTTP_OPTIONS };
+        for (size_t i = 0; i < sizeof(ui_state_methods) / sizeof(ui_state_methods[0]); i++) {
+            httpd_uri_t u = { .uri = "/api/system/ui-state", .method = ui_state_methods[i],
+                              .handler = rbwebserver_api_ui_state_handler, .user_ctx = NULL };
+            httpd_register_uri_handler(g_server_handle, &u);
+        }
+    }
     /* NOT a slash-star catch-all: espnow/provisioning (and future routes) are registered from main
      * AFTER the server starts, and the first-registered match wins — a GET catch-all here
      * swallowed them. Explicit UI prefixes instead; anything

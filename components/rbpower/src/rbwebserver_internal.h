@@ -346,6 +346,7 @@ esp_err_t rbwebserver_api_token_handler(httpd_req_t *req);
  *         (4xx/5xx, including 401/403/429 from the token guard).
  */
 esp_err_t rbwebserver_api_backup_handler(httpd_req_t *req);
+esp_err_t rbwebserver_api_ui_state_handler(httpd_req_t *req);   /* GET/PUT/DELETE /api/system/ui-state */
 
 /**
  * @brief POST/OPTIONS /api/system/restore — restore every module config file from the backup slot, then
