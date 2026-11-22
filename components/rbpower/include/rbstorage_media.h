@@ -23,7 +23,6 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
-#include <stdbool.h>
 #include "esp_err.h"
 #include "esp_flash.h"
 
@@ -73,24 +72,10 @@ void rbmedia_detach(void);
 rbmedia_mode_t rbmedia_mode(void);
 
 /**
- * @brief Statistics medium for the API: "internal", "external" or "none" (the adopted external chip is missing
- *        at boot or stopped responding since; statistics are RAM-only and the history reads empty until the hub
- *        restarts with it).
+ * @brief Statistics medium for the API: "internal", "external" or "none" (after boot: the adopted external
+ *        chip is missing, statistics are RAM-only and the history reads empty until it is back).
  */
 const char *rbmedia_stats_media_str(void);
-
-/**
- * @brief TRUE when the external chip was attached at boot and has stopped responding since (see
- *        rbmedia_watch_tick()); the IO shims then return ESP_ERR_INVALID_STATE without touching it.
- */
-bool rbmedia_ext_lost(void);
-
-/**
- * @brief Drop-out watch of the external statistics chip; call about once a second from the task that writes the
- *        history. Every 10 s it reads the chip's identity; 3 failures in a row mark the chip lost for this boot
- *        (an IO error whose follow-up identity read fails marks it lost at once). No-op in other modes.
- */
-void rbmedia_watch_tick(void);
 
 /**
  * @brief Size of the stats region in the EXTERNAL-layout convention.

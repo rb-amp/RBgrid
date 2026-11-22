@@ -12,7 +12,6 @@
 #include "rbextflash_buffer_write.h"
 #include "rbextflash_operations.h"
 #include "rbstorage_transfer_types.h"
-#include "rbstorage_media.h"   /* rbmedia_ext_lost */
 #include "rbstats_migrate.h"   /* store gate + pending queue during deferred migration */
 #include "rbhome_types.h"     /* rbpower_diag_printf */
 #include "esp_log.h"
@@ -449,10 +448,6 @@ esp_err_t rbpower_flash_buffer_write_record_set(
     const rbstats_v4_meta_t* meta)
 {
     if (!electrical || !energy || !economics) return ESP_ERR_INVALID_ARG;
-    /* The statistics chip stopped responding during this boot: RAM-only, as with a chip missing at boot.
-     * No retry queue (it would only replay into the void) and no FAIL line per record — the drop-out
-     * itself was logged once (rbstorage_media.c). */
-    if (rbmedia_ext_lost()) return ESP_ERR_INVALID_STATE;
     if (rbstats_migrate_state() != RBSTATS_STORE_READY || rbstats_time_unsynced_gate()) {
         return rbstats_pending_enqueue(unit_id, period, electrical, energy, economics, meta);
     }
