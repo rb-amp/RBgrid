@@ -190,6 +190,10 @@ static esp_err_t ota_upload(httpd_req_t *req)
         woff += (size_t)r;
         mbedtls_sha256_update(&sha, (const unsigned char*)buf, r);
         remaining -= r;
+        /* Pace the upload: each flash write stops the cache on both cores, and Wi-Fi + lwIP on core 0 take the rest at
+         * full rate — IDLE0 got no time for 5 s and the task watchdog reset the hub mid-upload (classic ESP32, 22.11).
+         * The pause lets the TCP window close, so the sender slows and core 0 idles; about +5 s for a 1.9 MB image. */
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
     free(buf);
     unsigned char digest[32];
