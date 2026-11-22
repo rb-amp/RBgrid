@@ -115,6 +115,8 @@ static void ev_boot(void);
 static void ev_watch(void);
 static void ev_add(uint8_t type, uint8_t sev, uint16_t chan, const char *info);
 static void ensure_task(void);
+static void task_timer_cb(void *arg);
+static esp_timer_handle_t s_task_timer;
 static bool zone_window(const rbpower_tariff_zone_t *zo, char out[12]);
 
 static uint32_t now_s(void) { return (uint32_t)time(NULL); }
@@ -234,7 +236,14 @@ void rbllm_init(void)
     ulk();
     ESP_LOGI(TAG, "LLM API %s", S.enabled ? "on" : "off");
     ev_boot();
-    ensure_task();            /* the worker also runs the event watcher, so it starts with the hub */
+    /* The worker (it also runs the event watcher) starts 30 s after the hub, or at the first call if one comes
+     * sooner: its 12 KB stack is internal RAM, and in the first seconds Wi-Fi briefly needs that heap
+     * (WROVER 22.11: with the stack taken at boot the rbAmp poll task could not be created). */
+    if (!s_task_timer) {
+        const esp_timer_create_args_t ta = { .callback = task_timer_cb, .name = "rbllm_start" };
+        if (esp_timer_create(&ta, &s_task_timer) == ESP_OK) esp_timer_start_periodic(s_task_timer, 30LL * 1000 * 1000);
+        else ensure_task();
+    }
 }
 
 bool rbllm_enabled(void) { return S.enabled; }
@@ -3234,8 +3243,8 @@ typedef struct {
 } rbllm_job_t;
 
 #define RBLLM_STACK 12288   /* apply_config runs rbgrid_units_mutate, which keeps fleet config copies on the stack */
-static StaticTask_t s_task_buf;
-static StackType_t  s_task_stack[RBLLM_STACK];   /* internal RAM: the tools read flash (cache off) — no PSRAM stack */
+/* The stack is internal heap (the tools read flash with the cache off — no PSRAM stack), taken after the boot
+ * window rather than as static RAM; see rbllm_init. */
 static TaskHandle_t s_task;
 static QueueHandle_t s_q;
 static StaticQueue_t s_q_buf;
@@ -3263,9 +3272,21 @@ static void worker(void *arg)
 
 static void ensure_task(void)
 {
-    if (s_task) return;
-    s_q = xQueueCreateStatic(sizeof(s_q_store) / sizeof(rbllm_job_t), sizeof(rbllm_job_t), s_q_store, &s_q_buf);
-    s_task = xTaskCreateStatic(worker, "rbllm", RBLLM_STACK, NULL, 2, s_task_stack, &s_task_buf);
+    static volatile int s_creating;
+    if (s_task || __atomic_exchange_n(&s_creating, 1, __ATOMIC_ACQ_REL)) return;   /* timer task vs httpd */
+    if (!s_q) s_q = xQueueCreateStatic(sizeof(s_q_store) / sizeof(rbllm_job_t), sizeof(rbllm_job_t), s_q_store, &s_q_buf);
+    TaskHandle_t h = NULL;
+    if (xTaskCreate(worker, "rbllm", RBLLM_STACK, NULL, 2, &h) == pdPASS) s_task = h;
+    else ESP_LOGW(TAG, "worker not started yet (internal free %u, largest %u) — retry in 30 s",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    __atomic_store_n(&s_creating, 0, __ATOMIC_RELEASE);
+}
+
+static void task_timer_cb(void *arg)
+{
+    (void)arg;
+    ensure_task();
+    if (s_task) esp_timer_stop(s_task_timer);
 }
 
 bool rbllm_submit(char *body, size_t len, const rbllm_caller_t *caller, void (*done)(char *, void *), void *ctx)
@@ -3274,6 +3295,7 @@ bool rbllm_submit(char *body, size_t len, const rbllm_caller_t *caller, void (*d
         if (!s_mx) rbllm_init();
         ensure_task();
     }
+    if (!s_task || !s_q) return false;   /* worker not started (no internal heap for its stack): caller answers busy */
     rbllm_job_t j = { .body = body, .len = len, .done = done, .ctx = ctx,
                       .deadline_us = esp_timer_get_time() + (int64_t)RBLLM_CALL_TIMEOUT_MS * 1000 };
     if (caller) j.caller = *caller;
