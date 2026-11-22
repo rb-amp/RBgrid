@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025-2026 Zhuhai RobotDyn Technology Co., Ltd.
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
+#include "esp_attr.h"   /* EXT_RAM_BSS_ATTR: large zero-init arrays in PSRAM (internal RAM is short on ESP32) */
 #include "rbhome_types.h"
 /**
  * @file rbwebserver_wifi.c
@@ -620,7 +621,7 @@ static bool      s_wifi_scan_in_progress = false;
 static bool      s_wifi_scan_done        = false;
 static bool      s_wifi_scan_error       = false;
 static uint16_t  s_wifi_scan_count       = 0;
-static wifi_ap_record_t s_wifi_scan_results[WIFI_SCAN_MAX_AP];
+EXT_RAM_BSS_ATTR static wifi_ap_record_t s_wifi_scan_results[WIFI_SCAN_MAX_AP];
 
 static const char* wifi_auth_mode_str(wifi_auth_mode_t m) {
     switch (m) {
@@ -740,7 +741,7 @@ esp_err_t rbwebserver_wifi_scan_results_handler(httpd_req_t *req)
 
     // httpd serves requests on a single task → this static snapshot is not re-entrant-hazardous
     // and keeps ~2KB of AP records off the limited httpd stack.
-    static wifi_ap_record_t snapshot[WIFI_SCAN_MAX_AP];
+    EXT_RAM_BSS_ATTR static wifi_ap_record_t snapshot[WIFI_SCAN_MAX_AP];
     bool done = false, err = false;
     uint16_t count = 0;
     if (s_wifi_scan_mutex) xSemaphoreTake(s_wifi_scan_mutex, portMAX_DELAY);

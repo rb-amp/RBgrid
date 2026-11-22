@@ -57,7 +57,7 @@
 static rbpower_tariff_global_config_t g_tariff_global_config = {0};
 
 /** @brief Currently active tariff plan (default plan at init, replaced by the builder). Not lock-protected. */
-rbpower_tariff_plan_t g_current_tariff_plan = {0};
+EXT_RAM_BSS_ATTR rbpower_tariff_plan_t g_current_tariff_plan;   /* PSRAM; zeroed as .bss */
 
 // Extended tariff calendar
 /* g_tariff_calendar (rbpower_tariff_calendar_extended_t, ~22 KB) removed — it was write-only
@@ -100,7 +100,7 @@ void rbpower_tariff_set_test_time(int64_t unix_s) { g_tariff_test_time_override_
  * the credit balance down first, so the BILLABLE net import is reduced. Kept SEPARATE from the
  * per-15min gross cost (which stays as-validated) — net-metering is a billing-period overlay, settled
  * at the month boundary. The per-period gross cost is unchanged; net-metering is reported alongside. */
-static struct {
+EXT_RAM_BSS_ATTR static struct {
     double period_consumed_kwh;          // import accumulated this billing period (kWh)
     double period_supplied_kwh;          // export accumulated this billing period (kWh)
     double credit_balance_kwh;           // carried-over credit bank (kWh)

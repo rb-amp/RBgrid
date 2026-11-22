@@ -980,7 +980,7 @@ uint32_t rbpower_stats_quarter_boundary_now(void)
  * a hub booted at 23:50 whose first rollup lands at 00:00 would baseline INTO the new day and never
  * close yesterday / reset the daily counters). A baseline taken under an invalid clock (1970/uptime
  * epoch, no SNTP yet) is re-taken when the clock becomes valid, without firing boundaries. */
-static uint64_t s_last_bucket[RBPOWER_MAX_HOME_UNITS][RBSTATS_BK_COUNT];
+EXT_RAM_BSS_ATTR static uint64_t s_last_bucket[RBPOWER_MAX_HOME_UNITS][RBSTATS_BK_COUNT];
 static bool     s_bucket_init[RBPOWER_MAX_HOME_UNITS];
 static bool     s_bucket_clock_valid[RBPOWER_MAX_HOME_UNITS];
 /* Buckets closed while the hub was down: the lifetime snapshot of the previous run is the "last alive"

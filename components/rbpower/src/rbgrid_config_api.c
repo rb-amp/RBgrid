@@ -17,6 +17,7 @@
  * default units, which the rbAmp bridge then feeds.
  */
 
+#include "esp_attr.h"   /* EXT_RAM_BSS_ATTR: large zero-init arrays in PSRAM (internal RAM is short on ESP32) */
 #include "rbgrid_config_api.h"
 #include <inttypes.h>
 #include "rbpower.h"
@@ -563,7 +564,7 @@ static int rbgrid_find_unit_in_array(rbgrid_config_context_t* ctx, rbgrid_unit_i
  * Point tombstones + slug helpers
  * ================================================================================================ */
 
-static char    s_point_tombstones[RBPOINT_TOMBSTONE_MAX][RBPOINT_SLUG_MAX + 1];
+EXT_RAM_BSS_ATTR static char s_point_tombstones[RBPOINT_TOMBSTONE_MAX][RBPOINT_SLUG_MAX + 1];
 static uint8_t s_point_tombstone_count = 0;
 
 bool rbgrid_point_tombstoned(const char* slug)

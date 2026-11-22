@@ -10,6 +10,7 @@
  * 15-min period. Stores live in PSRAM when there is one; a spinlock guards them (lookups are a few hundred
  * compares). The stores are saved to NVS after a change, so a night reboot keeps the prices.
  */
+#include "esp_attr.h"   /* EXT_RAM_BSS_ATTR: large zero-init arrays in PSRAM (internal RAM is short on ESP32) */
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -519,7 +520,7 @@ void rbdynprice_set_ha_present(bool present) { s_ha_present = present; }
 #define PLOG_DAYS  40
 #define PLOG_SLOTS 100            /* 96 + DST days */
 typedef struct { uint16_t slot; uint8_t prov; uint8_t flags; float buy, sell; } plog_rec_t;   /* flags bit0 hourly_mean */
-static plog_rec_t s_plog[PLOG_SLOTS];
+EXT_RAM_BSS_ATTR static plog_rec_t s_plog[PLOG_SLOTS];
 static int s_plog_n = 0;
 static uint32_t s_plog_day = 0;   /* UTC day number of s_plog[] */
 static uint32_t s_plog_last_b = 0;

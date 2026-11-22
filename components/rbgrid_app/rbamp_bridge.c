@@ -371,7 +371,7 @@ typedef struct {
     uint64_t win_start_us;  ///< window start (last reset/inject)
     uint64_t last_us;       ///< last sample time, 0 = not started
 } host_acc_t;
-static host_acc_t s_hostacc[RBAMP_MAX_MODULES][RBAMP_MAX_ENTRIES];
+EXT_RAM_BSS_ATTR static host_acc_t s_hostacc[RBAMP_MAX_MODULES][RBAMP_MAX_ENTRIES];
 /* Guards s_hostacc against the poll task (host_accumulate) vs the stats/console task (collect_period
  * snapshot+reset). Short critical sections only — never held across I2C or inject. */
 static portMUX_TYPE s_hostacc_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -591,7 +591,7 @@ static void anc_from16(const rbamp_energy16_t *o, rbamp_std_energy_t *e)
 static uint8_t s_uid[RBAMP_MAX_MODULES][12];
 static bool    s_uid_ok[RBAMP_MAX_MODULES];
 #define RBAMP_GAP_MAX_S    (24u * 3600u)   ///< longest creditable reboot gap (s); a longer one is dropped
-static rbamp_std_energy_t s_tail[RBAMP_MAX_MODULES];        /* pending reboot-gap delta per module */
+EXT_RAM_BSS_ATTR static rbamp_std_energy_t s_tail[RBAMP_MAX_MODULES];        /* pending reboot-gap delta per module */
 static uint32_t           s_tail_anchor_ts[RBAMP_MAX_MODULES];
 static bool               s_tail_valid[RBAMP_MAX_MODULES];
 static bool               s_tail_arm_pending[RBAMP_MAX_MODULES];   /* boot counter read failed → arm at the first collect */
@@ -862,7 +862,7 @@ static int64_t            s_diag_tick_us[RBAMP_MAX_MODULES];
 static int64_t            s_diag_ref_us[RBAMP_MAX_MODULES];
 static double             s_diag_int_wh[RBAMP_MAX_MODULES];
 static double             s_diag_last_p[RBAMP_MAX_MODULES];      /* last polled module power, W (closes the gap to the counter read) */
-static rbamp_std_energy_t s_diag_ref[RBAMP_MAX_MODULES];
+EXT_RAM_BSS_ATTR static rbamp_std_energy_t s_diag_ref[RBAMP_MAX_MODULES];
 static bool               s_diag_ref_valid[RBAMP_MAX_MODULES];
 static uint8_t            s_diag_holes[RBAMP_MAX_MODULES];
 static int64_t            s_planned_restart_us[RBAMP_MAX_MODULES];  /* module OTA activation time: a restart seen within 180 s of it is planned */
@@ -880,7 +880,7 @@ static uint16_t s_pt_ph_err;
  * the quarter average. NAN = fewer than 10 samples. Reset after every collected quarter. */
 #define RBAMP_PMIN_WIN 10             ///< rolling-mean length (polls) for p_min / p_max
 #define PMIN_SUM RBAMP_MAX_CHANNELS   ///< ring index of the channel sum (PHASES entries); 0..6 = channels
-static float              s_pmin_ring[RBAMP_MAX_MODULES][PMIN_SUM + 1][RBAMP_PMIN_WIN];
+EXT_RAM_BSS_ATTR static float s_pmin_ring[RBAMP_MAX_MODULES][PMIN_SUM + 1][RBAMP_PMIN_WIN];
 static uint8_t            s_pmin_n[RBAMP_MAX_MODULES], s_pmin_i[RBAMP_MAX_MODULES];
 static float              s_pmin_q[RBAMP_MAX_MODULES][PMIN_SUM + 1];   /* NAN-filled at bridge start (pmin_reset) */
 static float              s_pmax_q[RBAMP_MAX_MODULES][PMIN_SUM + 1];   /* same window, maximum */
