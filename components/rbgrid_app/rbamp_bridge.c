@@ -3557,7 +3557,7 @@ int rbamp_bridge_virt_cmd(int argc, char **argv, char *out, size_t cap)
 /* ── I2C fleet management (modules on one or two buses; bus/pins/address chosen in the web app; available in the
  * code, not part of the v1.1.0 release feature set). Board profile: the ESP32 GPIO matrix routes an I2C controller
  * to any GPIO that can drive open-drain, so the choice is "what is free on THIS board". WROVER RBgrid: flash 6-11,
- * PSRAM 16/17, ext NOR 12-15 (12 = VDD_SDIO strap), straps 0/2/5, UART0 1/3, 34-39 input-only, DRDY (from the
+ * PSRAM 16/17, straps 0/2/5/12 (12 = VDD_SDIO; the external statistics chip is an S3 option, so 13-15 are free), UART0 1/3, 34-39 input-only, DRDY (from the
  * config, e.g. GPIO33). ── */
 #if CONFIG_IDF_TARGET_ESP32S3
 /* ESP32-S3 module N16R8 (16 MB quad flash + 8 MB octal PSRAM, DevKitC-1 board): flash 26-32, octal PSRAM 33-37,
@@ -3575,12 +3575,11 @@ static const struct { uint8_t gpio; const char *use; } PIN_RSV[] = {
 };
 #define RB_GPIO_MAX 48
 #else
-static const uint8_t BUS_PINS_OK[] = { 4, 18, 19, 21, 22, 23, 25, 26, 27, 32 };
+static const uint8_t BUS_PINS_OK[] = { 4, 13, 14, 15, 18, 19, 21, 22, 23, 25, 26, 27, 32 };
 static const struct { uint8_t gpio; const char *use; } PIN_RSV[] = {
     { 0, "boot strap" }, { 1, "UART0 TX (console)" }, { 2, "boot strap" }, { 3, "UART0 RX (console)" }, { 5, "boot strap" },
     { 6, "SPI flash" }, { 7, "SPI flash" }, { 8, "SPI flash" }, { 9, "SPI flash" }, { 10, "SPI flash" }, { 11, "SPI flash" },
-    { 12, "external flash MISO (VDD_SDIO strap)" }, { 13, "external flash MOSI" }, { 14, "external flash CLK" },
-    { 15, "external flash CS" }, { 16, "PSRAM" }, { 17, "PSRAM" },
+    { 12, "boot strap (VDD_SDIO)" }, { 16, "PSRAM" }, { 17, "PSRAM" },
     { 34, "input only" }, { 35, "input only" }, { 36, "input only" },
     { 37, "input only" }, { 38, "input only" }, { 39, "input only" },
 };
