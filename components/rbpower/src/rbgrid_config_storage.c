@@ -425,6 +425,7 @@ static const char *const RBGRID_MODULE_CONFIGS[] = {
     CONFIG_FILE_TARIFFS,    /* /tariffs.json  */
     "/time.json",
     "/rbamp.json",          /* rbAmp fleet/unit bindings */
+    "/ui_state.json",       /* the app's dashboard layout (GET/PUT /api/system/ui-state), stored as is */
 };
 #define RBGRID_MODULE_CONFIG_COUNT (sizeof(RBGRID_MODULE_CONFIGS) / sizeof(RBGRID_MODULE_CONFIGS[0]))  ///< Number of files in the backup slot
 

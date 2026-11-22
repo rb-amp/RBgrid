@@ -2916,3 +2916,113 @@ esp_err_t rbwebserver_api_peaks_handler(httpd_req_t *req)
     if (!rbapi_require_read(req)) return ESP_FAIL;
     return dp_send_json(req, rbpeak_json(), NULL);
 }
+
+/* ===== App UI state (dashboard layout): a JSON document the hub stores and never interprets =====
+ * GET    /api/system/ui-state            → 200 + the document, header X-UI-State-Rev: <rev>; 404 {"rev":0} when none
+ * PUT    /api/system/ui-state?rev=<n>    → body = new document (≤ RBGRID_UI_STATE_MAX, valid JSON);
+ *                                          200 {"rev":n+1}; 409 {"rev":<stored>} when n is not the stored rev
+ *                                          (rev=0 = "I expect no document"); 413 too large; 400 not JSON
+ * DELETE /api/system/ui-state            → 200 {"rev":0}
+ * Lives on the config file system (/ui_state.json, in the config backup slot; erased by a factory reset); the
+ * rev is the hub's own counter in /ui_state.rev, not a field inside the document. Read = read gate, writes = admin. */
+#define RBGRID_UI_STATE_FILE "/ui_state.json"
+#define RBGRID_UI_STATE_REV  "/ui_state.rev"
+#define RBGRID_UI_STATE_MAX  8192
+
+static uint32_t ui_state_rev(void)
+{
+    if (!littlefs_raw_exists(RBGRID_UI_STATE_FILE)) return 0;
+    char b[16] = {0}; size_t n = 0;
+    if (littlefs_raw_read(RBGRID_UI_STATE_REV, b, sizeof(b) - 1, &n) != ESP_OK) return 1;   /* doc without a rev file */
+    b[n < sizeof(b) ? n : sizeof(b) - 1] = 0;
+    unsigned long r = strtoul(b, NULL, 10);
+    return r ? (uint32_t)r : 1;
+}
+
+static esp_err_t ui_state_reply(httpd_req_t *req, const char *status, uint32_t rev)
+{
+    char out[40];
+    snprintf(out, sizeof(out), "{\"rev\":%lu}", (unsigned long)rev);
+    if (status) httpd_resp_set_status(req, status);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, out);
+}
+
+esp_err_t rbwebserver_api_ui_state_handler(httpd_req_t *req)
+{
+    add_cors_headers(req);
+    if (req->method == HTTP_OPTIONS) { httpd_resp_set_status(req, "204 No Content"); return httpd_resp_send(req, NULL, 0); }
+
+    if (req->method == HTTP_GET) {
+        if (!rbapi_require_read(req)) return ESP_FAIL;
+        if (!littlefs_raw_exists(RBGRID_UI_STATE_FILE)) return ui_state_reply(req, "404 Not Found", 0);
+        char *buf = rbgrid_cfg_big_alloc(RBGRID_UI_STATE_MAX + 1);
+        if (!buf) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+        size_t n = 0;
+        esp_err_t r = littlefs_raw_read(RBGRID_UI_STATE_FILE, buf, RBGRID_UI_STATE_MAX, &n);
+        if (r != ESP_OK) { free(buf); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "read failed"); return ESP_FAIL; }
+        char rh[16];
+        snprintf(rh, sizeof(rh), "%lu", (unsigned long)ui_state_rev());
+        httpd_resp_set_hdr(req, "X-UI-State-Rev", rh);
+        httpd_resp_set_hdr(req, "Access-Control-Expose-Headers", "X-UI-State-Rev");
+        httpd_resp_set_type(req, "application/json");
+        r = httpd_resp_send(req, buf, (ssize_t)n);
+        free(buf);
+        return r;
+    }
+
+    if (!rbapi_require_auth(req)) return ESP_FAIL;
+
+    if (req->method == HTTP_DELETE) {
+        if (littlefs_raw_exists(RBGRID_UI_STATE_FILE)) littlefs_raw_remove(RBGRID_UI_STATE_FILE);
+        if (littlefs_raw_exists(RBGRID_UI_STATE_REV)) littlefs_raw_remove(RBGRID_UI_STATE_REV);
+        ESP_LOGI(TAG, "ui-state removed");
+        return ui_state_reply(req, NULL, 0);
+    }
+
+    if (req->method != HTTP_PUT) { httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "GET/PUT/DELETE"); return ESP_FAIL; }
+
+    char query[48] = {0}, rq[16] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "rev", rq, sizeof(rq)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "?rev=<n> required (0 = no document expected)");
+        return ESP_FAIL;
+    }
+    uint32_t want = (uint32_t)strtoul(rq, NULL, 10);
+    if (req->content_len > RBGRID_UI_STATE_MAX) {
+        httpd_resp_set_status(req, "413 Payload Too Large");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"error\":\"too_large\",\"max_bytes\":8192}");
+    }
+    if (req->content_len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body required"); return ESP_FAIL; }
+
+    char *buf = rbgrid_cfg_big_alloc((size_t)req->content_len + 1);
+    if (!buf) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+    int got = 0, stalls = 0;
+    while (got < (int)req->content_len) {
+        int r = httpd_req_recv(req, buf + got, req->content_len - got);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++stalls <= 3) continue;
+        if (r <= 0) break;
+        got += r;
+    }
+    if (got != (int)req->content_len) { free(buf); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body incomplete"); return ESP_FAIL; }
+    buf[got] = 0;
+    cJSON *j = cJSON_Parse(buf);
+    if (!j) { free(buf); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body is not valid JSON"); return ESP_FAIL; }
+    cJSON_Delete(j);
+
+    uint32_t cur = ui_state_rev();
+    if (want != cur) { free(buf); return ui_state_reply(req, "409 Conflict", cur); }
+
+    uint32_t next = cur + 1;
+    esp_err_t we = littlefs_raw_write(RBGRID_UI_STATE_FILE, buf, (size_t)got);
+    free(buf);
+    if (we == ESP_OK) {
+        char rb[16];
+        int rl = snprintf(rb, sizeof(rb), "%lu", (unsigned long)next);
+        we = littlefs_raw_write(RBGRID_UI_STATE_REV, rb, (size_t)rl);
+    }
+    if (we != ESP_OK) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "store failed"); return ESP_FAIL; }
+    ESP_LOGI(TAG, "ui-state stored (%d B, rev %lu)", got, (unsigned long)next);
+    return ui_state_reply(req, NULL, next);
+}

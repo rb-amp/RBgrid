@@ -527,6 +527,7 @@ char *rbgrid_build_schema_json(void)
         /* input-field limits (BYTES, utf-8) — UI renders counters from here, no hardcode */
         cJSON *lim = cJSON_AddObjectToObject(root, "limits");
         cJSON_AddNumberToObject(lim, "short_name_bytes", 24);
+        cJSON_AddNumberToObject(lim, "ui_state_bytes", 8192);   /* PUT /api/system/ui-state body limit */
         cJSON_AddNumberToObject(lim, "name_bytes", 31);
         cJSON_AddNumberToObject(lim, "origins_max", 8);
         rbgrid_json_add_config_ranges(lim);          /* limits.ranges — numeric config bounds */
@@ -587,6 +588,7 @@ char *rbgrid_build_schema_json(void)
         { "/api/system/ui-commit",      "POST",     "n/a",       true,  false, "force (query); body=ui-manifest.json" },
         { "/api/system/ap",             "GET,POST", "n/a",       true,  false, "GET: AP ssid/password (admin token, armed hub only); POST {password}: the user sets the AP password (\"\" = setup password)" },
         { "/api/system/lang",           "GET,POST", "n/a",       true,  false, "code (query, ISO 639-1); body=language pack JSON ≤ 200 KB; one pack kept; served at /lang/<code>.json" },
+        { "/api/system/ui-state",       "GET,PUT,DELETE","n/a",  true,  false, "the app's dashboard layout, stored as is: GET → document + X-UI-State-Rev (404 {rev:0} when none); PUT ?rev=<n> body=JSON ≤ limits.ui_state_bytes → {rev:n+1}, 409 {rev} on a stale rev (0 = none expected); DELETE → {rev:0}" },
         /* routes served but listed here only from 1.2.0 (the API reference is generated from this table) */
         { "/api/system/mqtt-ca",        "GET,POST,DELETE","n/a", true,  true,  "POST body = PEM (<= 8192 B, one or more certificates); DELETE = public CA bundle" },
         { "/api/system/time-config",    "GET",      "composite", false, false, "read-only time settings view" },
