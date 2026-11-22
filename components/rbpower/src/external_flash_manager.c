@@ -9,7 +9,8 @@
  * Boot order (external_flash_init):
  *   1. internal `stats` partition + internal `config` LittleFS — mandatory; without them the hub
  *      keeps statistics in RAM only;
- *   2. external NOR probe on SPI2 (MISO 12, MOSI 13, CLK 14, CS 15). A chip is ADOPTED for the
+ *   2. ESP32-S3 only (on the classic ESP32 the statistics stay internal): external NOR probe on SPI2
+ *      (MISO 12, MOSI 13, CLK 14, CS 15). A chip is ADOPTED for the
  *      statistics when it answers a plausible JEDEC ID and its stats region is larger than the
  *      internal one (a W25Q128 holds about 49 points with history, the internal 4 MB partition 12).
  *      Adoption = erase the chip's stats region where it is not blank, then copy the internal stats
@@ -103,6 +104,7 @@ static void create_config_file_structure(void)
  * EXTERNAL CHIP ADOPTION
  * ================================================================================================ */
 
+#if !CONFIG_IDF_TARGET_ESP32   /* the external statistics chip: ESP32-S3 only */
 static bool all_ff(const uint8_t *b, size_t n)
 {
     const uint32_t *w = (const uint32_t *)b;
@@ -272,6 +274,7 @@ static void ext_stats_select(void)
                               esp_err_to_name(e));
     ext_attach(h, id, size);
 }
+#endif /* !CONFIG_IDF_TARGET_ESP32 */
 
 /* ================================================================================================
  * PUBLIC
@@ -306,7 +309,18 @@ esp_err_t external_flash_init(void)
     part("config")->mounted = true;
     create_config_file_structure();
 
+#if CONFIG_IDF_TARGET_ESP32
+    /* Classic ESP32: the statistics stay on the internal flash; the external chip is an ESP32-S3 option
+     * (operator 2026-11-22). A marker left by an earlier build is dropped, so the hub uses its internal
+     * region instead of falling back to RAM-only. */
+    if (littlefs_raw_exists(STATS_MEDIA_MARKER)) {
+        littlefs_raw_remove(STATS_MEDIA_MARKER);
+        ESP_LOGW(TAG, "external statistics chip is used on ESP32-S3 only — marker %s removed, statistics internal",
+                 STATS_MEDIA_MARKER);
+    }
+#else
     ext_stats_select();
+#endif
 
     g_flash_state.status.initialized = true;
     if (rbmedia_mode() == RBMEDIA_NONE)
