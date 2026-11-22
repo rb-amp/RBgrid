@@ -24,6 +24,7 @@
 
 #include "rbgrid_core.h"   /* rbgrid_nvs_open: RBgrid data in its NVS partition */
 #include "rbamp_bridge.h"
+#include "esp_heap_caps.h"
 #include "rbstats_v4_types.h"
 #include "rbfault.h"   /* test builds: simulated long outage */
 
@@ -2418,7 +2419,7 @@ esp_err_t rbamp_bridge_start(const rbamp_bridge_config_t *cfg)
         .flags.enable_internal_pullup = s_cfg.internal_pullup,
     };
     esp_err_t err = i2c_new_master_bus(&bus_cfg, &s_bus);
-    if (err != ESP_OK) { ESP_LOGE(TAG, "i2c_new_master_bus failed: %s", esp_err_to_name(err)); return err; }
+    if (err != ESP_OK) { ESP_LOGE(TAG, "i2c_new_master_bus failed: %s", esp_err_to_name(err)); rbpower_diag_printf("FAIL I2C bus 0 SDA%d/SCL%d: %s", s_cfg.sda_gpio, s_cfg.scl_gpio, esp_err_to_name(err)); return err; }
     if (s_cfg.bus1_sda_p1 && s_cfg.bus1_scl_p1) {   /* bus 1 on the other controller; a failure leaves its modules absent */
         const i2c_master_bus_config_t b1 = {
             .i2c_port = s_cfg.i2c_port == 1 ? 0 : 1, .sda_io_num = s_cfg.bus1_sda_p1 - 1, .scl_io_num = s_cfg.bus1_scl_p1 - 1,
@@ -2479,9 +2480,16 @@ esp_err_t rbamp_bridge_start(const rbamp_bridge_config_t *cfg)
 #define CONFIG_RBGRID_POLL_TASK_PRIORITY 1
 #endif
     /* priority: 1 above idle standalone; a host with its own loop on core 1 (ESPHome) sets it higher */
-    if (xTaskCreatePinnedToCore(rbamp_bridge_poll_task, "rbamp_poll", 8192, NULL,
-                                tskIDLE_PRIORITY + CONFIG_RBGRID_POLL_TASK_PRIORITY, &s_task, rbamp_poll_core) != pdPASS) {
+    /* The internal heap can be short for a moment in the boot window (Wi-Fi start): retry for up to 3 s */
+    BaseType_t tc = pdFAIL;
+    for (int attempt = 0; attempt < 10 && tc != pdPASS; ++attempt) {
+        if (attempt) vTaskDelay(pdMS_TO_TICKS(300));
+        tc = xTaskCreatePinnedToCore(rbamp_bridge_poll_task, "rbamp_poll", 8192, NULL,
+                                     tskIDLE_PRIORITY + CONFIG_RBGRID_POLL_TASK_PRIORITY, &s_task, rbamp_poll_core);
+    }
+    if (tc != pdPASS) {
         ESP_LOGE(TAG, "failed to create poll task");
+        rbpower_diag_printf("FAIL rbAmp poll task not created (internal free %u largest %u) — I2C buses closed", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         s_running = false; err = ESP_ERR_NO_MEM; goto fail_dev;
     }
     {   /* bus stall supervisor on the other core (best effort: without it the hub just doesn't report a stall) */
