@@ -39,7 +39,7 @@
  * which translate the same absolute offsets to the internal partition (or pass through to the
  * external chip when it is attached). The `handle` argument becomes an opaque non-NULL token —
  * existing `if (!flash) return` guards keep working; nothing dereferences it here.
- * NOTE: otp_external_flash_test.c is NOT seamed — OTP runs only against a real external chip. */
+ * NOTE: ext_flash_spi.c (the SPI bring-up) is NOT seamed: it drives the real external chip. */
 #include "rbstorage_media.h"
 #include "rbstats_migrate.h"   /* deferred breaking-format migration engine */
 /** @brief File-local reroute: read @p len bytes at absolute stats offset @p addr via rbstorage_media (handle @p h ignored). */
@@ -1111,23 +1111,12 @@ static esp_err_t close_sector(const rbpower_buffer_runtime_t* buffer, uint16_t s
  * API FOR CHECKING FLASH AVAILABILITY
  * ================================================================================================ */
 
-// Stats-write gating:
-//  - g_ext_flash_enabled: user/runtime "use external flash" switch → satisfies "if available AND
-//    ENABLED → write". Default ON (use the chip whenever it's present and valid).
-//  - g_ext_flash_enforce_otp: when true, a chip that FAILS OTP authenticity (foreign / not the
-//    prepared chip) is treated as unavailable for stats → anti-foreign-chip enforcement.
-//    DEFAULT OFF (design decision): for an energy-metering product,
-//    continuity of stored history outweighs the anti-foreign-chip gate — a device that ships with
-//    a generic / un-OTP-provisioned NOR must still persist its energy history, not silently lose
-//    it. OTP enforcement stays available as an OPT-IN (rbpower_flash_set_enforce_otp(true)) for a
-//    secure/premium SKU that provisions its chips. Boot still soft-fails either way.
+// Stats-write gating: g_ext_flash_enabled = runtime "persist statistics" switch (default ON). There is no
+// chip authenticity check: the source is open, any W25Q-class chip is accepted.
 static bool g_ext_flash_enabled     = true;
-static bool g_ext_flash_enforce_otp = false;   // history continuity > authenticity gate
 
 void rbpower_flash_set_enabled(bool enabled)      { g_ext_flash_enabled = enabled; }
-void rbpower_flash_set_enforce_otp(bool enforce)  { g_ext_flash_enforce_otp = enforce; }
 bool rbpower_flash_get_enabled(void)              { return g_ext_flash_enabled; }
-bool rbpower_flash_get_enforce_otp(void)          { return g_ext_flash_enforce_otp; }
 
 bool rbpower_flash_is_available(void)
 {
@@ -1146,8 +1135,8 @@ bool rbpower_flash_is_available(void)
         return false;
     }
 
-    // #2: reject a foreign/un-prepared chip — OTP authenticity must pass when enforced.
-    if (g_ext_flash_enforce_otp && !flash_state->status.otp_validated) {
+    // No statistics medium (the adopted external chip is missing): RAM-only.
+    if (rbmedia_mode() == RBMEDIA_NONE) {
         return false;
     }
 
@@ -1463,9 +1452,9 @@ esp_err_t rbpower_flash_write_record(rbpower_unit_id_t unit_id,
     // Flash availability gate — TWO distinct cases, do NOT collapse them:
     //  (1) Flash explicitly DISABLED (g_ext_flash_enabled==false): legitimate RAM-only build —
     //      silently skip + report success; the caller never expected persistence.
-    //  (2) Flash ENABLED but not actually writable (hw init failed / fs not mounted / OTP-gated):
+    //  (2) Flash ENABLED but not actually writable (fs not mounted / the adopted external chip missing):
     //      a REAL failure to persist data the caller DID expect to land. Returning ESP_OK here
-    //      silently MASKS data loss as success — observed on an un-OTP-provisioned device:
+    //      silently MASKS data loss as success — observed on a device whose medium was not writable:
     //      every HOUR write "succeeded" yet the stored history stayed empty.
     //      Surface it (warn + error) so the store layer logs FAIL instead of a false OK.
     if (!rbpower_flash_get_enabled()) {
@@ -1474,8 +1463,7 @@ esp_err_t rbpower_flash_write_record(rbpower_unit_id_t unit_id,
     if (!g_is_initialized || !rbpower_flash_is_available()) {
         // case (2): persistence was expected but flash is unavailable — never fake success.
         ESP_LOGW(TAG, "WRITE DROPPED — flash ENABLED but unavailable (init=%d available=%d): "
-                      "unit=0x%04X period=%d type=%d NOT persisted. Check flashinfo (OTP/mount); "
-                      "a device without an OTP production record needs OTP enforcement off (flashen 1 0).",
+                      "unit=0x%04X period=%d type=%d NOT persisted. Check flashinfo (media/mount).",
                  (int)g_is_initialized, (int)rbpower_flash_is_available(),
                  (unsigned)unit_id, (int)period, (int)data_type);
         return ESP_ERR_INVALID_STATE;
@@ -1793,7 +1781,7 @@ esp_err_t rbpower_flash_erase_all_slots(void)
     // BLIND-erase the entire STATS partition region by offset — NO reads, NO dependency on the
     // slot config / is_occupied (which may be empty), NO record parsing. This is the only way to
     // migrate a record-format change safely: reading old-format records with the new reader can
-    // hard-fault, so erase purely by address. OTP / config / log partitions
+    // hard-fault, so erase purely by address. Config / log partitions
     // are untouched (different regions). Region is 4K-aligned; esp_flash_erase_region walks sectors.
     uint32_t start = PARTITION_STATS_OFFSET;
     // Region size MUST match the ACTIVE media: on INTERNAL
@@ -2617,6 +2605,13 @@ esp_err_t rbpower_flash_init_buffers_from_network(void)
     }
 
     ESP_LOGD(TAG, "✓ External Flash available (initialized, filesystem mounted)");
+
+    if (rbmedia_mode() == RBMEDIA_NONE) {
+        /* The adopted statistics chip is missing: no slots to place units in (each unit would log a false
+         * "slot limit reached"). The history stays on the chip; units get their slots once it is back. */
+        ESP_LOGW(TAG, "statistics chip missing — no unit slots placed, history RAM-only");
+        return ESP_OK;
+    }
 
    // 2. Check that the home network is initialized
     extern rbpower_electrical_network_t g_home_network;

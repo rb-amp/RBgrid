@@ -465,17 +465,15 @@ extern "C"
     typedef void (*rbpower_error_callback_t)(rbpower_err_t error_code, const char *error_msg, void *user_data);
 
     /* ================================================================================================
-     * EXTERNAL FLASH MEMORY AND OTP VALIDATION
+     * EXTERNAL FLASH MEMORY
      * ================================================================================================ */
 
     /**
-     * @brief External flash status with OTP validation.
+     * @brief Storage medium status.
      */
     typedef struct
     {
         bool external_flash_available; ///< Flash initialised and available for use
-        bool otp_validated;            ///< OTP validation passed
-        uint32_t device_serial;        ///< Device serial number from OTP
         bool config_partition_mounted; ///< Config partition (file system) mounted
         size_t config_partition_size;  ///< Config partition size, bytes
         size_t config_used_space;      ///< Used space in the config partition, bytes
@@ -483,32 +481,21 @@ extern "C"
     } rbpower_flash_status_t;
 
     /**
-     * @brief Initialise the external flash with OTP validation (wrapper of external_flash_init()).
+     * @brief Select the storage medium (wrapper of external_flash_init()).
      * @return ESP_OK on success, otherwise the ESP-IDF error code of external_flash_init().
      */
     esp_err_t rbpower_external_flash_init(void);
 
     /**
      * @brief Check external flash availability.
-     * @return true if the flash is available and passed OTP validation.
+     * @return true if the storage medium is initialised.
      */
     bool rbpower_external_flash_is_available(void);
 
-    /**
-     * @brief Check the OTP validation status.
-     * @return true if OTP validation passed.
-     */
-    bool rbpower_external_flash_otp_validated(void);
-
-    /**
-     * @brief Get the device serial number from OTP.
-     * @return Serial number, or 0 if unavailable.
-     */
-    uint32_t rbpower_external_flash_get_serial(void);
 
     /**
      * @brief Get the external flash status.
-     * @return Flash and OTP status (all-zero if the flash manager has no state).
+     * @return Storage status (all-zero if the flash manager has no state).
      */
     rbpower_flash_status_t rbpower_external_flash_get_status(void);
 

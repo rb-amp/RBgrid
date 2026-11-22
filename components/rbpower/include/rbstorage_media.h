@@ -9,13 +9,13 @@
  * Only one medium is active at a time.
  *
  * The statistics ring layer (src/rbextflash_operations.c) was written against the external
- * chip's own layout: absolute offsets with slots at PARTITION_STATS_OFFSET + slot*208KB. That
+ * chip's own layout: absolute offsets with slots at PARTITION_STATS_OFFSET + slot*SLOT (320 KB, v4). That
  * validated logic is NOT rewritten. Instead, all its physical IO is routed through these shims:
  *   - INTERNAL mode (default): the same absolute offsets are translated to the internal `stats`
  *     partition (abs - PARTITION_STATS_OFFSET) and served via esp_partition_* on the main chip.
  *   - EXTERNAL mode (optional): pass-through to esp_flash_* on the external handle.
  * The reported "stats size" keeps the external-layout convention (offset + region size) so the
- * slot allocator's math (slots = stats_size / 208KB) is unchanged.
+ * slot allocator's math (slots = stats_size / slot size) is unchanged.
  *
  * Mode selection (rbmedia_init_internal() / rbmedia_attach_external()) is done once at boot by
  * the storage init code; the IO shims hold no lock and rely on the callers' own serialization.
@@ -50,12 +50,19 @@ esp_err_t rbmedia_init_internal(void);
 /**
  * @brief Select the external NOR chip as the statistics medium.
  *
- * @param[in] handle  Initialized esp_flash handle of the external chip
+ * @param[in] handle       Initialized esp_flash handle of the external chip
+ * @param[in] region_size  Stats region size on the chip, bytes (chip size - PARTITION_STATS_OFFSET)
  *
  * @retval ESP_OK               EXTERNAL mode selected
- * @retval ESP_ERR_INVALID_ARG  @p handle is NULL
+ * @retval ESP_ERR_INVALID_ARG  @p handle is NULL or @p region_size is 0
  */
-esp_err_t rbmedia_attach_external(esp_flash_t *handle);
+esp_err_t rbmedia_attach_external(esp_flash_t *handle, uint32_t region_size);
+
+/**
+ * @brief Drop the statistics medium (RBMEDIA_NONE): the adopted external chip is missing, so the
+ *        statistics stay RAM-only rather than writing the stale internal copy.
+ */
+void rbmedia_detach(void);
 
 /**
  * @brief Get the currently selected medium.
@@ -65,13 +72,19 @@ esp_err_t rbmedia_attach_external(esp_flash_t *handle);
 rbmedia_mode_t rbmedia_mode(void);
 
 /**
+ * @brief Statistics medium for the API: "internal", "external" or "none" (after boot: the adopted external
+ *        chip is missing, statistics are RAM-only and the history reads empty until it is back).
+ */
+const char *rbmedia_stats_media_str(void);
+
+/**
  * @brief Size of the stats region in the EXTERNAL-layout convention.
  *
- * The ring layer computes the slot count as region_size / 208KB and the bounds as
+ * The ring layer computes the slot count as region_size / slot size and the bounds as
  * PARTITION_STATS_OFFSET + size.
  *
  * @return Region size in bytes: the internal `stats` partition size (INTERNAL),
- *         PARTITION_STATS_SIZE (EXTERNAL; the caller may override it with the chip size),
+ *         the region size given to rbmedia_attach_external() (EXTERNAL),
  *         or 0 when no medium is selected.
  */
 uint32_t rbmedia_stats_region_size(void);

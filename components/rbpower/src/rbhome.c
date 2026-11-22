@@ -3022,7 +3022,7 @@ typedef struct {
     uint32_t n, n_f;
 } rbhome_ipe_acc_t;
 /** @endcond */
-static rbhome_ipe_acc_t s_ipe[RBPOWER_MAX_HOME_UNITS];
+EXT_RAM_BSS_ATTR static rbhome_ipe_acc_t s_ipe[RBPOWER_MAX_HOME_UNITS];
 
 /* Live-data age per unit (otherwise frozen values look live while the module is silent).
  * Stamped on every 200 ms inject; -1 = never fed since boot. */
@@ -3456,7 +3456,7 @@ typedef struct {
     int64_t  boot_seed_in_mwh;   ///< Import totalizer before the first post-boot feed, mWh
     int64_t  boot_seed_out_mwh;  ///< Export totalizer before the first post-boot feed, mWh
 } rbhome_et_diag_t;
-static rbhome_et_diag_t s_et_diag[RBPOWER_MAX_HOME_UNITS];
+EXT_RAM_BSS_ATTR static rbhome_et_diag_t s_et_diag[RBPOWER_MAX_HOME_UNITS];
 
 
 /* List the ids of valid units (etstat and other C++-side verbs: g_home_network itself is not

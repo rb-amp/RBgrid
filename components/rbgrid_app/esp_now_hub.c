@@ -17,6 +17,7 @@
  *  - inject_task feeds REALTIME/PERIOD data into rbpower and runs the presence-timeout sweep.
  *  - The public functions are called from the console, the HTTP server and the HA discovery task.
  */
+#include "esp_attr.h"   /* EXT_RAM_BSS_ATTR: large zero-init arrays in PSRAM (internal RAM is short on ESP32) */
 #include "rbgrid_core.h"   /* rbgrid_nvs_open: RBgrid data in its NVS partition */
 #include "rbstats_v4_types.h"
 #include "esp_idf_version.h"
@@ -119,7 +120,7 @@ typedef struct {
  *  Power factor (0..1).  @var enh_unit_t::last_us
  *  esp_timer time (µs) of the last REALTIME.  @var enh_unit_t::fresh
  *  A new sample is waiting for inject_task. */
-static enh_unit_t s_units[ENH_MAX_UNITS];
+EXT_RAM_BSS_ATTR static enh_unit_t s_units[ENH_MAX_UNITS];
 static portMUX_TYPE s_units_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_units_created = 0;
 static TaskHandle_t s_inject_task = NULL;
@@ -199,7 +200,7 @@ typedef struct {
     uint8_t  n;                             ///< records in @c recs
     rbn_period_rec_t recs[ENH_FRAME_RECS];  ///< the frame's period records
 } enh_frame_t;
-static enh_frame_t s_frames[ENH_MAX_FRAMES];
+EXT_RAM_BSS_ATTR static enh_frame_t s_frames[ENH_MAX_FRAMES];
 static uint32_t s_periods_recv = 0, s_periods_injected = 0, s_periods_dropped = 0, s_periods_dup = 0;
 
 #define ENH_DEDUP_N 8   /* frames remembered per node (a node retries one frame at a time) */

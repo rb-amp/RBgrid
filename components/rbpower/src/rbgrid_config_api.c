@@ -17,6 +17,7 @@
  * default units, which the rbAmp bridge then feeds.
  */
 
+#include "esp_attr.h"   /* EXT_RAM_BSS_ATTR: large zero-init arrays in PSRAM (internal RAM is short on ESP32) */
 #include "rbgrid_config_api.h"
 #include <inttypes.h>
 #include "rbpower.h"
@@ -256,7 +257,7 @@ rbgrid_config_handle_t rbgrid_config_create(const char* home_name, const char* l
         return NULL;
     }
     
-    // Initialize the external flash with OTP validation (first call only)
+    // Select the storage medium (first call only)
     static bool flash_init_attempted = false;
     if (!flash_init_attempted) {
         flash_init_attempted = true;
@@ -264,17 +265,12 @@ rbgrid_config_handle_t rbgrid_config_create(const char* home_name, const char* l
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "External Flash not available (code: %d), using RAM only mode", ret);
             rbpower_flash_status_t status = rbpower_external_flash_get_status();
-            if (!status.otp_validated) {
-                ESP_LOGE(TAG, "SECURITY WARNING: Device authentication failed!");
-            }
             if (status.error_message) {
                 ESP_LOGW(TAG, "Flash error: %s", status.error_message);
             }
         } else {
             rbpower_flash_status_t status = rbpower_external_flash_get_status();
             ESP_LOGI(TAG, "Configuration storage available:");
-            ESP_LOGI(TAG, "  - OTP validated: %s", status.otp_validated ? "YES" : "NO");
-            ESP_LOGI(TAG, "  - Device serial: 0x%08" PRIx32, status.device_serial);
             ESP_LOGI(TAG, "  - Config partition: %s", 
                     status.config_partition_mounted ? "MOUNTED" : "NOT MOUNTED");
             if (status.config_partition_mounted) {
@@ -568,7 +564,7 @@ static int rbgrid_find_unit_in_array(rbgrid_config_context_t* ctx, rbgrid_unit_i
  * Point tombstones + slug helpers
  * ================================================================================================ */
 
-static char    s_point_tombstones[RBPOINT_TOMBSTONE_MAX][RBPOINT_SLUG_MAX + 1];
+EXT_RAM_BSS_ATTR static char s_point_tombstones[RBPOINT_TOMBSTONE_MAX][RBPOINT_SLUG_MAX + 1];
 static uint8_t s_point_tombstone_count = 0;
 
 bool rbgrid_point_tombstoned(const char* slug)
@@ -3365,15 +3361,6 @@ bool rbgrid_flash_is_available(void) {
     return rbpower_external_flash_is_available();
 }
 
-/* True when OTP validation passed. */
-bool rbgrid_otp_is_validated(void) {
-    return rbpower_external_flash_otp_validated();
-}
-
-/* Device serial number (from OTP). */
-uint32_t rbgrid_get_device_serial(void) {
-    return rbpower_external_flash_get_serial();
-}
 
 /* Extended flash status. */
 rbgrid_flash_status_t rbgrid_get_flash_status(void) {
@@ -3381,8 +3368,6 @@ rbgrid_flash_status_t rbgrid_get_flash_status(void) {
     
     rbgrid_flash_status_t status = {
         .external_flash_available = power_status.external_flash_available,
-        .otp_validated = power_status.otp_validated,
-        .device_serial = power_status.device_serial,
         .config_partition_mounted = power_status.config_partition_mounted,
         .config_partition_size = power_status.config_partition_size,
         .config_used_space = power_status.config_used_space,

@@ -242,7 +242,7 @@ extern "C"
      * @brief Runtime gating for stats-flash writes: the "use the stats flash" switch.
      *
      * rbpower_flash_is_available() returns true only when: enabled AND initialized AND
-     * filesystem mounted AND (OTP authentic OR enforcement off).
+     * filesystem mounted AND a statistics medium is selected.
      *  - set_enabled(false): app-level "don't use the stats flash" → stats stay RAM-only.
      *
      * @param[in] enabled true (default) = persist stats when the medium is available.
@@ -250,25 +250,10 @@ extern "C"
      */
     void rbpower_flash_set_enabled(bool enabled);
     /**
-     * @brief Enable/disable OTP authenticity enforcement for the external NOR chip.
-     *
-     * When enforced, a chip that fails OTP authenticity (foreign / not prepared) is treated as
-     * unavailable for stats. Default is OFF: history continuity on a generic, un-provisioned
-     * chip outweighs the anti-foreign-chip gate; enforcement is an opt-in for provisioned SKUs.
-     *
-     * @param[in] enforce true = reject chips that fail OTP validation.
-     */
-    void rbpower_flash_set_enforce_otp(bool enforce);
-    /**
      * @brief Current value of the stats-flash enable switch.
      * @return true if stats persistence is enabled (default true).
      */
     bool rbpower_flash_get_enabled(void);
-    /**
-     * @brief Current value of the OTP enforcement switch.
-     * @return true if OTP authenticity is enforced (default false).
-     */
-    bool rbpower_flash_get_enforce_otp(void);
 
     /**
      * @brief Read the ring-buffer write cursor for a (unit, period, type) buffer.
@@ -306,7 +291,7 @@ extern "C"
      * @brief Erase the whole STATS region (DROPS ALL HISTORY), then reboot to re-create buffers
      * at the current record format. Maintenance/format-migration tool (e.g. the min/max record
      * expansion). Erases blindly by address in 64 KB chunks (no record reads), taking the write
-     * lock per chunk when the lock exists; OTP/config/log regions are untouched.
+     * lock per chunk when the lock exists; config/log regions are untouched.
      * @retval ESP_OK                Region erased; reboot required.
      * @retval ESP_ERR_INVALID_STATE No stats medium handle.
      * @retval ESP_ERR_INVALID_SIZE  Region size is 0.

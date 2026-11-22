@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **History for about 49 points with an external flash chip.** A W25Q128 (16 MB) wired to the hub's SPI pins
+  (MISO 12, MOSI 13, CLK 14, CS 15, 3.3 V) takes over the statistics; the internal flash keeps 12 points. On the
+  first start with the chip the hub copies the history it already has onto it (up to about a minute) and then uses the
+  chip from then on. The internal partition layout does not change, so no USB reflash is needed. If the chip is
+  later missing, the hub keeps measuring but stores no history until it is back (event log and `flashinfo` say so).
+
+### Removed
+- **Flash chip authenticity check (OTP).** The source is open, so a check that only our prepared chips pass served
+  no purpose; any W25Q-class chip of 8 MB or more is used.
+
 ## v1.2.2 — 2026-11-11
 
 ### Fixed
