@@ -548,6 +548,13 @@ void rbpower_telemetry_on_3sec_period_end(uint64_t period_end_time_us) {
     if (!g_telemetry_initialized || !g_telemetry_config.telemetry_enabled) {
         return;
     }
+    /* No frame while a firmware image is written: each flash write stops the cache, and building the frame in the
+     * esp_timer task on core 0 then takes seconds — IDLE0 starves and the task watchdog resets the hub mid-upload
+     * (classic ESP32 with 7 points, 22.11). Clients get frames again after the reboot. */
+#if CONFIG_RBGRID_IF_HTTP
+    extern bool rbwebserver_ota_in_progress(void);
+    if (rbwebserver_ota_in_progress()) return;
+#endif
     
     // Build the rich telemetry JSON ONCE and send it to ALL enabled channels (unified schema).
     // Previously MQTT/HTTP got a SEPARATE old packet that only carried generic

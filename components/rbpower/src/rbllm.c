@@ -932,6 +932,10 @@ static void ev_watch(void)
 {
     int64_t t = esp_timer_get_time();
     if (!s_ev_loaded || t - s_w_last_us < 9000000LL) return;
+#if CONFIG_RBGRID_IF_HTTP
+    extern bool rbwebserver_ota_in_progress(void);
+    if (rbwebserver_ota_in_progress()) return;   /* not during an OTA write (cache stops; see rbtelemetry.c) */
+#endif
     s_w_last_us = t;
     uint32_t up = (uint32_t)(t / 1000000LL);
     bool clk = rbtime_is_time_valid();
