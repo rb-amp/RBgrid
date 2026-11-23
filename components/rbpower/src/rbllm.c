@@ -28,6 +28,8 @@
 #include "littlefs_raw.h"
 #include "rbamp.h"                   /* rbamp_basic_fw_name */
 #include "esp_app_desc.h"
+#include "esp_ota_ops.h"
+#include "rbgrid_config_api.h"     /* rbgrid_system_reboot */
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
@@ -447,6 +449,8 @@ static cJSON *fail(rbllm_cx_t *cx, const char *code, const char *msg, const char
 static bool late(const rbllm_cx_t *cx) { return esp_timer_get_time() > cx->deadline_us; }
 
 /* ============================================================================================ point helpers */
+static void ct_short(const char *desc, char out[24]);
+static int ver_sync(const char *source, const char *summary);
 
 #define RBLLM_MAX_POINTS 24
 
@@ -720,9 +724,13 @@ static cJSON *t_get_hub_info(const cJSON *a, rbllm_cx_t *cx)
     if (tc.timezone[0]) cJSON_AddStringToObject(r, "timezone", tc.timezone);
     cJSON_AddStringToObject(r, "currency", rbpower_tariff_currency());
     cJSON_AddNumberToObject(r, "uptime_s", (double)(esp_timer_get_time() / 1000000LL));
-    cJSON *cap = cJSON_AddArrayToObject(r, "capabilities");
+    { char eh[17] = ""; esp_app_get_elf_sha256(eh, sizeof(eh)); cJSON_AddStringToObject(r, "build", eh); }   /* differs per image even when fw does not */
+    cJSON *cap = cJSON_AddArrayToObject(r, "capabilities");   /* the same list as the manifest */
     cJSON_AddItemToArray(cap, cJSON_CreateString("read"));
     cJSON_AddItemToArray(cap, cJSON_CreateString("events"));
+    cJSON_AddItemToArray(cap, cJSON_CreateString("playbooks"));
+    cJSON_AddItemToArray(cap, cJSON_CreateString("config_read"));
+    cJSON_AddItemToArray(cap, cJSON_CreateString("config"));
     cJSON_AddBoolToObject(r, "read_only_mode", S.read_only);
     cx->as_of = n;
     return r;
@@ -848,6 +856,9 @@ static cJSON *t_get_health(const cJSON *a, rbllm_cx_t *cx)
         }
         const cJSON *mx = cJSON_GetObjectItem(i2cst, "max_modules");
         if (cJSON_IsNumber(mx)) cJSON_AddNumberToObject(r, "max_modules", mx->valueint);
+        const cJSON *pk = cJSON_GetObjectItem(i2cst, "pins_ok");
+        if (cJSON_IsArray(pk)) cJSON_AddItemToObject(r, "pins_ok", cJSON_Duplicate(pk, true));   /* free GPIOs set_bus_pins accepts */
+        cJSON_AddBoolToObject(r, "restart_pending", cJSON_IsTrue(cJSON_GetObjectItem(i2cst, "reboot_pending")));
     }
     cJSON *mods = cJSON_AddArrayToObject(r, "modules");
     int on = 0, tot = 0;
@@ -1692,10 +1703,16 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
             finding(f, "module_on_factory_address", "info", NULL, ev,
                     "Move it to a free address (set_module_address, e.g. 0x51) before connecting another module on the same bus.");
         }
+        cJSON_ArrayForEach(im, cJSON_GetObjectItem(is, "modules")) {   /* on the hub and answering, but measuring nothing */
+            if (!cJSON_IsTrue(cJSON_GetObjectItem(im, "present")) || cJSON_GetNumberValue(cJSON_GetObjectItem(im, "metering_points")) > 0) continue;
+            int mm = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "module"));
+            snprintf(ev, sizeof(ev), "Module %d answers but none of its current inputs carries a point, so it measures nothing.", mm);
+            finding(f, "module_without_points", "warning", NULL, ev, "list_module_inputs, then create_point on each input in use.");
+        }
         cJSON_Delete(is);
     }
     rbgrid_tariff_now_t tn; rbgrid_core_tariff_now(&tn);
-    if (tn.placeholder) finding(f, "tariff_not_set", "info", NULL, "No tariff plan is saved; money is computed off a demo plan.", "Enter the tariff on the hub's tariff page.");
+    if (tn.placeholder) finding(f, "tariff_not_set", "info", NULL, "No tariff plan is saved; money is computed off a demo plan.", "Ask the user for their tariff and enter it with propose_config {tariff}.");
     cJSON_AddNumberToObject(r, "checked_channels", n);
     if (!cJSON_GetArraySize(f)) note(cx, "No installation problem found in the live data and this boot's log.");
     note(cx, "This tool detects only; it changes nothing on the hub.");
@@ -1875,7 +1892,7 @@ static void cfg_channels(cJSON *r)
             cJSON_AddNumberToObject(src, "module", cJSON_GetNumberValue(cJSON_GetObjectItem(e, "module")));
             cJSON_AddNumberToObject(src, "input", cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ch")));
             const char *ctn = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ct_name"));
-            if (ctn) cJSON_AddStringToObject(src, "ct_model", ctn);
+            if (ctn) { char sh[24]; ct_short(ctn, sh); cJSON_AddStringToObject(src, "ct_model", sh); }
             double ra = cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ct_rated_a"));
             if (ra > 0) cJSON_AddNumberToObject(src, "ct_rating_a", ra);
             break;
@@ -1935,8 +1952,7 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
     if (sec && strcmp(sec, "channels") && strcmp(sec, "tariff") && strcmp(sec, "notifications") && strcmp(sec, "region"))
         return fail(cx, "invalid_args", "section: channels, tariff, notifications or region", NULL);
     cJSON *r = cJSON_CreateObject();
-    char ver[9]; rbgrid_core_config_version(ver);
-    cJSON_AddStringToObject(r, "version", ver);
+    cJSON_AddNumberToObject(r, "version", ver_sync("hub", NULL));   /* the number list_config_versions and rollback_to use */
     if (all || !strcmp(sec, "channels")) cfg_channels(r);
     if (all || !strcmp(sec, "tariff")) cfg_tariff(r, cx);
     if (all || !strcmp(sec, "notifications")) {
@@ -1954,7 +1970,7 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
         const rbpower_tariff_plan_t *tp = rbpower_tariff_get_current_plan();
         cJSON_AddStringToObject(g, "region_code", tp ? tp->region_code : "");
     }
-    note(cx, "Read-only view. Changing settings over LLM comes with propose_config / apply_config; until then the user changes them on the hub page.");
+    note(cx, "To change: get_config_schema, then propose_config and, after the user's yes, apply_config. Points on new inputs: create_point.");
     cx->as_of = now_s();
     return r;
 }
@@ -2134,7 +2150,7 @@ static int ver_sync(const char *source, const char *summary)
         cJSON_AddNumberToObject(e, "version", next);
         cJSON_AddNumberToObject(e, "ts", now_s());
         cJSON_AddStringToObject(e, "source", source);
-        cJSON_AddStringToObject(e, "summary", summary ? summary : (last ? "changed outside the LLM API" : "first recorded state"));
+        cJSON_AddStringToObject(e, "summary", summary ? summary : (last ? "changed outside the LLM API" : "state when the LLM API first read the config"));
         cJSON_AddStringToObject(e, "hash", h);
         cJSON_AddItemToObject(e, "state", cap); cap = NULL;
         cJSON_AddItemToArray(arr, e);
@@ -2202,9 +2218,9 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
                 if (r < 0) { snprintf(m, sizeof(m), "channels.%s.role: unknown role", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "get_config_schema {section: channels} lists the roles (main_supply = the grid feed)."); }
                 int cr = role_from_name(was);
                 bool cs = cr == RBPOWER_ROLE_MAIN_SUPPLY || cr == RBPOWER_ROLE_ALTERNATIVE_SUPPLY, ns = r == RBPOWER_ROLE_MAIN_SUPPLY || r == RBPOWER_ROLE_ALTERNATIVE_SUPPLY;
-                if ((cs || ns) && r != cr && warn) {   /* full setup over LLM (operator 23.11): supply roles are allowed, with a warning */
-                    snprintf(m, sizeof(m), "channels.%s becomes %s: the grid figure, import/export and the bill follow the supply points.", id, nr);
-                    cJSON_AddItemToArray(warn, cJSON_CreateString(m));
+                if ((cs || ns) && r != cr) {   /* supply points are topology: the hub refuses a role patch to/from them (409) */
+                    snprintf(m, sizeof(m), "channels.%s.role: the supply role stays with the supply point", id); cJSON_Delete(norm);
+                    return fail(cx, "invalid_args", m, "Put the main_supply point on the input with the grid clamp: move_point.");
                 }
             } else if (!strcmp(k, "inside")) {
                 const char *iv = cJSON_GetStringValue(f);
@@ -2492,7 +2508,19 @@ static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
     cJSON_ArrayForEach(w, warn) { bool dup = false; const cJSON *x; cJSON_ArrayForEach(x, w2) if (!strcmp(x->valuestring, w->valuestring)) dup = true;
                                   if (!dup) cJSON_AddItemToArray(w2, cJSON_CreateString(w->valuestring)); }
     cJSON_Delete(warn);
-    if (!summary[0]) snprintf(summary, sizeof(summary), "%d change(s)", cJSON_GetArraySize(diff));
+    if (!summary[0]) {   /* the gist: the first changed fields, then a count */
+        int nd = cJSON_GetArraySize(diff), k = 0; size_t o = 0;
+        const cJSON *d;
+        cJSON_ArrayForEach(d, diff) {
+            if (k == 2) { snprintf(summary + o, sizeof(summary) - o, "; +%d more", nd - 2); break; }
+            const cJSON *to = cJSON_GetObjectItem(d, "to");
+            char tv[32];
+            if (cJSON_IsString(to)) snprintf(tv, sizeof(tv), "%.28s", to->valuestring); else snprintf(tv, sizeof(tv), "%g", cJSON_GetNumberValue(to));
+            int w = snprintf(summary + o, sizeof(summary) - o, "%s%.40s = %s", k ? "; " : "", cJSON_GetStringValue(cJSON_GetObjectItem(d, "path")), tv);
+            if (w < 0 || (size_t)w >= sizeof(summary) - o) break;
+            o += (size_t)w; k++;
+        }
+    }
     lk();
     int slot = 0; int64_t now = esp_timer_get_time();
     for (int i = 0; i < PROP_N; i++) { if (!s_prop[i].token[0] || now > s_prop[i].exp_us) { slot = i; break; } if (s_prop[i].exp_us < s_prop[slot].exp_us) slot = i; }
@@ -2514,7 +2542,8 @@ static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddBoolToObject(r, "module_restart", patch_restarts_module(norm));
     cJSON_AddStringToObject(r, "confirm_token", tok);
     cJSON_AddNumberToObject(r, "expires_in", PROP_TTL_S);
-    cJSON_AddStringToObject(r, "base_version", base);
+    { cJSON *vv = ver_load(); cJSON *va = cJSON_GetObjectItem(vv, "versions"); int nv = cJSON_GetArraySize(va);
+      cJSON_AddNumberToObject(r, "base_version", nv ? cJSON_GetNumberValue(cJSON_GetObjectItem(cJSON_GetArrayItem(va, nv - 1), "version")) : 0); cJSON_Delete(vv); }
     note(cx, "Show the diff to the user and apply only after they say yes; the token works once and only for this diff.");
     cx->as_of = now_s();
     return r;
@@ -2648,7 +2677,7 @@ static cJSON *t_list_config_versions(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_Delete(v);
-    note(cx, "Versions cover what can be changed over LLM: channel names, roles, inside, clamp models, the tariff prices/VAT/fees and the peaks cycle day.");
+    note(cx, "Versions cover channel names, roles, inside, clamp models, the tariff prices/VAT/fees and the peaks cycle day. Modules, module addresses, points made or moved and bus pins are not versioned: a rollback does not undo them.");
     cx->as_of = now_s();
     return r;
 }
@@ -2984,6 +3013,15 @@ static cJSON *t_scan_modules(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddBoolToObject(bo, "running", true);
         cJSON *dv = cJSON_AddArrayToObject(bo, "found");
         const cJSON *d;
+        uint32_t used = 0;   /* 0x50..0x5F taken on this bus: answering now or configured for a module */
+        cJSON_ArrayForEach(d, cJSON_GetObjectItem(rep, "devices")) { int x = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "addr")); if (x >= 0x50 && x <= 0x5F) used |= 1u << (x - 0x50); }
+        {
+            int ist = 0; cJSON *is = i2c_do("state", -1, -1, -1, &ist); const cJSON *im;
+            cJSON_ArrayForEach(im, cJSON_GetObjectItem(is, "modules"))
+                if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "bus")) == bus) { int x = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "addr")); if (x >= 0x50 && x <= 0x5F) used |= 1u << (x - 0x50); }
+            cJSON_Delete(is);
+        }
+        for (int x = 0x51; x <= 0x5F; x++) if (!(used & (1u << (x - 0x50)))) { char nf[8]; snprintf(nf, sizeof(nf), "0x%02X", x); cJSON_AddStringToObject(bo, "next_free_address", nf); break; }
         cJSON_ArrayForEach(d, cJSON_GetObjectItem(rep, "devices")) {
             cJSON *o = cJSON_CreateObject();
             int ad = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "addr"));
@@ -3005,7 +3043,7 @@ static cJSON *t_scan_modules(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddItemToArray(bl, bo);
     }
     if (!any && !cJSON_IsNumber(ba)) { cJSON_Delete(r); return fail(cx, "internal", "no I2C bus is running", NULL); }
-    if (new50) note(cx, "A new module answers at 0x50: add_module {bus, address 0x50}, then set_module_address to a free address before the user connects the next one.");
+    if (new50) note(cx, "A new module answers at 0x50: add_module {bus, address 0x50}, then set_module_address to next_free_address before the user connects the next one.");
     note(cx, "An address is unique on its bus; the same address may be used once on each bus. Two modules on one address answer as one: the hub cannot tell them apart, so connect one at a time.");
     cx->as_of = now_s(); cx->resolution = "live";
     return r;
@@ -3030,7 +3068,7 @@ static cJSON *t_add_module(const cJSON *a, rbllm_cx_t *cx)
     modules_view(r, rep);
     cJSON_Delete(rep);
     if (ad == 0x50) note(cx, "The module is on the factory address 0x50: move it now with set_module_address, before the next module is connected on this bus.");
-    note(cx, "Its channels appear in list_channels within a few seconds; name them with propose_config.");
+    note(cx, "The module measures nothing until its inputs carry points: list_module_inputs, then create_point for each current input in use.");
     cx->as_of = now_s();
     return r;
 }
@@ -3064,6 +3102,310 @@ static cJSON *t_forget_me(const cJSON *a, rbllm_cx_t *cx)
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "revoked", true);
     note(cx, "This token no longer works; pair again to come back.");
+    cx->as_of = now_s();
+    return r;
+}
+
+/* ---- points on module inputs, bus pins, restart (scope config; operator 23.11: the whole setup over LLM) ---- */
+static cJSON *sensors_list(void)
+{
+    char *sj = rbgrid_core_json_ctx() ? rbgrid_json_create_sensors_list(rbgrid_core_json_ctx()) : NULL;
+    cJSON *sl = sj ? cJSON_Parse(sj) : NULL;
+    free(sj);
+    return sl;
+}
+static const cJSON *sl_module(const cJSON *sl, int m)
+{
+    const cJSON *o;
+    cJSON_ArrayForEach(o, cJSON_GetObjectItem(sl, "modules")) if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "module")) == m) return o;
+    return NULL;
+}
+/* "selectable" (BASIC SCT-: the user picks the clamp model), "fixed" (clamps calibrated with the module, STD or CT-),
+ * "uncalibrated" (BASIC without a calibration class). */
+static const char *clamp_kind(const cJSON *mo)
+{
+    if (!mo) return "fixed";
+    if (cJSON_IsTrue(cJSON_GetObjectItem(mo, "ct_settable"))) return "selectable";
+    const char *ln = cJSON_GetStringValue(cJSON_GetObjectItem(mo, "line"));
+    if (ln && !strcmp(ln, "basic") && cJSON_IsTrue(cJSON_GetObjectItem(mo, "uncalibrated"))) return "uncalibrated";
+    return "fixed";
+}
+static const cJSON *sl_input(const cJSON *sl, int m, const char *label)
+{
+    const cJSON *e;
+    cJSON_ArrayForEach(e, cJSON_GetObjectItem(sl, "sensors")) {
+        const char *ifc = cJSON_GetStringValue(cJSON_GetObjectItem(e, "iface")), *lb = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ch_label"));
+        if (ifc && !strcmp(ifc, "i2c") && (int)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "module")) == m && lb && label && !strcasecmp(lb, label)) return e;
+    }
+    return NULL;
+}
+static int ct_code_of(const char *shortname)
+{
+    int code = -1;
+    cJSON *cm = ct_models(); const cJSON *x;
+    cJSON_ArrayForEach(x, cm) { char sh[24]; ct_short(x->valuestring, sh); if (shortname && !strcmp(sh, shortname)) code = atoi(x->string); }
+    cJSON_Delete(cm);
+    return code;
+}
+static void llm_source(const rbllm_cx_t *cx, char *src, size_t n)
+{
+    if (cx->internal && cx->client && !strcmp(cx->client, RBLLM_CLIENT_WEB)) strlcpy(src, "web", n);
+    else snprintf(src, n, "llm:%.40s", cx->client && cx->client[0] ? cx->client : "client");
+}
+
+static cJSON *t_list_module_inputs(const cJSON *a, rbllm_cx_t *cx)
+{
+    const cJSON *fm = cJSON_GetObjectItem(a, "module");
+    cJSON *sl = sensors_list();
+    if (!sl) { cx->retry_ms = 5000; return fail(cx, "busy", "the module list is not ready yet", "Retry in a few seconds."); }
+    int ist = 0;
+    cJSON *st = i2c_do("state", -1, -1, -1, &ist);
+    cJSON *r = cJSON_CreateObject();
+    cJSON *mods = cJSON_AddArrayToObject(r, "modules");
+    bool any_sel = false, any_free = false, hit = false;
+    const cJSON *mo;
+    cJSON_ArrayForEach(mo, cJSON_GetObjectItem(sl, "modules")) {
+        int m = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(mo, "module"));
+        if (cJSON_IsNumber(fm) && fm->valueint != m) continue;
+        const cJSON *im = NULL, *x;
+        cJSON_ArrayForEach(x, cJSON_GetObjectItem(st, "modules")) if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(x, "module")) == m) im = x;
+        if (!im) continue;   /* a descriptor of a module no longer on the hub */
+        hit = true;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "module", m);
+        cJSON_AddNumberToObject(o, "bus", cJSON_GetNumberValue(cJSON_GetObjectItem(im, "bus")));
+        char ad[8]; snprintf(ad, sizeof(ad), "0x%02X", (int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "addr")));
+        cJSON_AddStringToObject(o, "address", ad);
+        const char *md = cJSON_GetStringValue(cJSON_GetObjectItem(mo, "model"));
+        cJSON_AddStringToObject(o, "model", md ? md : "");
+        const char *ln = cJSON_GetStringValue(cJSON_GetObjectItem(mo, "line"));
+        cJSON_AddStringToObject(o, "series", ln && !strcmp(ln, "std") ? "STD" : "BASIC");
+        cJSON_AddBoolToObject(o, "online", cJSON_IsTrue(cJSON_GetObjectItem(mo, "present")));
+        const char *ck = clamp_kind(mo);
+        cJSON_AddStringToObject(o, "clamp", ck);
+        if (!strcmp(ck, "selectable")) any_sel = true;
+        cJSON *ins = cJSON_AddArrayToObject(o, "inputs");
+        const cJSON *e;
+        cJSON_ArrayForEach(e, cJSON_GetObjectItem(sl, "sensors")) {
+            const char *ifc = cJSON_GetStringValue(cJSON_GetObjectItem(e, "iface"));
+            if (!ifc || strcmp(ifc, "i2c") || (int)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "module")) != m) continue;
+            const char *lb = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ch_label"));
+            cJSON *io = cJSON_CreateObject();
+            cJSON_AddStringToObject(io, "input", lb ? lb : "?");
+            bool volt = lb && !strcmp(lb, "V");
+            cJSON_AddStringToObject(io, "kind", volt ? "voltage" : lb && !strcmp(lb, "L1–L3") ? "three_phase" : "current");
+            const char *uid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
+            if (uid) cJSON_AddStringToObject(io, "point", uid); else { cJSON_AddNullToObject(io, "point"); if (!volt) any_free = true; }
+            const char *cn = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ct_name"));
+            if (cn && !volt) { char sh[24]; ct_short(cn, sh); cJSON_AddStringToObject(io, "ct_model", sh); }
+            double ra = cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ct_rated_a"));
+            if (ra > 0 && !volt) cJSON_AddNumberToObject(io, "ct_rating_a", ra);
+            cJSON_AddItemToArray(ins, io);
+        }
+        cJSON_AddItemToArray(mods, o);
+    }
+    cJSON_Delete(st);
+    cJSON_Delete(sl);
+    if (cJSON_IsNumber(fm) && !hit) { cJSON_Delete(r); return fail(cx, "not_found", "no such module on the hub", "get_health lists the modules."); }
+    if (any_sel) {
+        cJSON *cl = cJSON_AddArrayToObject(r, "ct_models");
+        cJSON *cm = ct_models(); const cJSON *x;
+        cJSON_ArrayForEach(x, cm) { char sh[24]; ct_short(x->valuestring, sh); cJSON_AddItemToArray(cl, cJSON_CreateString(sh)); }
+        cJSON_Delete(cm);
+        note(cx, "clamp=selectable: ask which clamp is on each current input (the model is printed on it) and pass it as ct_model.");
+    }
+    note(cx, "clamp=fixed: the clamps are calibrated together with the module; there is no model to choose, never offer one.");
+    if (any_free) note(cx, "An input with point=null measures nothing yet: create_point puts a point on it.");
+    cx->as_of = now_s(); cx->resolution = "live";
+    return r;
+}
+
+static cJSON *t_create_point(const cJSON *a, rbllm_cx_t *cx)
+{
+    int m = cJSON_GetObjectItem(a, "module")->valueint;
+    const char *in = cJSON_GetStringValue(cJSON_GetObjectItem(a, "input"));
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(a, "name"));
+    const char *rs = cJSON_GetStringValue(cJSON_GetObjectItem(a, "role"));
+    const char *ctm = cJSON_GetStringValue(cJSON_GetObjectItem(a, "ct_model"));
+    if (!valid_name(name)) return fail(cx, "invalid_args", "name: 1..31 bytes of UTF-8 text, no control characters", NULL);
+    int role = rs ? role_from_name(rs) : RBPOWER_ROLE_DEVICE_LOAD;
+    if (role < 0) return fail(cx, "invalid_args", "role: one of the roles in get_config_schema {section: channels}", NULL);
+    if (role == RBPOWER_ROLE_MAIN_SUPPLY || role == RBPOWER_ROLE_ALTERNATIVE_SUPPLY)
+        return fail(cx, "invalid_args", "the supply point already exists on the hub; it is not created again",
+                    "Put the existing main_supply point on the input with the grid clamp: move_point.");
+    cJSON *sl = sensors_list();
+    if (!sl) { cx->retry_ms = 5000; return fail(cx, "busy", "the module list is not ready yet", "Retry in a few seconds."); }
+    const cJSON *e = sl_input(sl, m, in), *mo = sl_module(sl, m);
+    char msg[160];
+    if (!e) { snprintf(msg, sizeof(msg), "module %d has no input '%.8s'", m, in ? in : ""); cJSON_Delete(sl); return fail(cx, "not_found", msg, "list_module_inputs shows the inputs."); }
+    const char *lb = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ch_label"));
+    if (lb && !strcmp(lb, "V")) { cJSON_Delete(sl); return fail(cx, "invalid_args", "the voltage input feeds the hub's voltage; points go on current inputs", NULL); }
+    const char *bound = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
+    if (bound) { snprintf(msg, sizeof(msg), "input %s of module %d already carries point %s", lb, m, bound); cJSON_Delete(sl); return fail(cx, "conflict", msg, "Rename that point with propose_config, or pick a free input."); }
+    int code = -1;
+    if (ctm) {
+        if (strcmp(clamp_kind(mo), "selectable")) { cJSON_Delete(sl); return fail(cx, "invalid_args", "this module's clamps are calibrated with it: no clamp model to choose", "Leave ct_model out."); }
+        code = ct_code_of(ctm);
+        if (code < 0) { cJSON_Delete(sl); return fail(cx, "invalid_args", "ct_model: one of ct_models from list_module_inputs (e.g. SCT-013-030)", NULL); }
+    }
+    cJSON *req = cJSON_CreateObject();
+    cJSON *sn = cJSON_AddObjectToObject(req, "sensor");
+    cJSON_AddStringToObject(sn, "iface", "i2c");
+    cJSON_AddNumberToObject(sn, "bus", cJSON_GetNumberValue(cJSON_GetObjectItem(e, "bus")));
+    cJSON_AddNumberToObject(sn, "module", m);
+    cJSON_AddNumberToObject(sn, "ch", cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ch")));
+    cJSON_AddStringToObject(req, "name", name);
+    char up[24]; strlcpy(up, role_name((uint8_t)role), sizeof(up)); for (char *q = up; *q; q++) if (*q >= 'a' && *q <= 'z') *q -= 32;
+    cJSON_AddStringToObject(req, "role", up);
+    cJSON_Delete(sl);
+    char *js = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+    int st = 0;
+    char *rep = js ? rbgrid_units_create(js, &st) : NULL;
+    free(js);
+    cJSON *rj = rep ? cJSON_Parse(rep) : NULL;
+    free(rep);
+    if (st != 201) {
+        const char *em = rj ? cJSON_GetStringValue(cJSON_GetObjectItem(rj, "message")) : NULL;
+        snprintf(msg, sizeof(msg), "the hub refused the point (%d: %.100s)", st, em ? em : "?");
+        cJSON_Delete(rj);
+        return fail(cx, st == 409 ? "conflict" : st == 507 ? "conflict" : "invalid_args", msg, st == 507 ? "The hub holds no more points." : NULL);
+    }
+    char id[8]; strlcpy(id, cJSON_GetStringValue(cJSON_GetObjectItem(rj, "unit_id")) ? cJSON_GetStringValue(cJSON_GetObjectItem(rj, "unit_id")) : "", sizeof(id));
+    cJSON_Delete(rj);
+    bool ct_ok = true;
+    if (code >= 0) {
+        unsigned uid = 0; sscanf(id, "%4x", &uid);
+        char b[32]; snprintf(b, sizeof(b), "{\"ct_code\":%d}", code);
+        int s2 = 0; char *r2 = rbgrid_units_mutate((rbpower_unit_id_t)uid, "", b, &s2);
+        free(r2);
+        ct_ok = s2 == 200;
+    }
+    char src[48]; llm_source(cx, src, sizeof(src));
+    char sm[120]; snprintf(sm, sizeof(sm), "point %s created: %.40s (module %d %s)", id, name, m, lb ? lb : "");
+    int v = ver_sync(src, sm);
+    s_cfg_changed = true;
+    rbpower_diag_printf("llm: %s by '%s'", sm, cx->client ? cx->client : "?");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "created", true);
+    cJSON *c = cJSON_AddObjectToObject(r, "channel");
+    cJSON_AddStringToObject(c, "id", id);
+    cJSON_AddStringToObject(c, "name", name);
+    cJSON_AddStringToObject(c, "role", role_name((uint8_t)role));
+    cJSON_AddNumberToObject(c, "module", m);
+    cJSON_AddStringToObject(c, "input", lb ? lb : "");
+    if (code >= 0 && ct_ok) cJSON_AddStringToObject(c, "ct_model", ctm);
+    cJSON_AddNumberToObject(r, "version", v);
+    if (!ct_ok) note(cx, "The point was created, but the module did not take the clamp model: set it with propose_config {channels:{<id>:{ct_model}}}.");
+    else if (code >= 0) note(cx, "The module restarts to take the clamp model: a few seconds without data on it.");
+    note(cx, "Live values appear within a few seconds (read_live); hours fill as they close.");
+    cx->as_of = now_s();
+    return r;
+}
+
+static cJSON *t_move_point(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *cid = cJSON_GetStringValue(cJSON_GetObjectItem(a, "channel"));
+    int m = cJSON_GetObjectItem(a, "module")->valueint;
+    const char *in = cJSON_GetStringValue(cJSON_GetObjectItem(a, "input"));
+    unsigned uid = 0;
+    if (!cid || sscanf(cid, "%4x", &uid) != 1 || !uid) return fail(cx, "invalid_args", "channel: a channel id from list_channels", NULL);
+    cJSON *sl = sensors_list();
+    if (!sl) { cx->retry_ms = 5000; return fail(cx, "busy", "the module list is not ready yet", "Retry in a few seconds."); }
+    const cJSON *e = sl_input(sl, m, in);
+    char msg[160];
+    if (!e) { snprintf(msg, sizeof(msg), "module %d has no input '%.8s'", m, in ? in : ""); cJSON_Delete(sl); return fail(cx, "not_found", msg, "list_module_inputs shows the inputs."); }
+    const char *lb = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ch_label"));
+    if (lb && !strcmp(lb, "V")) { cJSON_Delete(sl); return fail(cx, "invalid_args", "a point goes on a current input, not on V", NULL); }
+    const char *bound = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
+    if (bound) { snprintf(msg, sizeof(msg), "input %s of module %d already carries point %s", lb, m, bound); cJSON_Delete(sl); return fail(cx, "conflict", msg, NULL); }
+    char b[48]; snprintf(b, sizeof(b), "{\"module\":%d,\"ch\":%d}", m, (int)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ch")));
+    char lbs[12]; strlcpy(lbs, lb ? lb : "", sizeof(lbs));
+    cJSON_Delete(sl);
+    int st = 0;
+    char *rep = rbgrid_units_mutate((rbpower_unit_id_t)uid, "rebind", b, &st);
+    cJSON *rj = rep ? cJSON_Parse(rep) : NULL;
+    free(rep);
+    if (st != 200) {
+        const char *em = rj ? cJSON_GetStringValue(cJSON_GetObjectItem(rj, "message")) : NULL;
+        snprintf(msg, sizeof(msg), "the hub refused the move (%d: %.100s)", st, em ? em : "?");
+        cJSON_Delete(rj);
+        return fail(cx, st == 404 ? "not_found" : st == 409 ? "conflict" : "invalid_args", msg, NULL);
+    }
+    bool reb = cJSON_IsTrue(cJSON_GetObjectItem(rj, "requires_reboot"));
+    cJSON_Delete(rj);
+    char src[48]; llm_source(cx, src, sizeof(src));
+    char sm[120]; snprintf(sm, sizeof(sm), "point %04X moved to module %d %s", uid, m, lbs);
+    ver_sync(src, sm);
+    s_cfg_changed = true;
+    rbpower_diag_printf("llm: %s by '%s'", sm, cx->client ? cx->client : "?");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "moved", true);
+    cJSON *c = cJSON_AddObjectToObject(r, "channel");
+    char h[5]; snprintf(h, sizeof(h), "%04X", uid);
+    cJSON_AddStringToObject(c, "id", h);
+    cJSON_AddNumberToObject(c, "module", m);
+    cJSON_AddStringToObject(c, "input", lbs);
+    cJSON_AddBoolToObject(r, "restart_required", reb);
+    note(cx, "The point keeps its id, name, role and history; from now on it measures the new input.");
+    cx->as_of = now_s();
+    return r;
+}
+
+static cJSON *t_set_bus_pins(const cJSON *a, rbllm_cx_t *cx)
+{
+    if (!s_i2c_action) return fail(cx, "internal", "module setup is not available on this hub", NULL);
+    int bus = cJSON_GetObjectItem(a, "bus")->valueint;
+    bool off = cJSON_IsTrue(cJSON_GetObjectItem(a, "off"));
+    const cJSON *sda = cJSON_GetObjectItem(a, "sda"), *scl = cJSON_GetObjectItem(a, "scl");
+    if (bus != 1) return fail(cx, "invalid_args", "bus: 1 (bus 0 is fixed by the board)", NULL);
+    if (!off && (!cJSON_IsNumber(sda) || !cJSON_IsNumber(scl))) return fail(cx, "invalid_args", "sda and scl: GPIO numbers from pins_ok in get_health, or off:true", NULL);
+    cJSON *q = cJSON_CreateObject();
+    cJSON_AddStringToObject(q, "op", "pins");
+    cJSON_AddNumberToObject(q, "bus", bus);
+    if (off) cJSON_AddTrueToObject(q, "off");
+    else { cJSON_AddNumberToObject(q, "sda", sda->valueint); cJSON_AddNumberToObject(q, "scl", scl->valueint); }
+    int st = 500;
+    char *out = s_i2c_action(q, &st);
+    cJSON_Delete(q);
+    cJSON *rep = out ? cJSON_Parse(out) : NULL;
+    free(out);
+    if (st != 200 || !rep) return i2c_fail(cx, rep, st);
+    cJSON_Delete(rep);
+    rbpower_diag_printf("llm: bus %d pins %s by '%s'", bus, off ? "off" : "set", cx->client ? cx->client : "?");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "saved", true);
+    cJSON_AddNumberToObject(r, "bus", bus);
+    if (!off) { cJSON_AddNumberToObject(r, "sda", sda->valueint); cJSON_AddNumberToObject(r, "scl", scl->valueint); }
+    cJSON_AddBoolToObject(r, "restart_required", true);
+    note(cx, "Saved; the bus starts after a restart. Ask the user, then call restart_hub. After it, scan_modules {bus: 1}.");
+    cx->as_of = now_s();
+    return r;
+}
+
+static void llm_restart_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(1500));   /* the reply is on its way first */
+    rbgrid_system_reboot(500);
+    vTaskDelete(NULL);
+}
+static cJSON *t_restart_hub(const cJSON *a, rbllm_cx_t *cx)
+{
+    (void)a;
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    esp_ota_img_states_t os;
+    if (run && esp_ota_get_state_partition(run, &os) == ESP_OK && os == ESP_OTA_IMG_PENDING_VERIFY) {
+        cx->retry_ms = 60000;
+        return fail(cx, "busy", "the hub is still confirming the firmware installed less than a minute ago", "Retry in about a minute.");
+    }
+    if (xTaskCreate(llm_restart_task, "llm_restart", 3072, NULL, tskIDLE_PRIORITY + 6, NULL) != pdPASS)
+        return fail(cx, "internal", "the restart could not be scheduled", "Restart the hub from its page.");
+    rbpower_diag_printf("llm: restart requested by '%s'", cx->client ? cx->client : "?");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "restarting", true);
+    cJSON_AddNumberToObject(r, "back_in_s", 30);
+    note(cx, "The hub restarts in about 2 s and answers again in about 30 s; the hour in progress is kept.");
     cx->as_of = now_s();
     return r;
 }
@@ -3169,7 +3511,7 @@ static const rbllm_tool_t TOOLS[] = {
       "When to call: to explain how the hub is set up (points and their clamps, tariff, price rules, time zone) before advising a change. "
       "What it returns: the chosen section(s) as a compact view plus the config version; no secrets.",
       "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"tariff\",\"notifications\",\"region\"]}},\"additionalProperties\":false}",
-      "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"string\"},\"channels\":{\"type\":\"array\"},\"tariff\":{\"type\":\"object\"}}}",
+      "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"channels\":{\"type\":\"array\"},\"tariff\":{\"type\":\"object\"}}}",
       t_get_config },
     { "get_config_schema", RBLLM_SCOPE_CONFIG,
       "When to call: before propose_config, to learn which fields of a section can be changed and their allowed values (roles, clamp "
@@ -3198,7 +3540,7 @@ static const rbllm_tool_t TOOLS[] = {
       t_list_config_versions },
     { "rollback_config", RBLLM_SCOPE_CONFIG,
       "When to call: to finish an undo the user confirmed. Takes the confirm_token from propose_config {rollback_to}. What it returns: "
-      "as apply_config.",
+      "as apply_config. It restores names, roles, inside, clamp models, tariff and peaks cycle day; modules, addresses, points and bus pins stay as they are.",
       "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"confirm_token\":{\"type\":\"string\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"applied\":{\"type\":\"boolean\"}}}",
       t_rollback_config },
@@ -3209,8 +3551,8 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"buses\":{\"type\":\"array\"}}}",
       t_scan_modules },
     { "add_module", RBLLM_SCOPE_CONFIG,
-      "When to call: when scan_modules shows a new module (added=false). What it does: adds it to the hub on that bus and address; its "
-      "channels then appear as points. New modules arrive at 0x50: move it with set_module_address before the next one is connected.",
+      "When to call: when scan_modules shows a new module (added=false). What it does: adds it to the hub on that bus and address "
+      "(its inputs then show in list_module_inputs, without points). New modules arrive at 0x50: move it with set_module_address before the next one is connected.",
       "{\"type\":\"object\",\"properties\":{\"bus\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1},\"address\":{\"type\":\"string\",\"description\":\"hex, e.g. 0x50\"}},\"required\":[\"bus\",\"address\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"added\":{\"type\":\"boolean\"},\"modules\":{\"type\":\"array\"}}}",
       t_add_module },
@@ -3220,6 +3562,42 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":7},\"address\":{\"type\":\"string\",\"description\":\"hex 0x08..0x77, e.g. 0x51\"}},\"required\":[\"module\",\"address\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"moved\":{\"type\":\"boolean\"},\"modules\":{\"type\":\"array\"}}}",
       t_set_module_address },
+    { "list_module_inputs", RBLLM_SCOPE_READ,
+      "When to call: after add_module, and before create_point or a clamp-model change. What it returns: per module its series, model, "
+      "bus and address, the clamp kind (selectable = the user picks the clamp model; fixed = calibrated with the module, nothing to pick) "
+      "and every input as marked on the module (I0, I1 ..., V) with the point on it or null, plus the clamp models to choose from.",
+      "{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":7,\"description\":\"one module; omit for all\"}},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"modules\":{\"type\":\"array\"},\"ct_models\":{\"type\":\"array\"}}}",
+      t_list_module_inputs },
+    { "create_point", RBLLM_SCOPE_CONFIG,
+      "When to call: for each current input in use that has no point (list_module_inputs: point=null), after asking the user what it "
+      "measures. What it does: creates a metering point on that input with a name, a role (default device_load) and, for clamp=selectable, "
+      "the clamp model. The supply point already exists: put it on the right input with move_point.",
+      "{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":7},\"input\":{\"type\":\"string\",\"description\":\"as list_module_inputs shows it, e.g. I0\"},"
+      "\"name\":{\"type\":\"string\",\"maxLength\":31},\"role\":{\"type\":\"string\",\"enum\":[\"circuit_breaker\",\"device_load\",\"zone_load\",\"renewable_source\",\"storage_system\",\"ev_charging\",\"heating_cooling\",\"smart_appliance\"]},"
+      "\"ct_model\":{\"type\":\"string\",\"description\":\"only for clamp=selectable, one of ct_models\"}},\"required\":[\"module\",\"input\",\"name\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"created\":{\"type\":\"boolean\"},\"channel\":{\"type\":\"object\"},\"version\":{\"type\":\"integer\"}}}",
+      t_create_point },
+    { "move_point", RBLLM_SCOPE_CONFIG,
+      "When to call: when a point sits on the wrong input, typically the supply (main_supply) point, which the hub starts with on module 0 "
+      "input I0: ask the user which input carries the grid clamp. What it does: moves the point to a free input; id, name, role and history stay.",
+      "{\"type\":\"object\",\"properties\":{\"channel\":{\"type\":\"string\",\"description\":\"id from list_channels\"},\"module\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":7},"
+      "\"input\":{\"type\":\"string\",\"description\":\"e.g. I1\"}},\"required\":[\"channel\",\"module\",\"input\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"moved\":{\"type\":\"boolean\"},\"channel\":{\"type\":\"object\"},\"restart_required\":{\"type\":\"boolean\"}}}",
+      t_move_point },
+    { "set_bus_pins", RBLLM_SCOPE_CONFIG,
+      "When to call: to start I2C bus 1 (get_health: running=false), after the user says which GPIO pins carry its SDA and SCL. What it "
+      "does: saves the pins (checked against the board's free pins, pins_ok in get_health); the bus starts after a restart, so tell the "
+      "user before calling. off:true stops bus 1 (no module may sit on it).",
+      "{\"type\":\"object\",\"properties\":{\"bus\":{\"type\":\"integer\",\"enum\":[1]},\"sda\":{\"type\":\"integer\"},\"scl\":{\"type\":\"integer\"},\"off\":{\"type\":\"boolean\"}},\"required\":[\"bus\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"saved\":{\"type\":\"boolean\"},\"restart_required\":{\"type\":\"boolean\"}}}",
+      t_set_bus_pins },
+    { "restart_hub", RBLLM_SCOPE_CONFIG,
+      "When to call: when a change answered restart_required=true and the user agreed to a restart now. What it does: restarts the hub "
+      "(about 30 s without data; the hour in progress is kept). Refused for a minute after a firmware update.",
+      "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"restarting\":{\"type\":\"boolean\"},\"back_in_s\":{\"type\":\"integer\"}}}",
+      t_restart_hub },
     { "forget_me", RBLLM_SCOPE_READ,
       "When to call: after pairing again with a wider scope, to give back the previous token, or when the user wants this assistant "
       "disconnected. What it does: revokes the token this call is made with. Then pair again to come back.",
@@ -3249,14 +3627,23 @@ static const char *const PLAYBOOKS[] = {
     "{\"id\":\"first_setup\",\"title\":\"First setup of a new hub\",\"steps\":[{\"tool\":\"get_hub_info\"},{\"tool\":\"get_health\"},"
     "{\"tool\":\"scan_modules\",\"args_hint\":{\"bus\":0},\"repeat\":\"after each module the user connects\"},"
     "{\"tool\":\"add_module\",\"args_hint\":{\"bus\":0,\"address\":\"0x50\"},\"when\":\"scan shows a module with added=false\"},"
-    "{\"tool\":\"set_module_address\",\"args_hint\":{\"module\":0,\"address\":\"0x51\"},\"when\":\"the module sits at 0x50\"},"
-    "{\"tool\":\"list_channels\"},{\"tool\":\"identify_channel\",\"args_hint\":{\"action\":\"start\"},\"when\":\"to tell which clamp is which\"},"
-    "{\"tool\":\"propose_config\",\"when\":\"name the channels and set their roles, the CT model and the tariff\"},{\"tool\":\"check_installation\"}],"
-    "\"ask_user\":[\"Connect ONE module now (cable to the hub, module powered) and tell me when it is done.\",\"What does this clamp measure?\"],"
-    "\"rules\":[\"Every new module arrives at I2C address 0x50. Connect modules one at a time: add it, move it off 0x50 (0x51, 0x52 ...), only then ask for the next one.\","
-    "\"An address is unique on its bus; the same address may be used once on each bus. Bus 1 works once its pins are set on the hub page.\","
+    "{\"tool\":\"set_module_address\",\"args_hint\":{\"module\":0,\"address\":\"0x51\"},\"when\":\"the module sits at 0x50; use the bus's next_free_address\"},"
+    "{\"tool\":\"list_module_inputs\",\"when\":\"the module is added and moved\"},"
+    "{\"tool\":\"create_point\",\"args_hint\":{\"module\":1,\"input\":\"I0\",\"name\":\"Kitchen\"},\"when\":\"for each current input in use without a point; ct_model only when clamp=selectable\"},"
+    "{\"tool\":\"list_channels\"},{\"tool\":\"move_point\",\"when\":\"the main_supply point is not on the input with the grid clamp\"},"
+    "{\"tool\":\"identify_channel\",\"args_hint\":{\"action\":\"start\"},\"when\":\"to tell which clamp is which\"},"
+    "{\"tool\":\"set_bus_pins\",\"when\":\"modules go on bus 1 and it is not running; then restart_hub after the user agrees\"},"
+    "{\"tool\":\"propose_config\",\"when\":\"rename points, change roles or clamp models, enter the tariff\"},{\"tool\":\"check_installation\"}],"
+    "\"ask_user\":[\"Connect ONE module now (cable to the hub, module powered) and tell me when it is done.\",\"Which inputs of this module have a clamp, and what does each one measure?\","
+    "\"Which clamp model is printed on it?\",\"Which clamp sits on the grid feed (the main supply)?\"],"
+    "\"rules\":[\"Every new module arrives at I2C address 0x50. Connect modules one at a time: add it, move it off 0x50 (next_free_address), only then ask for the next one.\","
+    "\"An address is unique on its bus; the same address may be used once on each bus.\","
+    "\"A module measures nothing until its inputs carry points: create_point for each input in use.\","
+    "\"clamp=fixed: the clamps are calibrated with the module; never offer a clamp model. clamp=selectable: ask for the model printed on the clamp.\","
+    "\"The hub starts with one main_supply point; without it on the grid clamp there is no grid figure and no bill: ask which input carries it and use move_point.\","
+    "\"Bus pins and restarts: tell the user before set_bus_pins and ask before restart_hub.\","
     "\"Up to the hub's max_modules (get_health) on one bus or both.\",\"Set the time zone and the tariff before reading money or days.\","
-    "\"Changes to names, roles, CT model and tariff go through propose_config and the user's OK before apply_config.\",\"Answer in the user's language.\"]}",
+    "\"Names, roles, clamp models and tariff go through propose_config and the user's OK before apply_config.\",\"Answer in the user's language.\"]}",
 };
 
 static cJSON *t_get_analysis_playbook(const cJSON *a, rbllm_cx_t *cx)
@@ -3305,6 +3692,7 @@ char *rbllm_manifest_json(void)
     cJSON_AddStringToObject(hub, "name", jc && jc->device_info.device_name[0] ? jc->device_info.device_name : "RBgrid");
     const esp_app_desc_t *ad = esp_app_get_description();
     cJSON_AddStringToObject(hub, "fw", ad ? ad->version : "");
+    { char eh[17] = ""; esp_app_get_elf_sha256(eh, sizeof(eh)); cJSON_AddStringToObject(hub, "build", eh); }
 #if CONFIG_IDF_TARGET_ESP32S3
     cJSON_AddStringToObject(hub, "board", "esp32s3");
 #else
@@ -3338,10 +3726,13 @@ char *rbllm_manifest_json(void)
         cJSON_AddItemToObject(t, "output_schema", cJSON_Parse(TOOLS[i].output));
         cJSON *an = cJSON_AddObjectToObject(t, "annotations");
         bool fm = !strcmp(TOOLS[i].name, "forget_me");      /* read scope, but it revokes the caller's token */
+        /* writes into a module or the board that the client should confirm with the user first (MCP clients ask on this hint) */
+        bool ds = fm || !strcmp(TOOLS[i].name, "add_module") || !strcmp(TOOLS[i].name, "set_module_address") ||
+                  !strcmp(TOOLS[i].name, "set_bus_pins") || !strcmp(TOOLS[i].name, "restart_hub");
         bool ro = !fm && (TOOLS[i].scope == RBLLM_SCOPE_READ || !strncmp(TOOLS[i].name, "get_", 4) || !strcmp(TOOLS[i].name, "propose_config") ||
                   !strcmp(TOOLS[i].name, "list_config_versions"));   /* config scope but no change */
         cJSON_AddBoolToObject(an, "readOnlyHint", ro);
-        cJSON_AddBoolToObject(an, "destructiveHint", fm);
+        cJSON_AddBoolToObject(an, "destructiveHint", ds);
         cJSON_AddBoolToObject(an, "idempotentHint", ro);
         cJSON_AddItemToArray(tools, t);
     }
@@ -3451,7 +3842,8 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
             char m[64]; snprintf(m, sizeof(m), "the tool needs scope '%s'", t->scope == RBLLM_SCOPE_CONFIG ? "config" : "read");
             fail(&cx, "forbidden_scope", m, "Pair again with that scope on the hub's AI / LLM page.");
         } else if (S.read_only && !cx.internal && (!strcmp(t->name, "apply_config") || !strcmp(t->name, "rollback_config") || !strcmp(t->name, "propose_config") ||
-                                                 !strcmp(t->name, "add_module") || !strcmp(t->name, "set_module_address")))
+                                                 !strcmp(t->name, "add_module") || !strcmp(t->name, "set_module_address") || !strcmp(t->name, "create_point") ||
+                                                 !strcmp(t->name, "move_point") || !strcmp(t->name, "set_bus_pins") || !strcmp(t->name, "restart_hub")))
             fail(&cx, "read_only_mode", "the hub is in read-only mode for LLM clients", "The user can switch read-only off on the hub's AI / LLM page.");
         else if (!cJSON_IsObject(args)) fail(&cx, "invalid_args", "'args' must be an object", NULL);
         else if (check_args(&cx, t, args)) res = t->fn(args, &cx);
