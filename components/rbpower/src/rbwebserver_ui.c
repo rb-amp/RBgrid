@@ -281,6 +281,13 @@ static esp_err_t serve_lang(httpd_req_t *req, const char *rel /* "lang/xx.json" 
 
 /* GET  /api/system/lang            → {"code":"de","bytes":N} | {"code":null}
  * POST /api/system/lang?code=xx    body = the pack JSON (admin token) → stored, the previous pack removed */
+/* The installed language pack's code (2 letters) for the LLM get_hub_info; false = none (built-in English). */
+bool rbwebserver_ui_lang_code(char out[3])
+{
+    if (!s_mounted) rbwebserver_ui_mount();
+    return s_mounted && lang_current(out);
+}
+
 esp_err_t rbwebserver_ui_lang_handler(httpd_req_t *req)
 {
     add_cors_headers(req);

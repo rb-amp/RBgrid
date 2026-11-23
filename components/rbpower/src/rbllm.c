@@ -116,6 +116,9 @@ void rbllm_register_events_reader(char *(*fn)(uint32_t, uint32_t, int)) { s_even
  * hub page's Add-a-module flow (bus/address checks, UID-confirmed address change). */
 static char *(*s_i2c_action)(const struct cJSON *, int *);
 void rbllm_register_i2c_action(char *(*fn)(const struct cJSON *, int *)) { s_i2c_action = fn; }
+bool rbwebserver_ui_lang_code(char out[3]);   /* rbwebserver_ui.c */
+static int (*s_modfw_status)(char *, size_t);
+void rbllm_register_modfw_status(int (*fn)(char *out, size_t cap)) { s_modfw_status = fn; }
 /* Run one op; returns the parsed reply (caller deletes) and *st; NULL when unavailable. */
 static cJSON *i2c_do(const char *op, int bus, int module, int addr, int *st)
 {
@@ -837,9 +840,13 @@ static cJSON *t_get_hub_info(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddItemToArray(cap, cJSON_CreateString("config_read"));
     cJSON_AddItemToArray(cap, cJSON_CreateString("config"));
     cJSON_AddBoolToObject(r, "read_only_mode", S.read_only);
+    {   /* the web app's language pack on the hub (installed from the hub page; null = the app's built-in English) */
+        char lc[3];
+        if (rbwebserver_ui_lang_code(lc)) cJSON_AddStringToObject(r, "ui_language", lc); else cJSON_AddNullToObject(r, "ui_language");
+    }
     {   /* kept on the hub's own page on purpose: they change the assistant's own access or link, or need a file */
         cJSON *hp = cJSON_AddArrayToObject(r, "hub_page_only");
-        const char *const HP[] = { "wifi", "admin_password", "assistant_access", "firmware_update", "factory_reset", "backup_restore" };
+        const char *const HP[] = { "wifi", "admin_password", "assistant_access", "firmware_update", "factory_reset", "backup_restore", "language_pack", "mqtt_ca" };
         for (size_t q = 0; q < sizeof(HP) / sizeof(HP[0]); q++) cJSON_AddItemToArray(hp, cJSON_CreateString(HP[q]));
     }
     cx->as_of = n;
@@ -969,6 +976,12 @@ static cJSON *t_get_health(const cJSON *a, rbllm_cx_t *cx)
         const cJSON *pk = cJSON_GetObjectItem(i2cst, "pins_ok");
         if (cJSON_IsArray(pk)) cJSON_AddItemToObject(r, "pins_ok", cJSON_Duplicate(pk, true));   /* free GPIOs set_bus_pins accepts */
         cJSON_AddBoolToObject(r, "restart_pending", cJSON_IsTrue(cJSON_GetObjectItem(i2cst, "reboot_pending")));
+    }
+    if (s_modfw_status) {   /* a module firmware update started on the hub page: progress, as the page shows it */
+        char fb[320]; fb[0] = '\0';
+        s_modfw_status(fb, sizeof(fb));
+        cJSON *mf = fb[0] ? cJSON_Parse(fb) : NULL;
+        if (mf) cJSON_AddItemToObject(r, "module_firmware", mf); else cJSON_AddNullToObject(r, "module_firmware");
     }
     cJSON *mods = cJSON_AddArrayToObject(r, "modules");
     int on = 0, tot = 0;
@@ -2082,6 +2095,10 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(g, "currency", rbpower_tariff_currency());
         const rbpower_tariff_plan_t *tp = rbpower_tariff_get_current_plan();
         cJSON_AddStringToObject(g, "region_code", tp ? tp->region_code : "");
+        const rbpower_extended_config_t *ecr = rbgrid_core_ext_cfg();
+        const rbpower_hardware_config_t *hw = ecr ? ecr->base_hardware_config : NULL;
+        if (hw && hw->network.nominal_voltage > 0) cJSON_AddNumberToObject(g, "nominal_voltage", hw->network.nominal_voltage); else cJSON_AddNullToObject(g, "nominal_voltage");
+        cJSON_AddNumberToObject(g, "nominal_frequency", hw && hw->network.nominal_frequency ? hw->network.nominal_frequency : 50);
     }
     if (all || !strcmp(sec, "hub")) {
         const rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
@@ -2089,6 +2106,9 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
         char b[48];
         utf8_clean(ec && ec->home_name ? ec->home_name : "", b, sizeof(b)); cJSON_AddStringToObject(h, "name", b);
         utf8_clean(ec && ec->location ? ec->location : "", b, sizeof(b)); cJSON_AddStringToObject(h, "location", b);
+        static const char *const GS[] = { "", "1P", "SPLIT", "3P" };
+        int gs = ec ? ec->grid_system : 0;
+        if (gs > 0 && gs < 4) cJSON_AddStringToObject(h, "grid_system", GS[gs]); else cJSON_AddNullToObject(h, "grid_system");
     }
     if (all || !strcmp(sec, "integrations")) {
         cJSON *g = cJSON_AddObjectToObject(r, "integrations");
@@ -2098,6 +2118,9 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(mq, "broker_uri", mu);
         cJSON_AddBoolToObject(mq, "connected", rbmqtt_is_connected());
         cJSON_AddStringToObject(mq, "home_assistant", "MQTT discovery on the same broker");
+        cJSON *tl = cJSON_AddObjectToObject(g, "telemetry");
+        cJSON_AddStringToObject(tl, "profile", rbgrid_telemetry_get_lean() ? "lean" : "full");
+        cJSON_AddNumberToObject(tl, "frame", rbgrid_telemetry_get_frame());
     }
     if (sec && !strcmp(sec, "dynamic_price")) {
         cJSON *dp = rbdynprice_config_json();
@@ -2315,7 +2338,7 @@ static int role_from_name(const char *s)
 }
 
 /* ---- settings beyond channels/tariff (operator 23.11: the LLM interface covers the hub's settings, not half of them) ---- */
-static const char *const PATCH_KEYS[] = { "channels", "tariff", "peaks_cycle_day", "region", "hub", "price_rules", "price_signal", "peaks_reset", "dynamic_price", "mqtt" };
+static const char *const PATCH_KEYS[] = { "channels", "tariff", "peaks_cycle_day", "region", "hub", "price_rules", "price_signal", "peaks_reset", "dynamic_price", "mqtt", "telemetry" };
 static bool patch_key_ok(const char *k)
 {
     for (size_t i = 0; i < sizeof(PATCH_KEYS) / sizeof(PATCH_KEYS[0]); i++) if (k && !strcmp(k, PATCH_KEYS[i])) return true;
@@ -2345,16 +2368,47 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
     const cJSON *rg = cJSON_GetObjectItem(patch, "region");
     if (rg) {
         const cJSON *k;
-        cJSON_ArrayForEach(k, rg) if (strcmp(k->string, "timezone")) { snprintf(m, sizeof(m), "region.%.24s: only timezone is writable here (the currency is in tariff)", k->string); fail(cx, "invalid_args", m, NULL); return false; }
-        const char *tz = cJSON_GetStringValue(cJSON_GetObjectItem(rg, "timezone"));
-        if (!tz || !tz[0] || strlen(tz) > 31 || !rbtime_timezone_is_valid(tz)) {
-            fail(cx, "invalid_args", "region.timezone: a POSIX TZ string with its offset", "E.g. \"CET-1CEST,M3.5.0,M10.5.0/3\" (Berlin), \"EET-2EEST,M3.5.0/3,M10.5.0/4\" (Kyiv), \"MSK-3\", \"CST-8\" (China), \"<+04>-4\"."); return false;
+        cJSON_ArrayForEach(k, rg) if (strcmp(k->string, "timezone") && strcmp(k->string, "nominal_voltage") && strcmp(k->string, "nominal_frequency")) {
+            snprintf(m, sizeof(m), "region.%.24s: timezone, nominal_voltage or nominal_frequency (the currency is in tariff)", k->string); fail(cx, "invalid_args", m, NULL); return false;
         }
-        rbtime_config_t tc; memset(&tc, 0, sizeof(tc)); rbtime_get_config(&tc);
-        if (strcmp(tc.timezone, tz)) {
-            cJSON_AddStringToObject(cJSON_AddObjectToObject(norm, "region"), "timezone", tz);
-            dadd(diff, "region.timezone", tc.timezone, tz);
-            cJSON_AddItemToArray(warn, cJSON_CreateString("Days, yesterday/last week and tariff zones follow the new time zone from now on; records already stored keep their time."));
+        const cJSON *jtz = cJSON_GetObjectItem(rg, "timezone");
+        if (jtz) {
+            const char *tz = cJSON_GetStringValue(jtz);
+            if (!tz || !tz[0] || strlen(tz) > 31 || !rbtime_timezone_is_valid(tz)) {
+                fail(cx, "invalid_args", "region.timezone: a POSIX TZ string with its offset", "E.g. \"CET-1CEST,M3.5.0,M10.5.0/3\" (Berlin), \"EET-2EEST,M3.5.0/3,M10.5.0/4\" (Kyiv), \"MSK-3\", \"CST-8\" (China), \"<+04>-4\"."); return false;
+            }
+            rbtime_config_t tc; memset(&tc, 0, sizeof(tc)); rbtime_get_config(&tc);
+            if (strcmp(tc.timezone, tz)) {
+                cJSON *ng = cJSON_GetObjectItem(norm, "region"); if (!ng) ng = cJSON_AddObjectToObject(norm, "region");
+                cJSON_AddStringToObject(ng, "timezone", tz);
+                dadd(diff, "region.timezone", tc.timezone, tz);
+                cJSON_AddItemToArray(warn, cJSON_CreateString("Days, yesterday/last week and tariff zones follow the new time zone from now on; records already stored keep their time."));
+            }
+        }
+        const rbpower_extended_config_t *ecn = rbgrid_core_ext_cfg();
+        const rbpower_hardware_config_t *hw = ecn ? ecn->base_hardware_config : NULL;
+        const cJSON *jv = cJSON_GetObjectItem(rg, "nominal_voltage"), *jf = cJSON_GetObjectItem(rg, "nominal_frequency");
+        if (jv) {
+            if (!cJSON_IsNumber(jv) || jv->valuedouble < 90 || jv->valuedouble > 260) { fail(cx, "invalid_args", "region.nominal_voltage: the mains line-to-neutral voltage, 90..260 V", "230 in most of Europe and Asia, 220 in China and the CIS, 120 in North America, 100 in Japan."); return false; }
+            float was = hw ? hw->network.nominal_voltage : 0;
+            if (fabsf(was - (float)jv->valuedouble) > 0.05f) {
+                cJSON *ng = cJSON_GetObjectItem(norm, "region"); if (!ng) ng = cJSON_AddObjectToObject(norm, "region");
+                cJSON_AddNumberToObject(ng, "nominal_voltage", jv->valuedouble);
+                char a[16], b[16]; snprintf(a, sizeof(a), was > 0 ? "%.0f V" : "unset", was); snprintf(b, sizeof(b), "%.0f V", jv->valuedouble);
+                dadd(diff, "region.nominal_voltage", a, b);
+                cJSON_AddItemToArray(warn, cJSON_CreateString("The nominal voltage is used where a channel measures current only (power = voltage x current). It takes full effect after restart_hub."));
+            }
+        }
+        if (jf) {
+            if (!cJSON_IsNumber(jf) || (jf->valueint != 50 && jf->valueint != 60) || jf->valuedouble != jf->valueint) { fail(cx, "invalid_args", "region.nominal_frequency: 50 or 60 (Hz)", NULL); return false; }
+            int was = hw ? hw->network.nominal_frequency : 0;
+            if (was != jf->valueint) {
+                cJSON *ng = cJSON_GetObjectItem(norm, "region"); if (!ng) ng = cJSON_AddObjectToObject(norm, "region");
+                cJSON_AddNumberToObject(ng, "nominal_frequency", jf->valueint);
+                char a[16], b[16]; snprintf(a, sizeof(a), "%d Hz", was); snprintf(b, sizeof(b), "%d Hz", jf->valueint);
+                dadd(diff, "region.nominal_frequency", a, b);
+                cJSON_AddItemToArray(warn, cJSON_CreateString("The nominal frequency applies after restart_hub; it is the fallback while no module reports a measured one."));
+            }
         }
     }
     const cJSON *hb = cJSON_GetObjectItem(patch, "hub");
@@ -2363,7 +2417,19 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
         cJSON *nh = NULL;
         const cJSON *k;
         cJSON_ArrayForEach(k, hb) {
-            if (strcmp(k->string, "name") && strcmp(k->string, "location")) { snprintf(m, sizeof(m), "hub.%.24s: name or location", k->string); fail(cx, "invalid_args", m, NULL); return false; }
+            if (!strcmp(k->string, "grid_system")) {
+                static const char *const GS[] = { "", "1P", "SPLIT", "3P" };
+                const char *v = cJSON_GetStringValue(k);
+                int gi = -1; for (int q = 1; q < 4; q++) if (v && !strcmp(v, GS[q])) gi = q;
+                if (gi < 0) { fail(cx, "invalid_args", "hub.grid_system: \"1P\" (single phase), \"SPLIT\" (split phase, 120/240 V) or \"3P\" (three phase)", NULL); return false; }
+                int wg = ec ? ec->grid_system : 0;
+                if (wg == gi) continue;
+                if (!nh) nh = cJSON_AddObjectToObject(norm, "hub");
+                cJSON_AddStringToObject(nh, "grid_system", v);
+                dadd(diff, "hub.grid_system", GS[wg < 4 ? wg : 0][0] ? GS[wg < 4 ? wg : 0] : "unset", v);
+                continue;
+            }
+            if (strcmp(k->string, "name") && strcmp(k->string, "location")) { snprintf(m, sizeof(m), "hub.%.24s: name, location or grid_system", k->string); fail(cx, "invalid_args", m, NULL); return false; }
             if (!valid_name(cJSON_GetStringValue(k))) { snprintf(m, sizeof(m), "hub.%s: 1..31 bytes of UTF-8 text", k->string); fail(cx, "invalid_args", m, NULL); return false; }
             const char *was = ec ? (!strcmp(k->string, "name") ? ec->home_name : ec->location) : "";
             if (was && !strcmp(was, k->valuestring)) continue;
@@ -2406,6 +2472,26 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
         }
         cJSON_AddItemToArray(warn, cJSON_CreateString("The hub checks the provider settings when it saves them; a bad field is refused at apply_config with its name, and nothing is changed. Prices fetched later replace the zone prices for the periods they cover."));
     }
+    const cJSON *te = cJSON_GetObjectItem(patch, "telemetry");
+    if (te) {
+        const cJSON *k;
+        cJSON_ArrayForEach(k, te) if (strcmp(k->string, "profile") && strcmp(k->string, "frame")) { fail(cx, "invalid_args", "telemetry: {profile: lean|full, frame: 1|2}", NULL); return false; }
+        const char *pf = cJSON_GetStringValue(cJSON_GetObjectItem(te, "profile"));
+        const cJSON *fr = cJSON_GetObjectItem(te, "frame");
+        if (cJSON_GetObjectItem(te, "profile") && (!pf || (strcmp(pf, "lean") && strcmp(pf, "full")))) { fail(cx, "invalid_args", "telemetry.profile: lean or full", NULL); return false; }
+        if (fr && (!cJSON_IsNumber(fr) || (fr->valueint != 1 && fr->valueint != 2))) { fail(cx, "invalid_args", "telemetry.frame: 1 or 2", NULL); return false; }
+        cJSON *nt2 = NULL;
+        const char *wp = rbgrid_telemetry_get_lean() ? "lean" : "full";
+        if (pf && strcmp(pf, wp)) { nt2 = cJSON_AddObjectToObject(norm, "telemetry"); cJSON_AddStringToObject(nt2, "profile", pf); dadd(diff, "integrations.telemetry.profile", wp, pf); }
+        int wf = rbgrid_telemetry_get_frame();
+        if (fr && fr->valueint != wf) {
+            if (!nt2) nt2 = cJSON_AddObjectToObject(norm, "telemetry");
+            cJSON_AddNumberToObject(nt2, "frame", fr->valueint);
+            char a[4], b[4]; snprintf(a, sizeof(a), "%d", wf); snprintf(b, sizeof(b), "%d", fr->valueint);
+            dadd(diff, "integrations.telemetry.frame", a, b);
+            cJSON_AddItemToArray(warn, cJSON_CreateString("The frame version changes the keys in the hub's MQTT telemetry; the hub re-announces its Home Assistant entities to follow. Other MQTT readers must use the new keys."));
+        }
+    }
     const cJSON *mq = cJSON_GetObjectItem(patch, "mqtt");
     if (mq) {
         const cJSON *k;
@@ -2422,7 +2508,11 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
     }
     return true;
 }
-static bool patch_restarts_hub(const cJSON *norm) { return cJSON_GetObjectItem(norm, "mqtt") != NULL; }
+static bool patch_restarts_hub(const cJSON *norm)
+{
+    const cJSON *rg = cJSON_GetObjectItem(norm, "region");
+    return cJSON_GetObjectItem(norm, "mqtt") != NULL || cJSON_GetObjectItem(rg, "nominal_voltage") || cJSON_GetObjectItem(rg, "nominal_frequency");
+}
 
 /* Sections that the hub validates only when it saves them go FIRST, so a refusal leaves everything unchanged. */
 static bool apply_more_first(const cJSON *norm, char *m, size_t n)
@@ -2464,6 +2554,8 @@ static bool apply_more_last(const cJSON *norm, char *m, size_t n)
         const cJSON *nm = cJSON_GetObjectItem(sys, "name");
         if (nm) cJSON_AddStringToObject(sys, "home_name", nm->valuestring);
         cJSON_DeleteItemFromObject(sys, "name");
+        const char *gsv = cJSON_GetStringValue(cJSON_GetObjectItem(sys, "grid_system"));
+        if (gsv) { cJSON_AddStringToObject(cJSON_AddObjectToObject(sys, "grid"), "system", gsv); cJSON_DeleteItemFromObject(sys, "grid_system"); }
         rbgrid_json_err_t pe = rbgrid_json_parse_system_section(sys, lc);
         cJSON_Delete(sys);
         esp_err_t se = pe == RBGRID_JSON_OK ? rbgrid_storage_save_system(lc) : ESP_FAIL;
@@ -2471,10 +2563,32 @@ static bool apply_more_last(const cJSON *norm, char *m, size_t n)
         if (se == ESP_OK && ec) {   /* labels apply live, as on the hub page */
             if (lc->home_name) { char *c = strdup(lc->home_name); if (c) ec->home_name = c; }
             if (lc->location)  { char *c = strdup(lc->location);  if (c) ec->location = c; }
+            ec->grid_system = lc->grid_system;
         }
         rbgrid_json_free_config_strings(lc);
         free(lc);
         if (se != ESP_OK) { snprintf(m, n, "hub: not saved (%s)", pe != RBGRID_JSON_OK ? "parse" : esp_err_to_name(se)); return false; }
+    }
+    const cJSON *rgn = cJSON_GetObjectItem(norm, "region");
+    const cJSON *nv = cJSON_GetObjectItem(rgn, "nominal_voltage"), *nf = cJSON_GetObjectItem(rgn, "nominal_frequency");
+    if (nv || nf) {   /* the hardware section, as the hub page's hardware-config save: stored, full effect after a restart */
+        rbpower_hardware_config_t *hc = calloc(1, sizeof(*hc));
+        if (!hc) { snprintf(m, n, "region: out of memory"); return false; }
+        rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
+        if (rbgrid_storage_load_hardware(hc) != ESP_OK && ec && ec->base_hardware_config) memcpy(hc, ec->base_hardware_config, sizeof(*hc));
+        if (nv) hc->network.nominal_voltage = (float)nv->valuedouble;
+        if (nf) hc->network.nominal_frequency = (uint16_t)nf->valueint;
+        esp_err_t he = rbgrid_storage_save_hardware(hc);
+        free(hc);
+        if (he != ESP_OK) { snprintf(m, n, "region: the mains values were not saved (%s)", esp_err_to_name(he)); return false; }
+        if (nv && ec && ec->base_hardware_config) ec->base_hardware_config->network.nominal_voltage = (float)nv->valuedouble;   /* current-only nodes use it at once */
+    }
+    const cJSON *tel = cJSON_GetObjectItem(norm, "telemetry");
+    if (tel) {   /* as the hub page's telemetry-config save: applied at once and kept */
+        const char *pf = cJSON_GetStringValue(cJSON_GetObjectItem(tel, "profile"));
+        const cJSON *fr = cJSON_GetObjectItem(tel, "frame");
+        if (pf) { bool lean = !strcmp(pf, "lean"); rbgrid_telemetry_set_lean(lean); littlefs_raw_write("/tele_profile", pf, 5); }
+        if (fr) { rbgrid_telemetry_set_frame((uint8_t)fr->valueint); littlefs_raw_write("/tele_frame", fr->valueint == 2 ? "2" : "1", 1); rbgrid_ha_discovery_request(); }
     }
     if (cJSON_IsTrue(cJSON_GetObjectItem(norm, "peaks_reset"))) {
         cJSON *d = cJSON_CreateObject(); cJSON_AddTrueToObject(d, "reset");
@@ -2497,7 +2611,7 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
         const cJSON *k; bool any = false;
         cJSON_ArrayForEach(k, patch) {
             if (!patch_key_ok(k->string)) {
-                char mm[160]; snprintf(mm, sizeof(mm), "patch.%.24s: not a setting (channels, tariff, peaks_cycle_day, region, hub, price_rules, price_signal, peaks_reset, dynamic_price, mqtt)", k->string);
+                char mm[200]; snprintf(mm, sizeof(mm), "patch.%.24s: not a setting (channels, tariff, peaks_cycle_day, region, hub, price_rules, price_signal, peaks_reset, dynamic_price, mqtt, telemetry)", k->string);
                 return fail(cx, "invalid_args", mm, "get_config_schema lists the writable fields per section.");
             }
             any = true;
@@ -2652,6 +2766,15 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
                         if (!strcmp(rk, "enabled")) {
                             if (!cJSON_IsBool(r)) { cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", "tariff zone enabled: true or false (false removes the zone)", NULL); }
                             if (isnew || cJSON_IsTrue(r)) continue;
+                            {   /* the plan's default zone: a new default must come in the same patch, or hours no zone covers point at a removed zone */
+                                const rbpower_tariff_plan_t *tpd = rbpower_tariff_get_current_plan();
+                                const char *ndz = cJSON_GetStringValue(cJSON_GetObjectItem(ptf, "default_zone"));
+                                if (tpd && (int)tpd->default_zone_id == zone_idx(z->string) && (!ndz || !strcmp(ndz, z->string))) {
+                                    snprintf(m, sizeof(m), "tariff.zones.%.20s: this is the plan's default zone", z->string);
+                                    cJSON_Delete(nt); cJSON_Delete(norm);
+                                    return fail(cx, "invalid_args", m, "Set tariff.default_zone to another zone in the same patch.");
+                                }
+                            }
                             if (!oz) oz = cJSON_AddObjectToObject(nz, z->string);
                             cJSON_AddFalseToObject(oz, "enabled");
                             cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s", z->string);
@@ -3224,13 +3347,27 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
     } else if (!strcmp(sec, "region")) {
         cJSON *f = cJSON_AddObjectToObject(w, "timezone"); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 31);
         cJSON_AddStringToObject(f, "description", "patch.region.timezone: POSIX TZ with its offset and DST rule, e.g. CET-1CEST,M3.5.0,M10.5.0/3 (Berlin, Paris), EET-2EEST,M3.5.0/3,M10.5.0/4 (Kyiv, Helsinki), GMT0BST,M3.5.0/1,M10.5.0 (London), MSK-3 (Moscow), CST-8 (China), <+04>-4. Note the sign: east of UTC is negative.");
+        f = cJSON_AddObjectToObject(w, "nominal_voltage"); cJSON_AddStringToObject(f, "type", "number"); cJSON_AddNumberToObject(f, "minimum", 90); cJSON_AddNumberToObject(f, "maximum", 260);
+        cJSON_AddStringToObject(f, "description", "patch.region.nominal_voltage: mains line-to-neutral volts (230 Europe, 220 China/CIS, 120 North America, 100 Japan); used for channels that measure current only. Full effect after restart_hub.");
+        f = cJSON_AddObjectToObject(w, "nominal_frequency"); cJSON_AddStringToObject(f, "type", "integer"); cJSON *fe = cJSON_AddArrayToObject(f, "enum");
+        cJSON_AddItemToArray(fe, cJSON_CreateNumber(50)); cJSON_AddItemToArray(fe, cJSON_CreateNumber(60));
+        cJSON_AddStringToObject(f, "description", "patch.region.nominal_frequency: 50 or 60 Hz. Applies after restart_hub.");
     } else if (!strcmp(sec, "hub")) {
         const char *ss[] = { "name", "location" };
         for (int q = 0; q < 2; q++) { cJSON *f = cJSON_AddObjectToObject(w, ss[q]); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 31); }
         cJSON_AddStringToObject(cJSON_GetObjectItem(w, "name"), "description", "patch.hub.name: the hub's name in the app and Home Assistant.");
+        cJSON *f = cJSON_AddObjectToObject(w, "grid_system"); cJSON_AddStringToObject(f, "type", "string"); cJSON *ge = cJSON_AddArrayToObject(f, "enum");
+        cJSON_AddItemToArray(ge, cJSON_CreateString("1P")); cJSON_AddItemToArray(ge, cJSON_CreateString("SPLIT")); cJSON_AddItemToArray(ge, cJSON_CreateString("3P"));
+        cJSON_AddStringToObject(f, "description", "patch.hub.grid_system: the site's supply: single phase, split phase (120/240 V) or three phase.");
     } else if (!strcmp(sec, "integrations")) {
         cJSON *f = cJSON_AddObjectToObject(w, "broker_uri"); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 159);
         cJSON_AddStringToObject(f, "description", "patch.mqtt.broker_uri: mqtt://host:1883 or mqtts://user:password@host:8883 (the Home Assistant MQTT broker). Applies after restart_hub.");
+        f = cJSON_AddObjectToObject(w, "telemetry.profile"); cJSON_AddStringToObject(f, "type", "string"); cJSON *pe = cJSON_AddArrayToObject(f, "enum");
+        cJSON_AddItemToArray(pe, cJSON_CreateString("lean")); cJSON_AddItemToArray(pe, cJSON_CreateString("full"));
+        cJSON_AddStringToObject(f, "description", "patch.telemetry.profile: lean = the main figures every 3 s; full = every field. Applies at once.");
+        f = cJSON_AddObjectToObject(w, "telemetry.frame"); cJSON_AddStringToObject(f, "type", "integer"); cJSON *fe = cJSON_AddArrayToObject(f, "enum");
+        cJSON_AddItemToArray(fe, cJSON_CreateNumber(1)); cJSON_AddItemToArray(fe, cJSON_CreateNumber(2));
+        cJSON_AddStringToObject(f, "description", "patch.telemetry.frame: the MQTT telemetry key layout, 1 or 2. Home Assistant entities follow; other MQTT readers must change their keys.");
     } else if (!strcmp(sec, "dynamic_price")) {
         cJSON *f = cJSON_AddObjectToObject(w, "dynamic_price"); cJSON_AddStringToObject(f, "type", "object");
         cJSON_AddStringToObject(f, "description", "patch.dynamic_price: the provider settings, with the field names get_config {section: dynamic_price} shows (it also lists the providers the hub knows). Only the fields given change.");
@@ -4023,6 +4160,141 @@ static cJSON *t_node_action(const cJSON *a, rbllm_cx_t *cx)
     return r;
 }
 
+static cJSON *t_set_prices(const cJSON *a, rbllm_cx_t *cx)
+{
+    bool clear = cJSON_IsTrue(cJSON_GetObjectItem(a, "clear"));
+    const cJSON *pr = cJSON_GetObjectItem(a, "prices");
+    if (!clear && (!cJSON_IsArray(pr) || !cJSON_GetArraySize(pr))) return fail(cx, "invalid_args", "prices: a list of {buy, sell?, from, until}, or clear:true", NULL);
+    if (cJSON_GetArraySize(pr) > 192) return fail(cx, "invalid_args", "prices: at most 192 entries per call (two days of 15-min periods)", "Send the rest in another call.");
+    cJSON *d = cJSON_CreateObject();
+    if (clear) cJSON_AddTrueToObject(d, "clear");
+    else {
+        cJSON *arr = cJSON_AddArrayToObject(d, "prices");
+        const cJSON *e; int k = 0;
+        cJSON_ArrayForEach(e, pr) {
+            uint32_t f = 0, u = 0;
+            const cJSON *jf = cJSON_GetObjectItem(e, "from"), *ju = cJSON_GetObjectItem(e, "until");
+            bool okf = cJSON_IsString(jf) ? parse_iso(jf->valuestring, &f) : false, oku = cJSON_IsString(ju) ? parse_iso(ju->valuestring, &u) : false;
+            if (!okf || !oku) {
+                char m[96]; snprintf(m, sizeof(m), "prices[%d]: from and until as \"YYYY-MM-DDTHH:MM\" (hub time, or with an offset)", k);
+                cJSON_Delete(d); return fail(cx, "invalid_args", m, NULL);
+            }
+            cJSON *o = cJSON_CreateObject();
+            const cJSON *jb = cJSON_GetObjectItem(e, "buy"), *js = cJSON_GetObjectItem(e, "sell");
+            if (jb) cJSON_AddItemToObject(o, "buy", cJSON_Duplicate(jb, true));
+            if (js) cJSON_AddItemToObject(o, "sell", cJSON_Duplicate(js, true));
+            cJSON_AddNumberToObject(o, "from", f); cJSON_AddNumberToObject(o, "until", u);
+            cJSON_AddItemToArray(arr, o);
+            k++;
+        }
+    }
+    cJSON *ack = core_cmd("set", "price", d);
+    cJSON_Delete(d);
+    char m[160];
+    bool ok = core_ok(ack, m, sizeof(m));
+    cJSON_Delete(ack);
+    if (!ok) return fail(cx, "invalid_args", m[0] ? m : "the hub refused the prices", "Prices are per kWh (-100..100), before fees and VAT; a price per MWh must be divided by 1000.");
+    rbpower_diag_printf("llm: prices %s by '%s'", clear ? "cleared" : "stored", cx->client ? cx->client : "?");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "stored", !clear);
+    cJSON_AddBoolToObject(r, "cleared", clear);
+    if (!clear) cJSON_AddNumberToObject(r, "count", cJSON_GetArraySize(pr));
+    cJSON_AddStringToObject(r, "message", m);
+    note(cx, clear ? "The tariff zones' prices apply again." : "These prices replace the zone price for the 15-min periods they cover; fees and VAT are added on top. A dynamic price provider, if set, may overwrite them on its next fetch.");
+    cx->as_of = now_s();
+    return r;
+}
+
+static cJSON *t_set_clock(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(a, "time"));
+    bool sync = cJSON_IsTrue(cJSON_GetObjectItem(a, "sync"));
+    if (!t == !sync) return fail(cx, "invalid_args", "either time (the user's clock, with its offset) or sync:true", NULL);
+    uint32_t before = now_s();
+    if (t) {
+        uint32_t ts = 0;
+        if (strlen(t) < 16 || (!strchr(t + 10, '+') && !strchr(t + 10, '-') && !strchr(t, 'Z'))) return fail(cx, "invalid_args", "time: with its UTC offset, e.g. 2026-11-24T14:05:00+01:00", "Ask the user for the time on their clock and their offset; do not use your own idea of the time.");
+        if (!parse_iso(t, &ts) || ts < 1700000000u) return fail(cx, "invalid_args", "time: \"YYYY-MM-DDTHH:MM[:SS]±HH:MM\"", NULL);
+        if (rbtime_set_manual_time(ts) != RBPOWER_OK) return fail(cx, "internal", "the hub did not take the time", NULL);
+    }
+    rbpower_err_t se = rbtime_force_sync(RBTIME_SOURCE_SNTP, 5000);   /* an Internet time source refines it when there is one */
+    uint32_t after = now_s();
+    rbpower_diag_printf("llm: clock %s by '%s' (%+ld s)", t ? "set" : "synced", cx->client ? cx->client : "?", (long)((int64_t)after - before));
+    cJSON *r = cJSON_CreateObject();
+    add_time(r, "hub_time", after);
+    cJSON_AddNumberToObject(r, "changed_by_s", (double)((int64_t)after - (int64_t)before));
+    cJSON_AddBoolToObject(r, "internet_time", se == RBPOWER_OK);
+    note(cx, se == RBPOWER_OK ? "The hub's clock follows the Internet time source." : "No Internet time source answered; the hub keeps the time given until one does.");
+    cx->as_of = after;
+    return r;
+}
+
+static cJSON *t_set_module_drdy(const cJSON *a, rbllm_cx_t *cx)
+{
+    if (!s_i2c_action) return fail(cx, "internal", "module setup is not available on this hub", NULL);
+    int m = cJSON_GetObjectItem(a, "module")->valueint, g = cJSON_GetObjectItem(a, "gpio")->valueint;
+    cJSON *q = cJSON_CreateObject();
+    cJSON_AddStringToObject(q, "op", "drdy");
+    cJSON_AddNumberToObject(q, "module", m);
+    cJSON_AddNumberToObject(q, "gpio", g);
+    int st = 500;
+    char *out = s_i2c_action(q, &st);
+    cJSON_Delete(q);
+    cJSON *rep = out ? cJSON_Parse(out) : NULL;
+    free(out);
+    if (st != 200 || !rep) return i2c_fail(cx, rep, st);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "saved", true);
+    modules_view(r, rep);
+    cJSON_Delete(rep);
+    rbpower_diag_printf("llm: module %d drdy %d by '%s'", m, g, cx->client ? cx->client : "?");
+    note(cx, g < 0 ? "The module uses the shared ready line again." : "The module signals 'data ready' on its own GPIO from now on.");
+    cx->as_of = now_s();
+    return r;
+}
+
+static cJSON *t_set_point_slug(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *cid = cJSON_GetStringValue(cJSON_GetObjectItem(a, "channel"));
+    const char *slug = cJSON_GetStringValue(cJSON_GetObjectItem(a, "point"));
+    bool reuse = cJSON_IsTrue(cJSON_GetObjectItem(a, "reuse"));
+    unsigned uid = 0;
+    if (!cid || sscanf(cid, "%4x", &uid) != 1 || !uid) return fail(cx, "invalid_args", "channel: a channel id from list_channels", NULL);
+    if (!rbpower_home_get_unit_definition((rbpower_unit_id_t)uid)) return fail(cx, "not_found", "no such channel", "Call list_channels for the ids.");
+    cJSON *b = cJSON_CreateObject();
+    cJSON_AddStringToObject(b, "point", slug ? slug : "");
+    if (reuse) cJSON_AddTrueToObject(b, "reuse");
+    char *bs = cJSON_PrintUnformatted(b);
+    cJSON_Delete(b);
+    int st = 0;
+    char *rep = bs ? rbgrid_units_mutate((rbpower_unit_id_t)uid, "rename", bs, &st) : NULL;
+    free(bs);
+    cJSON *rj = rep ? cJSON_Parse(rep) : NULL;
+    free(rep);
+    if (st != 200) {
+        const char *code = rj ? cJSON_GetStringValue(cJSON_GetObjectItem(rj, "code")) : NULL;
+        const char *em = rj ? cJSON_GetStringValue(cJSON_GetObjectItem(rj, "message")) : NULL;
+        char msg[160]; snprintf(msg, sizeof(msg), "%.120s", em ? em : "the hub refused the slug");
+        const char *hint = code && !strcmp(code, "POINT_TOMBSTONED") ? "This slug belonged to a deleted point; reuse:true gives it (and its Home Assistant history) to this point - ask the user first." : NULL;
+        cJSON_Delete(rj);
+        return fail(cx, st == 409 ? "conflict" : st == 404 ? "not_found" : "invalid_args", msg, hint);
+    }
+    cJSON_Delete(rj);
+    char src[48]; llm_source(cx, src, sizeof(src));
+    char sm[120]; snprintf(sm, sizeof(sm), "point %04X slug -> %.40s", uid, slug);
+    ver_sync(src, sm);
+    s_cfg_changed = true;
+    rbpower_diag_printf("llm: %s by '%s'", sm, cx->client ? cx->client : "?");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "renamed", true);
+    char h[5]; snprintf(h, sizeof(h), "%04X", uid);
+    cJSON_AddStringToObject(r, "channel", h);
+    cJSON_AddStringToObject(r, "point", slug);
+    note(cx, "The slug names the point in MQTT topics and Home Assistant entity ids; the hub re-announces the entities. Automations that used the old entity id must be updated by the user.");
+    cx->as_of = now_s();
+    return r;
+}
+
 static const rbllm_tool_t TOOLS[] = {
     { "get_hub_info", RBLLM_SCOPE_READ,
       "When to call: first, to learn the hub's time zone, currency, firmware and what it can do. What it returns: hub id, name, firmware, "
@@ -4134,12 +4406,12 @@ static const rbllm_tool_t TOOLS[] = {
       t_get_config_schema },
     { "propose_config", RBLLM_SCOPE_CONFIG,
       "When to call: for any settings change: channel names, roles, parents, clamp models and circuit data; the tariff (prices, VAT, fees, zones with "
-      "windows and weekdays, default zone); price rules and notifications; the time zone; the hub's name; the MQTT broker; the dynamic price "
-      "provider; or to undo a change. What it returns: the diff, warnings, restart_required and a one-time confirm_token (10 min). Changes "
+      "windows and weekdays, default zone); price rules and notifications; the time zone and mains voltage/frequency; the hub's name and "
+      "supply type; the MQTT broker and telemetry format; the dynamic price provider; or to undo a change. What it returns: the diff, warnings, restart_required and a one-time confirm_token (10 min). Changes "
       "nothing; show the diff and ask the user.",
       "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,short_name?,role?,inside?,ct_model?,phase?,rated_power_w?,max_current_a?,charge_threshold_w?,idle_timeout_min?}}, "
       "tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,default_zone?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?,window?,days?,priority?,enabled?}}}, "
-      "peaks_cycle_day?, peaks_reset?, price_rules?:[...], price_signal?:{...}, region?:{timezone}, hub?:{name?,location?}, mqtt?:{broker_uri}, dynamic_price?:{...}}; get_config_schema per section\"},"
+      "peaks_cycle_day?, peaks_reset?, price_rules?:[...], price_signal?:{...}, region?:{timezone?,nominal_voltage?,nominal_frequency?}, hub?:{name?,location?,grid_system?}, mqtt?:{broker_uri}, telemetry?:{profile?,frame?}, dynamic_price?:{...}}; get_config_schema per section\"},"
       "\"rollback_to\":{\"type\":\"integer\",\"description\":\"a version from list_config_versions\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"restart_required\":{\"type\":\"boolean\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"},\"base_version\":{\"type\":\"integer\"}}}",
       t_propose_config },
@@ -4241,6 +4513,34 @@ static const rbllm_tool_t TOOLS[] = {
       "\"mac\":{\"type\":\"string\"},\"seconds\":{\"type\":\"integer\",\"minimum\":10,\"maximum\":600},\"channels\":{\"type\":\"array\"},\"period_s\":{\"type\":\"integer\"}},\"required\":[\"action\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"done\":{\"type\":\"boolean\"},\"reply\":{\"type\":\"object\"}}}",
       t_node_action },
+    { "set_prices", RBLLM_SCOPE_CONFIG,
+      "When to call: when the user gives energy prices for coming hours (a supplier's day-ahead list, a special offer) and no dynamic price "
+      "provider fetches them. What it does: stores the prices for the periods given; they replace the zone price there. clear:true removes all "
+      "stored prices.",
+      "{\"type\":\"object\",\"properties\":{\"prices\":{\"type\":\"array\",\"maxItems\":192,\"items\":{\"type\":\"object\",\"properties\":{\"buy\":{\"type\":\"number\",\"description\":\"per kWh, before fees and VAT\"},"
+      "\"sell\":{\"type\":\"number\"},\"from\":{\"type\":\"string\",\"description\":\"YYYY-MM-DDTHH:MM, hub time\"},\"until\":{\"type\":\"string\"}},\"required\":[\"buy\",\"from\",\"until\"]}},"
+      "\"clear\":{\"type\":\"boolean\"}},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"stored\":{\"type\":\"boolean\"},\"cleared\":{\"type\":\"boolean\"},\"count\":{\"type\":\"integer\"}}}",
+      t_set_prices },
+    { "set_clock", RBLLM_SCOPE_CONFIG,
+      "When to call: when get_health or check_installation says the hub's clock is not set or wrong and the user tells you the time on their "
+      "clock. What it does: sets the hub's clock (time with its UTC offset), or sync:true asks the Internet time source again.",
+      "{\"type\":\"object\",\"properties\":{\"time\":{\"type\":\"string\",\"description\":\"e.g. 2026-11-24T14:05:00+01:00, from the user\"},\"sync\":{\"type\":\"boolean\"}},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"hub_time\":{\"type\":\"string\"},\"changed_by_s\":{\"type\":\"number\"},\"internet_time\":{\"type\":\"boolean\"}}}",
+      t_set_clock },
+    { "set_module_drdy", RBLLM_SCOPE_CONFIG,
+      "When to call: after the user wired a module's DRDY (data ready) pin to its own GPIO, or to go back to the shared line. What it does: "
+      "saves which GPIO the module's ready signal arrives on; -1 = the shared line.",
+      "{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":7},\"gpio\":{\"type\":\"integer\",\"minimum\":-1,\"maximum\":48}},\"required\":[\"module\",\"gpio\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"saved\":{\"type\":\"boolean\"},\"modules\":{\"type\":\"array\"}}}",
+      t_set_module_drdy },
+    { "set_point_slug", RBLLM_SCOPE_CONFIG,
+      "When to call: when the user wants a point's machine name changed (the 'point' slug in list_channels, used in MQTT topics and Home "
+      "Assistant entity ids). The display name is changed with propose_config instead. What it does: renames the slug.",
+      "{\"type\":\"object\",\"properties\":{\"channel\":{\"type\":\"string\",\"description\":\"id from list_channels\"},\"point\":{\"type\":\"string\",\"pattern\":\"^[a-z0-9_.-]{1,32}$\"},"
+      "\"reuse\":{\"type\":\"boolean\",\"description\":\"take over the slug of a deleted point\"}},\"required\":[\"channel\",\"point\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"renamed\":{\"type\":\"boolean\"},\"channel\":{\"type\":\"string\"},\"point\":{\"type\":\"string\"}}}",
+      t_set_point_slug },
     { "forget_me", RBLLM_SCOPE_READ,
       "When to call: after pairing again with a wider scope, to give back the previous token, or when the user wants this assistant "
       "disconnected. What it does: revokes the token this call is made with. Then pair again to come back.",
@@ -4372,7 +4672,8 @@ char *rbllm_manifest_json(void)
         /* writes into a module or the board that the client should confirm with the user first (MCP clients ask on this hint) */
         bool ds = fm || !strcmp(TOOLS[i].name, "add_module") || !strcmp(TOOLS[i].name, "set_module_address") ||
                   !strcmp(TOOLS[i].name, "set_bus_pins") || !strcmp(TOOLS[i].name, "restart_hub") || !strcmp(TOOLS[i].name, "delete_point") ||
-                  !strcmp(TOOLS[i].name, "set_module_bus") || !strcmp(TOOLS[i].name, "node_action");
+                  !strcmp(TOOLS[i].name, "set_module_bus") || !strcmp(TOOLS[i].name, "node_action") ||
+                  !strcmp(TOOLS[i].name, "set_clock") || !strcmp(TOOLS[i].name, "set_module_drdy") || !strcmp(TOOLS[i].name, "set_point_slug");
         bool ro = !fm && (TOOLS[i].scope == RBLLM_SCOPE_READ || !strncmp(TOOLS[i].name, "get_", 4) || !strcmp(TOOLS[i].name, "propose_config") ||
                   !strcmp(TOOLS[i].name, "list_config_versions"));   /* config scope but no change */
         cJSON_AddBoolToObject(an, "readOnlyHint", ro);
