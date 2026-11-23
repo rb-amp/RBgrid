@@ -21,6 +21,7 @@ extern int rbpower_stats_flush_open_hours(void);   /* rbhome_types.h — open-ho
 #include "rbgrid_config_storage.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "esp_mac.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
@@ -259,13 +260,18 @@ esp_err_t rbwebserver_wifi_config_handler(httpd_req_t *req)
     "                <label for=\"password\">Password:</label>"
     "                <input type=\"password\" id=\"password\" name=\"password\">"
     "            </div>"
+    "            <div class=\"form-group\">"
+    "                <label for=\"admin\">Admin password for the hub (recommended):</label>"
+    "                <input type=\"password\" id=\"admin\" name=\"admin\" minlength=\"8\" maxlength=\"46\" autocomplete=\"new-password\">"
+    "                <div style=\"font-size:13px;color:#666;margin-top:4px\">Set it now, before the hub joins your Wi-Fi: the web app and AI assistants use it. 8 to 46 characters.</div>"
+    "            </div>"
     "            <button type=\"submit\">Connect</button>"
     "        </form>"
     "        <div id=\"status\"></div>"
     "        <div class=\"info-box\" style=\"margin-top:20px\">"
     "            <h3>AI assistants</h3>"
-    "            <div>AI assistants (Claude, ChatGPT, Cursor and others) can read this hub once it is on your Wi-Fi: open the web app &rarr; "
-    "AI assistants. Set an admin password in the web app first.</div>"
+    "            <div>AI assistants (Claude, Cursor and others) can read your energy data and, if you allow it, propose settings changes "
+    "that you confirm. Switch them on in the web app &rarr; AI assistants (it needs the admin password above).</div>"
     "        </div>"
     "    </div>"
     "    <script>"
@@ -314,26 +320,27 @@ esp_err_t rbwebserver_wifi_config_handler(httpd_req_t *req)
     "            formData.forEach(function(value, key) {"
     "                data[key] = value;"
     "            });"
-    "            console.log('Form data:', data);"
-    "            "
-    "            fetch('/wifi/save', {"
+    "            var admin = data.admin || ''; delete data.admin;"
+    "            var st = document.getElementById('status');"
+    "            if (admin && (admin.length < 8 || admin.length > 46)) { st.innerHTML = '<div class=\"status error\">Admin password: 8 to 46 characters</div>'; return; }"
+    "            var hdr = { 'Content-Type': 'application/json' };"
+    "            var first = admin ? fetch('/api/system/token', { method: 'POST', headers: hdr, body: JSON.stringify({ token: admin, role: 'admin' }) })"
+    "                .then(function(r) { if (!r.ok) throw new Error('admin password not saved'); hdr['Authorization'] = 'Bearer ' + admin; })"
+    "                : Promise.resolve();"
+    "            first.then(function() { return fetch('/wifi/save', {"
     "                method: 'POST',"
-    "                headers: {"
-    "                    'Content-Type': 'application/json'"
-    "                },"
+    "                headers: hdr,"
     "                body: JSON.stringify(data)"
-    "            })"
+    "            }); })"
     "            .then(function(response) { return response.json(); })"
     "            .then(function(result) {"
     "                console.log('Save result:', result);"
-    "                document.getElementById('status').innerHTML = '<div class=\"status success\">Settings saved! Restarting...</div>';"
-    "                setTimeout(function() {"
-    "                    window.location.href = '/';"
-    "                }, 3000);"
+    "                document.getElementById('status').innerHTML = '<div class=\"status success\">Saved. The hub restarts and joins your Wi-Fi. '"
+    "                    + 'Connect this device back to your home Wi-Fi, then open <b>http://' + HUB_HOST + '/</b> (or find the hub\\'s address in your router).</div>';"
     "            })"
     "            .catch(function(error) {"
     "                console.error('Save error:', error);"
-    "                document.getElementById('status').innerHTML = '<div class=\"status error\">Failed to save settings</div>';"
+    "                document.getElementById('status').innerHTML = '<div class=\"status error\">Failed to save settings' + (error && error.message ? ': ' + error.message : '') + '</div>';"
     "            });"
     "        });"
     "    </script>"
@@ -341,6 +348,13 @@ esp_err_t rbwebserver_wifi_config_handler(httpd_req_t *req)
     "</html>";
 
     // Send rest of HTML (forms, scripts, closing tags)
+    {   /* the mDNS host the hub answers on once it is in the home network (= rbgrid_app's mdns_hostname_set) */
+        uint8_t mac[6] = {0};
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        char hs[96];
+        snprintf(hs, sizeof(hs), "<script>var HUB_HOST='rbgrid-%02x%02x.local';</script>", mac[4], mac[5]);
+        httpd_resp_sendstr_chunk(req, hs);
+    }
     httpd_resp_sendstr_chunk(req, html_part2);
 
     // End chunked response
