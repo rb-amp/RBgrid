@@ -2540,7 +2540,8 @@ static esp_err_t rbwebserver_sta_home_handler(httpd_req_t *req)
     "            <div class=\"nav-brand\">RBGRID Control</div>"
     "            <div class=\"nav-links\">"
     "                <a href=\"/\" class=\"active\">Home</a>"
-    "                <a href=\"/wifi\">WiFi</a>";
+    "                <a href=\"/wifi\">WiFi</a>"
+    "                <a href=\"/ai\">AI</a>";
 
     // Send first part
     httpd_resp_sendstr_chunk(req, home_html_part1);

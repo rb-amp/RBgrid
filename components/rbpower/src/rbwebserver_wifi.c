@@ -165,7 +165,8 @@ esp_err_t rbwebserver_wifi_config_handler(httpd_req_t *req)
     "            <div class=\"nav-brand\">RBGRID Control</div>"
     "            <div class=\"nav-links\">"
     "                <a href=\"/\">Home</a>"
-    "                <a href=\"/wifi\" class=\"active\">WiFi</a>";
+    "                <a href=\"/wifi\" class=\"active\">WiFi</a>"
+    "                <a href=\"/ai\">AI</a>";
 
     // Send header
     httpd_resp_sendstr_chunk(req, html_header);
@@ -267,7 +268,7 @@ esp_err_t rbwebserver_wifi_config_handler(httpd_req_t *req)
     "            </div>"
     "            <div class=\"form-group\">"
     "                <label><input type=\"checkbox\" id=\"ai\" name=\"ai\" style=\"width:auto\"> Turn on AI assistants (Claude, Cursor and others)</label>"
-    "                <div style=\"font-size:13px;color:#666;margin-top:4px\">They read your energy data and, if you allow it, propose settings changes that you confirm. Needs the admin password.</div>"
+    "                <div style=\"font-size:13px;color:#666;margin-top:4px\">They read your energy data and, if you allow it, propose settings changes that you confirm. Needs the admin password; pairing codes are on the AI page of this hub.</div>"
     "            </div>"
     "            <button type=\"submit\">Connect</button>"
     "        </form>"
@@ -339,7 +340,8 @@ esp_err_t rbwebserver_wifi_config_handler(httpd_req_t *req)
     "            .then(function(result) {"
     "                console.log('Save result:', result);"
     "                document.getElementById('status').innerHTML = '<div class=\"status success\">Saved. The hub restarts and joins your Wi-Fi. '"
-    "                    + 'Connect this device back to your home Wi-Fi, then open <b>http://' + HUB_HOST + '/</b> (or find the hub\\'s address in your router).</div>';"
+    "                    + 'Connect this device back to your home Wi-Fi, then open <b>http://' + HUB_HOST + '/</b>. If that name does not open, '"
+    "                    + 'reconnect to this hub\\'s Wi-Fi and open <b>http://192.168.4.1/wifi</b>: it shows the hub\\'s address in your network (STA IP).</div>';"
     "            })"
     "            .catch(function(error) {"
     "                console.error('Save error:', error);"
