@@ -171,11 +171,66 @@ static esp_err_t h_admin(httpd_req_t *req)
     return send_json(req, st, out);
 }
 
+/* GET /ai — the hub's own AI assistants page (firmware, no web app and no internet needed; operator 23.11): switch the
+ * LLM API, read the 6-digit pairing code, deny a pairing, revoke an assistant. Data and actions go through the page
+ * API GET/POST /api/v1/llm with the admin password as Bearer. */
+static const char AI_PAGE[] =
+"<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+"<title>RBgrid - AI assistants</title><style>"
+"body{font-family:Arial,sans-serif;margin:0;background:#f5f5f5;color:#333}"
+".nav{background:#1976D2;padding:12px 16px}.nav a{color:#fff;text-decoration:none;margin-right:16px;font-weight:bold}.nav a.active{text-decoration:underline}"
+".c{max-width:560px;margin:16px auto;padding:0 16px}.box{background:#fff;border-radius:6px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.1)}"
+"h1{font-size:22px}h3{margin:0 0 10px;color:#1976D2}input{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;font-size:15px;box-sizing:border-box}"
+"button{padding:10px 14px;border:none;border-radius:4px;background:#4CAF50;color:#fff;font-weight:bold;cursor:pointer;margin:4px 4px 0 0}"
+"button.gray{background:#888}button.red{background:#d9534f}.code{font-size:40px;letter-spacing:8px;font-weight:bold;font-family:monospace;margin:6px 0}"
+".muted{color:#777;font-size:13px}.row{border-top:1px solid #eee;padding:8px 0}.err{color:#b00020}</style></head><body>"
+"<div class=\"nav\"><a href=\"/\">Home</a><a href=\"/wifi\">WiFi</a><a href=\"/ai\" class=\"active\">AI</a></div>"
+"<div class=\"c\"><h1>AI assistants</h1>"
+"<div class=\"box\" id=\"login\"><h3>Admin password</h3><input type=\"password\" id=\"pw\" placeholder=\"the hub's admin password\">"
+"<button onclick=\"go()\">Open</button><div id=\"lerr\" class=\"err\"></div>"
+"<div class=\"muted\">Set it on the WiFi page if the hub has none yet.</div></div>"
+"<div id=\"main\" style=\"display:none\">"
+"<div class=\"box\"><h3>Status</h3><div id=\"st\"></div><div id=\"sw\"></div></div>"
+"<div class=\"box\"><h3>Pairing code</h3><div id=\"pair\"></div>"
+"<div class=\"muted\">Start the connection in your assistant (for example: \"pair with my RBgrid hub\"); the code appears here. Type it into the assistant.</div></div>"
+"<div class=\"box\"><h3>Connected assistants</h3><div id=\"tok\"></div></div></div><div id=\"err\" class=\"err\"></div></div>"
+"<script>"
+"var pw='';try{pw=sessionStorage.getItem('rbpw')||'';}catch(e){}"
+"function esc(t){return String(t).replace(/[&<>\"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c];});}"
+"function api(m,b){return fetch('/api/v1/llm',{method:m,headers:{'Content-Type':'application/json','Authorization':'Bearer '+pw},body:b?JSON.stringify(b):undefined})"
+".then(function(r){return r.json().catch(function(){return{};}).then(function(j){j.__s=r.status;return j;});});}"
+"function act(b){api('POST',b).then(function(j){document.getElementById('err').textContent=(j.__s>=300)?((j.error&&j.error.message)||j.message||('error '+j.__s)):'';load();});}"
+"function load(){api('GET').then(function(j){"
+"if(j.__s==401||j.__s==403){document.getElementById('main').style.display='none';document.getElementById('login').style.display='';"
+"document.getElementById('lerr').textContent=pw?'Wrong admin password':'';return;}"
+"document.getElementById('login').style.display='none';document.getElementById('main').style.display='';"
+"document.getElementById('st').innerHTML='AI assistants: <b>'+(j.enabled?'on':'off')+'</b>'+(j.read_only?' (read-only mode)':'');"
+"document.getElementById('sw').innerHTML=j.enabled?'<button class=\"gray\" onclick=\"act({enabled:false})\">Turn off</button>':'<button onclick=\"act({enabled:true})\">Turn on</button>';"
+"var p=j.pairing||[],h='';p.forEach(function(x){h+='<div class=\"row\">'+esc(x.client_name||'assistant')+' asks to connect ('+(x.scopes||[]).join(', ')+')'"
+"+'<div class=\"code\">'+esc(x.code)+'</div><span class=\"muted\">valid '+Math.max(0,x.expires_in|0)+' s</span> '"
+"+'<button class=\"red\" onclick=\"act({pair_cancel:\\''+esc(x.pair_id)+'\\'})\">Deny</button></div>';});"
+"document.getElementById('pair').innerHTML=h||(j.enabled?'<span class=\"muted\">No pairing request right now.</span>':'<span class=\"muted\">Turn AI assistants on first.</span>');"
+"var t=j.tokens||[],g='';t.forEach(function(x){g+='<div class=\"row\">'+esc(x.client_name||x.id)+' ('+(x.scopes||[]).join(', ')+') '"
+"+'<button class=\"red\" onclick=\"act({revoke:\\''+esc(x.id)+'\\'})\">Revoke</button></div>';});"
+"document.getElementById('tok').innerHTML=g||'<span class=\"muted\">None.</span>';"
+"}).catch(function(){document.getElementById('err').textContent='The hub does not answer';});}"
+"function go(){pw=document.getElementById('pw').value;try{sessionStorage.setItem('rbpw',pw);}catch(e){}load();}"
+"if(pw)load();setInterval(function(){if(pw)load();},3000);"
+"</script></body></html>";
+
+static esp_err_t h_page(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, AI_PAGE, HTTPD_RESP_USE_STRLEN);
+}
+
 void rbwebserver_llm_register(httpd_handle_t srv)
 {
     if (!srv) return;
     rbllm_init();
     const httpd_uri_t u[] = {
+        { .uri = "/ai",                       .method = HTTP_GET,  .handler = h_page },
         { .uri = "/api/llm/v1/manifest",      .method = HTTP_GET,  .handler = h_manifest },
         { .uri = "/api/llm/v1/call",          .method = HTTP_POST, .handler = h_call },
         { .uri = "/api/llm/v1/pair/start",    .method = HTTP_POST, .handler = h_pair },
