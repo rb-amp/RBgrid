@@ -623,6 +623,10 @@ static bool parse_period(rbllm_cx_t *cx, const cJSON *p, uint32_t *from, uint32_
     if (now < RBGRID_TS_SANE_MIN) { fail(cx, "clock_unsynced", "the hub clock is not set yet (just restarted, or no internet for NTP)", "Retry in a few seconds; if it persists, check the hub's internet access."); cx->retry_ms = 5000; return false; }
     if (!cJSON_IsObject(p)) { fail(cx, "invalid_args", "period: object {from,to} or {preset} required", "Pass period:{preset:\"yesterday\"}."); return false; }
     const char *pre = cJSON_GetStringValue(cJSON_GetObjectItem(p, "preset"));
+    if (pre && (cJSON_GetObjectItem(p, "from") || cJSON_GetObjectItem(p, "to"))) {
+        fail(cx, "invalid_args", "period takes either preset or from and to, not both", "Pass period:{preset:\"today\"} or period:{from:\"2026-11-01\",to:\"2026-11-02\"}.");
+        return false;
+    }
     if (pre) {
         uint32_t d = local_floor(now, 'd');
         if (!strcmp(pre, "today"))             { *from = d; *to = now; }
@@ -3179,7 +3183,7 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
     if (tname) utf8_clean(tname, tnb, sizeof(tnb));
     const rbllm_tool_t *t = NULL;
     cJSON *res = NULL;
-    if (!req || !cJSON_IsObject(req)) fail(&cx, "invalid_args", "body: JSON object {tool, args, request_id} required (max 4 KB)", NULL);
+    if (!req || !cJSON_IsObject(req)) fail(&cx, "invalid_args", "body: a well-formed JSON object {tool, args, request_id} required (max 4 KB, nesting depth limited)", NULL);
     else if (!tname) fail(&cx, "invalid_args", "missing 'tool'", NULL);
     else {
         for (size_t i = 0; i < N_TOOLS; i++) if (!strcmp(TOOLS[i].name, tname)) t = &TOOLS[i];
