@@ -9,6 +9,7 @@
  * Moved out of rbwebserver_api.c (HTTP handlers there are thin wrappers over these).
  */
 #include "rbstorage_media.h"
+#include "rbextflash_operations.h"
 #include "rbgrid_tz.h"   /* RBgrid local time: own zone, not the process TZ */
 #include "rbgrid_core.h"
 #include "rbgrid_core_priv.h"
@@ -394,6 +395,7 @@ char *rbgrid_build_schema_json(void)
     cJSON_AddStringToObject(root, "hw_profile", "esp32-wrover-psram");
     cJSON_AddStringToObject(root, "storage_state", rbstats_store_state_str());
     cJSON_AddStringToObject(root, "stats_media", rbmedia_stats_media_str());   /* "none" = statistics chip missing */
+    cJSON_AddNumberToObject(root, "history_slots", (rbmedia_mode() == RBMEDIA_NONE ? 0 : rbpower_flash_max_usable_slots()));   /* points that can keep history */
     cJSON_AddNumberToObject(root, "history_schema_ver", 4);   /* history record JSON forms */
     {   /* time_quality — same source as the telemetry frame */
         extern uint8_t rbtime_quality(uint32_t *sync_age_s_out);
