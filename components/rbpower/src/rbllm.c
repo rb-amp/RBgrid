@@ -117,6 +117,7 @@ void rbllm_register_events_reader(char *(*fn)(uint32_t, uint32_t, int)) { s_even
 static char *(*s_i2c_action)(const struct cJSON *, int *);
 void rbllm_register_i2c_action(char *(*fn)(const struct cJSON *, int *)) { s_i2c_action = fn; }
 bool rbwebserver_ui_lang_code(char out[3]);   /* rbwebserver_ui.c */
+bool rbwebserver_ui_kit_version(char *out, size_t n);   /* rbwebserver_ui.c */
 static int (*s_modfw_status)(char *, size_t);
 void rbllm_register_modfw_status(int (*fn)(char *out, size_t cap)) { s_modfw_status = fn; }
 /* Run one op; returns the parsed reply (caller deletes) and *st; NULL when unavailable. */
@@ -843,6 +844,10 @@ static cJSON *t_get_hub_info(const cJSON *a, rbllm_cx_t *cx)
     {   /* the web app's language pack on the hub (installed from the hub page; null = the app's built-in English) */
         char lc[3];
         if (rbwebserver_ui_lang_code(lc)) cJSON_AddStringToObject(r, "ui_language", lc); else cJSON_AddNullToObject(r, "ui_language");
+    }
+    {   /* the web app kit installed on the hub (its page addresses follow this version); null = none installed */
+        char kv[40];
+        if (rbwebserver_ui_kit_version(kv, sizeof(kv))) cJSON_AddStringToObject(r, "ui_kit", kv); else cJSON_AddNullToObject(r, "ui_kit");
     }
     {   /* kept on the hub's own page on purpose: they change the assistant's own access or link, or need a file */
         cJSON *hp = cJSON_AddArrayToObject(r, "hub_page_only");
@@ -4298,9 +4303,10 @@ static cJSON *t_set_point_slug(const cJSON *a, rbllm_cx_t *cx)
 static const rbllm_tool_t TOOLS[] = {
     { "get_hub_info", RBLLM_SCOPE_READ,
       "When to call: first, to learn the hub's time zone, currency, firmware and what it can do. What it returns: hub id, name, firmware, "
-      "protocol version, board, hub time with offset, time zone, currency, uptime, capabilities.",
+      "protocol version, board, hub time with offset, time zone, currency, uptime, capabilities, the installed web app kit (ui_kit) and "
+      "its language (ui_language), and hub_page_only: what is done on the hub's own page.",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
-      "{\"type\":\"object\",\"properties\":{\"hub_id\":{\"type\":\"string\"},\"fw\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"currency\":{\"type\":\"string\"},\"hub_time\":{\"type\":\"string\"}}}",
+      "{\"type\":\"object\",\"properties\":{\"hub_id\":{\"type\":\"string\"},\"fw\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"currency\":{\"type\":\"string\"},\"hub_time\":{\"type\":\"string\"},\"ui_kit\":{\"type\":[\"string\",\"null\"]},\"ui_language\":{\"type\":[\"string\",\"null\"]}}}",
       t_get_hub_info },
     { "list_channels", RBLLM_SCOPE_READ,
       "When to call: before any per-channel question, to map names to ids. What it returns: every measuring point with id, the user's name, "
