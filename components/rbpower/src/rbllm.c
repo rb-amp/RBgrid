@@ -29,6 +29,7 @@
 #include "rbamp.h"                   /* rbamp_basic_fw_name */
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
+#include "rbmqtt.h"                  /* broker state for get_config integrations */
 #include "rbgrid_config_api.h"     /* rbgrid_system_reboot */
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -451,6 +452,106 @@ static bool late(const rbllm_cx_t *cx) { return esp_timer_get_time() > cx->deadl
 /* ============================================================================================ point helpers */
 static void ct_short(const char *desc, char out[24]);
 static int ver_sync(const char *source, const char *summary);
+/* ---- tariff zone helpers: zones are named by their TYPE (zone_id), never by their slot in the plan ---- */
+static const char *const ZONE_N[RBPOWER_TARIFF_ZONE_COUNT] = { "night", "morning_peak", "day", "evening_peak", "late_evening", "weekend", "holiday", "critical_peak" };
+static int zone_idx(const char *s)
+{
+    for (int i = 0; s && i < RBPOWER_TARIFF_ZONE_COUNT; i++) if (!strcmp(s, ZONE_N[i])) return i;
+    return -1;
+}
+static const char *zone_nm(const rbpower_tariff_zone_t *zo)
+{
+    int z = (int)zo->zone_id;
+    return z >= 0 && z < RBPOWER_TARIFF_ZONE_COUNT ? ZONE_N[z] : "unknown";
+}
+static int plan_nzones(const rbpower_tariff_plan_t *tp)
+{
+    return tp ? (tp->active_zones_count < RBPOWER_TARIFF_ZONE_COUNT ? tp->active_zones_count : RBPOWER_TARIFF_ZONE_COUNT) : 0;
+}
+static const rbpower_tariff_zone_t *plan_zone(const rbpower_tariff_plan_t *tp, int zi)
+{
+    for (int z = 0; z < plan_nzones(tp); z++) if (tp->zones[z].is_enabled && (int)tp->zones[z].zone_id == zi) return &tp->zones[z];
+    return NULL;
+}
+static int zone_tr_count(const rbpower_tariff_zone_t *zo)
+{
+    int n = 0;
+    for (int j = 0; zo && j < 4 && j < zo->conditions_count; j++)
+        if (zo->conditions[j].is_active && zo->conditions[j].condition_type == RBPOWER_TARIFF_CONDITION_TIME_RANGE) n++;
+    return n;
+}
+static const char *const DAY_N[7] = { "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
+static void days_str(int mask, char out[32])   /* Mon-origin mask -> "mon,tue,..."; 0 or 0x7F -> "" (every day) */
+{
+    out[0] = '\0';
+    if (!mask || (mask & 0x7F) == 0x7F) return;
+    size_t o = 0;
+    for (int d = 0; d < 7; d++) if (mask & (1 << d)) o += snprintf(out + o, 32 - o, "%s%s", o ? "," : "", DAY_N[d]);
+}
+static void zone_days(const rbpower_tariff_zone_t *zo, char out[32])
+{
+    int mask = 0;
+    for (int j = 0; zo && j < 4 && j < zo->conditions_count; j++) {
+        if (!zo->conditions[j].is_active) continue;
+        if (zo->conditions[j].condition_type == RBPOWER_TARIFF_CONDITION_WEEKDAY) mask |= zo->conditions[j].params.weekday.weekday_mask;
+        else if (zo->conditions[j].condition_type == RBPOWER_TARIFF_CONDITION_WEEKEND) mask |= 0x60;
+    }
+    days_str(mask, out);
+}
+/* "all" / "" -> 0 (every day); "mon-fri", "sat,sun", "mon,wed-fri", "weekdays", "weekend" -> mask; -1 invalid */
+static int parse_days(const char *s)
+{
+    if (!s) return -1;
+    if (!s[0] || !strcasecmp(s, "all")) return 0;
+    if (!strcasecmp(s, "weekdays")) return 0x1F;
+    if (!strcasecmp(s, "weekend")) return 0x60;
+    char b[48]; strlcpy(b, s, sizeof(b));
+    int mask = 0;
+    for (char *sv = NULL, *t = strtok_r(b, ",", &sv); t; t = strtok_r(NULL, ",", &sv)) {
+        while (*t == ' ') t++;
+        char *dash = strchr(t, '-');
+        if (dash) *dash = '\0';
+        int a = -1, e = -1;
+        for (int d = 0; d < 7; d++) { if (!strncasecmp(t, DAY_N[d], 3) && strlen(t) == 3) a = d; if (dash && !strncasecmp(dash + 1, DAY_N[d], 3) && strlen(dash + 1) == 3) e = d; }
+        if (a < 0 || (dash && e < 0)) return -1;
+        if (!dash) e = a;
+        for (int d = a;; d = (d + 1) % 7) { mask |= 1 << d; if (d == e) break; }
+    }
+    return mask;
+}
+/* ---- the hub's own command channel (MQTT/ESPHome path) with the admin token: one write path for every interface ---- */
+static cJSON *core_cmd(const char *cmd, const char *section, const cJSON *data)
+{
+    cJSON *q = cJSON_CreateObject();
+    cJSON_AddStringToObject(q, "cmd", cmd);
+    cJSON_AddStringToObject(q, "section", section);
+    if (data) cJSON_AddItemToObject(q, "data", cJSON_Duplicate(data, true));
+    char adm[48];
+    if (rbgrid_token_load(RBGRID_TOKEN_FILE, adm)) cJSON_AddStringToObject(q, "token", adm);
+    char *in = cJSON_PrintUnformatted(q);
+    cJSON_Delete(q);
+    memset(adm, 0, sizeof(adm));
+    char *out = in ? rbgrid_command_dispatch(in, (int)strlen(in)) : NULL;
+    free(in);
+    cJSON *r = out ? cJSON_Parse(out) : NULL;
+    free(out);
+    return r;
+}
+/* a cmd_ack: data.result "ok" -> true; message into m */
+static bool core_ok(const cJSON *ack, char *m, size_t n)
+{
+    const cJSON *d = cJSON_GetObjectItem(ack, "data");
+    const char *res = cJSON_GetStringValue(cJSON_GetObjectItem(d, "result")), *msg = cJSON_GetStringValue(cJSON_GetObjectItem(d, "message"));
+    if (m) snprintf(m, n, "%s", msg ? msg : (ack ? "" : "no answer"));
+    return res && !strcmp(res, "ok");
+}
+static void mqtt_saved_uri(char *out, size_t n);
+static void mask_uri(const char *u, char *out, size_t n)   /* mqtts://user:pass@host -> mqtts://(stars)@host */
+{
+    const char *at = u ? strchr(u, '@') : NULL, *sc = u ? strstr(u, "://") : NULL;
+    if (at && sc && at > sc) snprintf(out, n, "%.*s***%s", (int)(sc + 3 - u), u, at);
+    else snprintf(out, n, "%s", u ? u : "");
+}
 
 #define RBLLM_MAX_POINTS 24
 
@@ -707,7 +808,11 @@ static cJSON *t_get_hub_info(const cJSON *a, rbllm_cx_t *cx)
     char id[13]; rbllm_hub_id(id);
     cJSON_AddStringToObject(r, "hub_id", id);
     rbgrid_json_context_t *jc = rbgrid_core_json_ctx();
-    cJSON_AddStringToObject(r, "name", jc && jc->device_info.device_name[0] ? jc->device_info.device_name : "RBgrid");
+    {   /* the user's hub name (hub page / propose_config hub.name), as the app shows it */
+        const rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
+        char b[48]; utf8_clean(ec && ec->home_name && ec->home_name[0] ? ec->home_name : (jc && jc->device_info.device_name[0] ? jc->device_info.device_name : "RBgrid"), b, sizeof(b));
+        cJSON_AddStringToObject(r, "name", b);
+    }
     cJSON_AddStringToObject(r, "fw", ad ? ad->version : "");
     cJSON_AddStringToObject(r, "proto", RBLLM_PROTO);
 #if CONFIG_IDF_TARGET_ESP32S3
@@ -732,6 +837,11 @@ static cJSON *t_get_hub_info(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddItemToArray(cap, cJSON_CreateString("config_read"));
     cJSON_AddItemToArray(cap, cJSON_CreateString("config"));
     cJSON_AddBoolToObject(r, "read_only_mode", S.read_only);
+    {   /* kept on the hub's own page on purpose: they change the assistant's own access or link, or need a file */
+        cJSON *hp = cJSON_AddArrayToObject(r, "hub_page_only");
+        const char *const HP[] = { "wifi", "admin_password", "assistant_access", "firmware_update", "factory_reset", "backup_restore" };
+        for (size_t q = 0; q < sizeof(HP) / sizeof(HP[0]); q++) cJSON_AddItemToArray(hp, cJSON_CreateString(HP[q]));
+    }
     cx->as_of = n;
     return r;
 }
@@ -1690,7 +1800,7 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
         rbtime_get_config(&tc);
         if (!tc.timezone[0] || !strcmp(tc.timezone, "UTC0") || !strcmp(tc.timezone, "UTC"))
             finding(f, "timezone_not_set", "warning", NULL, "The hub's time zone is UTC (the default).",
-                    "Set the user's time zone on the hub (web app: Settings > Network & time); days, yesterday/last week and tariff zones follow it.");
+                    "Ask where the hub is and set the time zone: propose_config {region: {timezone}}; days, yesterday/last week and tariff zones follow it.");
     }
     {   /* a module on the factory address: the next new module would collide with it */
         int ist = 0;
@@ -1904,7 +2014,6 @@ static void cfg_channels(cJSON *r)
 }
 static void cfg_tariff(cJSON *r, rbllm_cx_t *cx)
 {
-    static const char *ZN[RBPOWER_TARIFF_ZONE_COUNT] = { "night", "morning_peak", "day", "evening_peak", "late_evening", "weekend", "holiday", "critical_peak" };
     cJSON *t = cJSON_AddObjectToObject(r, "tariff");
     const rbpower_tariff_plan_t *tp = rbpower_tariff_get_current_plan();
     if (!tp) { cJSON_AddNullToObject(t, "plan"); return; }
@@ -1920,17 +2029,20 @@ static void cfg_tariff(cJSON *r, rbllm_cx_t *cx)
     cJSON_AddNumberToObject(t, "grid_fee_per_kwh", r4(tp->grid_usage_fee_per_kwh));
     cJSON_AddNumberToObject(t, "levy_per_kwh", r4(tp->renewable_levy_per_kwh));
     cJSON_AddBoolToObject(t, "net_metering", tp->net_metering_enabled);
+    { int dz = (int)tp->default_zone_id; cJSON_AddStringToObject(t, "default_zone", dz >= 0 && dz < RBPOWER_TARIFF_ZONE_COUNT ? ZONE_N[dz] : ""); }
     cJSON *zs = cJSON_AddArrayToObject(t, "zones");
-    for (int z = 0; z < RBPOWER_TARIFF_ZONE_COUNT; z++) {
+    for (int z = 0; z < plan_nzones(tp); z++) {
         const rbpower_tariff_zone_t *zo = &tp->zones[z];
         if (!zo->is_enabled) continue;
         cJSON *o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "zone", ZN[z]);
+        cJSON_AddStringToObject(o, "zone", zone_nm(zo));
         utf8_clean(zo->zone_name, b, sizeof(b)); cJSON_AddStringToObject(o, "name", b);
         cJSON_AddNumberToObject(o, "buy_per_kwh", r4(zo->rate_buying_per_kwh));
         cJSON_AddNumberToObject(o, "sell_per_kwh", r4(zo->rate_selling_per_kwh));
         char w[12];
         if (zone_window(zo, w)) cJSON_AddStringToObject(o, "window", w); else cJSON_AddNullToObject(o, "window");
+        char dd[32]; zone_days(zo, dd); cJSON_AddStringToObject(o, "days", dd[0] ? dd : "all");
+        if (zo->conditions_count) cJSON_AddNumberToObject(o, "priority", zo->conditions[0].priority);
         cJSON_AddItemToArray(zs, o);
     }
     note(cx, "Zone rates are before fees and VAT. window is the zone's time of day [from, to) in hub time; null = the zone is set by weekdays, dates or several windows (edit those on the hub's tariff page). Where zones overlap, the hub's zone priority decides.");
@@ -1949,8 +2061,9 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
 {
     const char *sec = cJSON_GetStringValue(cJSON_GetObjectItem(a, "section"));
     bool all = !sec;
-    if (sec && strcmp(sec, "channels") && strcmp(sec, "tariff") && strcmp(sec, "notifications") && strcmp(sec, "region"))
-        return fail(cx, "invalid_args", "section: channels, tariff, notifications or region", NULL);
+    if (sec && strcmp(sec, "channels") && strcmp(sec, "tariff") && strcmp(sec, "notifications") && strcmp(sec, "region") &&
+        strcmp(sec, "hub") && strcmp(sec, "integrations") && strcmp(sec, "dynamic_price"))
+        return fail(cx, "invalid_args", "section: channels, tariff, notifications, region, hub, integrations or dynamic_price", NULL);
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "version", ver_sync("hub", NULL));   /* the number list_config_versions and rollback_to use */
     if (all || !strcmp(sec, "channels")) cfg_channels(r);
@@ -1969,6 +2082,27 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(g, "currency", rbpower_tariff_currency());
         const rbpower_tariff_plan_t *tp = rbpower_tariff_get_current_plan();
         cJSON_AddStringToObject(g, "region_code", tp ? tp->region_code : "");
+    }
+    if (all || !strcmp(sec, "hub")) {
+        const rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
+        cJSON *h = cJSON_AddObjectToObject(r, "hub");
+        char b[48];
+        utf8_clean(ec && ec->home_name ? ec->home_name : "", b, sizeof(b)); cJSON_AddStringToObject(h, "name", b);
+        utf8_clean(ec && ec->location ? ec->location : "", b, sizeof(b)); cJSON_AddStringToObject(h, "location", b);
+    }
+    if (all || !strcmp(sec, "integrations")) {
+        cJSON *g = cJSON_AddObjectToObject(r, "integrations");
+        cJSON *mq = cJSON_AddObjectToObject(g, "mqtt");
+        char u[160], mu[176]; mqtt_saved_uri(u, sizeof(u));
+        mask_uri(u[0] ? u : rbmqtt_broker_uri(), mu, sizeof(mu));
+        cJSON_AddStringToObject(mq, "broker_uri", mu);
+        cJSON_AddBoolToObject(mq, "connected", rbmqtt_is_connected());
+        cJSON_AddStringToObject(mq, "home_assistant", "MQTT discovery on the same broker");
+    }
+    if (sec && !strcmp(sec, "dynamic_price")) {
+        cJSON *dp = rbdynprice_config_json();
+        if (dp) { cJSON_DeleteItemFromObject(dp, "type"); cJSON_AddItemToObject(r, "dynamic_price", dp); }
+        else cJSON_AddNullToObject(r, "dynamic_price");
     }
     note(cx, "To change: get_config_schema, then propose_config and, after the user's yes, apply_config. Points on new inputs: create_point.");
     cx->as_of = now_s();
@@ -2060,7 +2194,6 @@ static cJSON *cfg_capture(void)
     const cJSON *cd = pk ? cJSON_GetObjectItem(pk, "cycle_day") : NULL;
     cJSON_AddNumberToObject(r, "peaks_cycle_day", cd ? cd->valuedouble : 1);
     cJSON_Delete(pk);
-    static const char *ZN[RBPOWER_TARIFF_ZONE_COUNT] = { "night", "morning_peak", "day", "evening_peak", "late_evening", "weekend", "holiday", "critical_peak" };
     const rbpower_tariff_plan_t *tp = rbpower_tariff_get_current_plan();
     if (tp) {
         cJSON *t = cJSON_AddObjectToObject(r, "tariff");
@@ -2073,13 +2206,15 @@ static cJSON *cfg_capture(void)
         cJSON_AddNumberToObject(t, "grid_fee_per_kwh", r4(tp->grid_usage_fee_per_kwh));
         cJSON_AddNumberToObject(t, "levy_per_kwh", r4(tp->renewable_levy_per_kwh));
         cJSON *zs = cJSON_AddObjectToObject(t, "zones");
-        for (int z = 0; z < RBPOWER_TARIFF_ZONE_COUNT; z++) {
+        for (int z = 0; z < plan_nzones(tp); z++) {
             if (!tp->zones[z].is_enabled) continue;
-            cJSON *o = cJSON_AddObjectToObject(zs, ZN[z]);
+            cJSON *o = cJSON_AddObjectToObject(zs, zone_nm(&tp->zones[z]));
             cJSON_AddNumberToObject(o, "buy_per_kwh", r4(tp->zones[z].rate_buying_per_kwh));
             cJSON_AddNumberToObject(o, "sell_per_kwh", r4(tp->zones[z].rate_selling_per_kwh));
             char w[12]; if (zone_window(&tp->zones[z], w)) cJSON_AddStringToObject(o, "window", w);
+            char dd[32]; zone_days(&tp->zones[z], dd); cJSON_AddStringToObject(o, "days", dd);
         }
+        { int dz = (int)tp->default_zone_id; cJSON_AddStringToObject(t, "default_zone", dz >= 0 && dz < RBPOWER_TARIFF_ZONE_COUNT ? ZONE_N[dz] : ""); }
     }
     return r;
 }
@@ -2179,19 +2314,195 @@ static int role_from_name(const char *s)
     return -1;
 }
 
+/* ---- settings beyond channels/tariff (operator 23.11: the LLM interface covers the hub's settings, not half of them) ---- */
+static const char *const PATCH_KEYS[] = { "channels", "tariff", "peaks_cycle_day", "region", "hub", "price_rules", "price_signal", "peaks_reset", "dynamic_price", "mqtt" };
+static bool patch_key_ok(const char *k)
+{
+    for (size_t i = 0; i < sizeof(PATCH_KEYS) / sizeof(PATCH_KEYS[0]); i++) if (k && !strcmp(k, PATCH_KEYS[i])) return true;
+    return false;
+}
+static void dadd(cJSON *diff, const char *path, const char *from, const char *to)
+{
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", from ? from : ""); cJSON_AddStringToObject(d, "to", to ? to : "");
+    cJSON_AddItemToArray(diff, d);
+}
+static bool mqtt_uri_ok(const char *u)
+{
+    return u && (!strncmp(u, "mqtt://", 7) || !strncmp(u, "mqtts://", 8)) && strlen(u) < 160 && !strstr(u, "://***@");
+}
+static void mqtt_saved_uri(char *out, size_t n)
+{
+    size_t act = 0;
+    out[0] = '\0';
+    if (!(littlefs_raw_exists("/mqtt_broker") && littlefs_raw_read("/mqtt_broker", out, n - 1, &act) == ESP_OK)) out[0] = '\0';
+    else out[act < n ? act : n - 1] = '\0';
+}
+/* Validate the extra sections into norm; false = fail set. */
+static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *diff, cJSON *warn)
+{
+    char m[160];
+    const cJSON *rg = cJSON_GetObjectItem(patch, "region");
+    if (rg) {
+        const cJSON *k;
+        cJSON_ArrayForEach(k, rg) if (strcmp(k->string, "timezone")) { snprintf(m, sizeof(m), "region.%.24s: only timezone is writable here (the currency is in tariff)", k->string); fail(cx, "invalid_args", m, NULL); return false; }
+        const char *tz = cJSON_GetStringValue(cJSON_GetObjectItem(rg, "timezone"));
+        if (!tz || !tz[0] || strlen(tz) > 31 || !rbtime_timezone_is_valid(tz)) {
+            fail(cx, "invalid_args", "region.timezone: a POSIX TZ string with its offset", "E.g. \"CET-1CEST,M3.5.0,M10.5.0/3\" (Berlin), \"EET-2EEST,M3.5.0/3,M10.5.0/4\" (Kyiv), \"MSK-3\", \"CST-8\" (China), \"<+04>-4\"."); return false;
+        }
+        rbtime_config_t tc; memset(&tc, 0, sizeof(tc)); rbtime_get_config(&tc);
+        if (strcmp(tc.timezone, tz)) {
+            cJSON_AddStringToObject(cJSON_AddObjectToObject(norm, "region"), "timezone", tz);
+            dadd(diff, "region.timezone", tc.timezone, tz);
+            cJSON_AddItemToArray(warn, cJSON_CreateString("Days, yesterday/last week and tariff zones follow the new time zone from now on; records already stored keep their time."));
+        }
+    }
+    const cJSON *hb = cJSON_GetObjectItem(patch, "hub");
+    if (hb) {
+        const rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
+        cJSON *nh = NULL;
+        const cJSON *k;
+        cJSON_ArrayForEach(k, hb) {
+            if (strcmp(k->string, "name") && strcmp(k->string, "location")) { snprintf(m, sizeof(m), "hub.%.24s: name or location", k->string); fail(cx, "invalid_args", m, NULL); return false; }
+            if (!valid_name(cJSON_GetStringValue(k))) { snprintf(m, sizeof(m), "hub.%s: 1..31 bytes of UTF-8 text", k->string); fail(cx, "invalid_args", m, NULL); return false; }
+            const char *was = ec ? (!strcmp(k->string, "name") ? ec->home_name : ec->location) : "";
+            if (was && !strcmp(was, k->valuestring)) continue;
+            if (!nh) nh = cJSON_AddObjectToObject(norm, "hub");
+            cJSON_AddStringToObject(nh, k->string, k->valuestring);
+            char path[24]; snprintf(path, sizeof(path), "hub.%s", k->string);
+            dadd(diff, path, was, k->valuestring);
+        }
+    }
+    const cJSON *pr = cJSON_GetObjectItem(patch, "price_rules"), *ps = cJSON_GetObjectItem(patch, "price_signal");
+    if (pr) {
+        if (!cJSON_IsArray(pr)) { fail(cx, "invalid_args", "price_rules: the whole list (array), as get_config notifications.price_rules shows it", NULL); return false; }
+        cJSON *cr = rbact_rules_json(); int was = cJSON_GetArraySize(cJSON_GetObjectItem(cr, "rules")); cJSON_Delete(cr);
+        cJSON_AddItemToObject(norm, "price_rules", cJSON_Duplicate(pr, true));
+        char a[24], b[24]; snprintf(a, sizeof(a), "%d rule(s)", was); snprintf(b, sizeof(b), "%d rule(s)", cJSON_GetArraySize(pr));
+        dadd(diff, "notifications.price_rules", a, b);
+        cJSON_AddItemToArray(warn, cJSON_CreateString("The list replaces the current rules. The hub checks each rule when it saves them; a bad rule is refused at apply_config with its field named, and nothing is changed."));
+    }
+    if (ps) {
+        if (!cJSON_IsObject(ps)) { fail(cx, "invalid_args", "price_signal: an object, as get_config notifications.price_signal shows it", NULL); return false; }
+        cJSON_AddItemToObject(norm, "price_signal", cJSON_Duplicate(ps, true));
+        dadd(diff, "notifications.price_signal", "current", "updated");
+    }
+    const cJSON *pkr = cJSON_GetObjectItem(patch, "peaks_reset");
+    if (pkr) {
+        if (!cJSON_IsTrue(pkr)) { fail(cx, "invalid_args", "peaks_reset: true", NULL); return false; }
+        cJSON_AddTrueToObject(norm, "peaks_reset");
+        dadd(diff, "notifications.peaks", "this cycle's peaks", "cleared");
+        cJSON_AddItemToArray(warn, cJSON_CreateString("The peaks of the current cycle are cleared; this cannot be undone."));
+    }
+    const cJSON *dp = cJSON_GetObjectItem(patch, "dynamic_price");
+    if (dp) {
+        if (!cJSON_IsObject(dp)) { fail(cx, "invalid_args", "dynamic_price: an object with the fields get_config_schema {section: dynamic_price} lists", NULL); return false; }
+        cJSON_AddItemToObject(norm, "dynamic_price", cJSON_Duplicate(dp, true));
+        const cJSON *k;
+        cJSON_ArrayForEach(k, dp) {
+            char path[48]; snprintf(path, sizeof(path), "dynamic_price.%.30s", k->string);
+            char to[40]; if (cJSON_IsString(k)) snprintf(to, sizeof(to), "%.36s", k->valuestring); else if (cJSON_IsNumber(k)) snprintf(to, sizeof(to), "%g", k->valuedouble); else if (cJSON_IsBool(k)) snprintf(to, sizeof(to), "%s", cJSON_IsTrue(k) ? "true" : "false"); else snprintf(to, sizeof(to), "(set)");
+            dadd(diff, path, "", to);
+        }
+        cJSON_AddItemToArray(warn, cJSON_CreateString("The hub checks the provider settings when it saves them; a bad field is refused at apply_config with its name, and nothing is changed. Prices fetched later replace the zone prices for the periods they cover."));
+    }
+    const cJSON *mq = cJSON_GetObjectItem(patch, "mqtt");
+    if (mq) {
+        const cJSON *k;
+        cJSON_ArrayForEach(k, mq) if (strcmp(k->string, "broker_uri")) { fail(cx, "invalid_args", "mqtt: {broker_uri}", NULL); return false; }
+        const char *u = cJSON_GetStringValue(cJSON_GetObjectItem(mq, "broker_uri"));
+        if (!mqtt_uri_ok(u)) { fail(cx, "invalid_args", "mqtt.broker_uri: mqtt://host:port or mqtts://user:password@host:port (< 160 chars)", NULL); return false; }
+        char was[160]; mqtt_saved_uri(was, sizeof(was));
+        if (strcmp(was, u)) {
+            cJSON_AddStringToObject(cJSON_AddObjectToObject(norm, "mqtt"), "broker_uri", u);
+            char a[176], b[176]; mask_uri(was, a, sizeof(a)); mask_uri(u, b, sizeof(b));
+            dadd(diff, "mqtt.broker_uri", a, b);
+            cJSON_AddItemToArray(warn, cJSON_CreateString("The hub connects to the new broker after a restart (restart_hub). Home Assistant finds the hub on that broker by MQTT discovery."));
+        }
+    }
+    return true;
+}
+static bool patch_restarts_hub(const cJSON *norm) { return cJSON_GetObjectItem(norm, "mqtt") != NULL; }
+
+/* Sections that the hub validates only when it saves them go FIRST, so a refusal leaves everything unchanged. */
+static bool apply_more_first(const cJSON *norm, char *m, size_t n)
+{
+    const cJSON *pr = cJSON_GetObjectItem(norm, "price_rules"), *ps = cJSON_GetObjectItem(norm, "price_signal");
+    if (pr || ps) {
+        cJSON *d = cJSON_CreateObject();
+        if (pr) cJSON_AddItemToObject(d, "rules", cJSON_Duplicate(pr, true));
+        if (ps) cJSON_AddItemToObject(d, "signal", cJSON_Duplicate(ps, true));
+        char ef[24] = "", em[128] = "";
+        esp_err_t e = rbact_set(d, ef, sizeof(ef), em, sizeof(em));
+        cJSON_Delete(d);
+        if (e != ESP_OK) { snprintf(m, n, "price rules: the hub refused %s (%s)", ef[0] ? ef : "them", em); return false; }
+    }
+    const cJSON *dp = cJSON_GetObjectItem(norm, "dynamic_price");
+    if (dp) {
+        char ef[24] = "", em[128] = "";
+        if (rbdynprice_set_config(dp, ef, sizeof(ef), em, sizeof(em)) != ESP_OK) { snprintf(m, n, "dynamic_price.%s: %s", ef[0] ? ef : "?", em); return false; }
+    }
+    return true;
+}
+static bool apply_more_last(const cJSON *norm, char *m, size_t n)
+{
+    const char *tz = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(norm, "region"), "timezone"));
+    if (tz) {
+        cJSON *d = cJSON_CreateObject(); cJSON_AddStringToObject(d, "timezone", tz);
+        cJSON *ack = core_cmd("set", "time", d);
+        cJSON_Delete(d);
+        bool ok = core_ok(ack, m, n);
+        cJSON_Delete(ack);
+        if (!ok) return false;
+    }
+    const cJSON *hb = cJSON_GetObjectItem(norm, "hub");
+    if (hb) {
+        rbpower_extended_config_t *lc = calloc(1, sizeof(*lc));
+        if (!lc) { snprintf(m, n, "hub: out of memory"); return false; }
+        (void)rbgrid_storage_load_system(lc);
+        cJSON *sys = cJSON_Duplicate(hb, true);
+        const cJSON *nm = cJSON_GetObjectItem(sys, "name");
+        if (nm) cJSON_AddStringToObject(sys, "home_name", nm->valuestring);
+        cJSON_DeleteItemFromObject(sys, "name");
+        rbgrid_json_err_t pe = rbgrid_json_parse_system_section(sys, lc);
+        cJSON_Delete(sys);
+        esp_err_t se = pe == RBGRID_JSON_OK ? rbgrid_storage_save_system(lc) : ESP_FAIL;
+        rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
+        if (se == ESP_OK && ec) {   /* labels apply live, as on the hub page */
+            if (lc->home_name) { char *c = strdup(lc->home_name); if (c) ec->home_name = c; }
+            if (lc->location)  { char *c = strdup(lc->location);  if (c) ec->location = c; }
+        }
+        rbgrid_json_free_config_strings(lc);
+        free(lc);
+        if (se != ESP_OK) { snprintf(m, n, "hub: not saved (%s)", pe != RBGRID_JSON_OK ? "parse" : esp_err_to_name(se)); return false; }
+    }
+    if (cJSON_IsTrue(cJSON_GetObjectItem(norm, "peaks_reset"))) {
+        cJSON *d = cJSON_CreateObject(); cJSON_AddTrueToObject(d, "reset");
+        char em[64] = "";
+        esp_err_t e = rbpeak_set(d, em, sizeof(em));
+        cJSON_Delete(d);
+        if (e != ESP_OK) { snprintf(m, n, "peaks reset: %s", em); return false; }
+    }
+    const char *u = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(norm, "mqtt"), "broker_uri"));
+    if (u && littlefs_raw_write("/mqtt_broker", u, strlen(u) + 1) != ESP_OK) { snprintf(m, n, "mqtt: the broker was not saved"); return false; }
+    return true;
+}
+
 /* Validate a channels patch against the current state; fill diff/warnings; return a normalized patch or NULL (fail set). */
 static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, cJSON *diff, cJSON *warn)
 {
     const cJSON *pch = cJSON_GetObjectItem(patch, "channels"), *pcd = cJSON_GetObjectItem(patch, "peaks_cycle_day"),
                 *ptf = cJSON_GetObjectItem(patch, "tariff");
-    if (!pch && !pcd && !ptf) return fail(cx, "invalid_args", "patch: {channels: {<id>: {...}}}, {tariff: {...}} and/or {peaks_cycle_day}", NULL);
-    {   /* unknown top-level keys */
-        const cJSON *k;
-        cJSON_ArrayForEach(k, patch)
-            if (strcmp(k->string, "channels") && strcmp(k->string, "peaks_cycle_day") && strcmp(k->string, "tariff")) {
-                char mm[96]; snprintf(mm, sizeof(mm), "patch.%.30s: not writable over LLM (channels, tariff, peaks_cycle_day)", k->string);
-                return fail(cx, "invalid_args", mm, NULL);
+    {   /* known top-level keys only, at least one */
+        const cJSON *k; bool any = false;
+        cJSON_ArrayForEach(k, patch) {
+            if (!patch_key_ok(k->string)) {
+                char mm[160]; snprintf(mm, sizeof(mm), "patch.%.24s: not a setting (channels, tariff, peaks_cycle_day, region, hub, price_rules, price_signal, peaks_reset, dynamic_price, mqtt)", k->string);
+                return fail(cx, "invalid_args", mm, "get_config_schema lists the writable fields per section.");
             }
+            any = true;
+        }
+        if (!any) return fail(cx, "invalid_args", "patch: an object with one or more sections", "get_config_schema lists the writable fields per section.");
     }
     if (pch && !cJSON_IsObject(pch)) return fail(cx, "invalid_args", "patch.channels must be an object keyed by channel id", NULL);
     cJSON *norm = cJSON_CreateObject();
@@ -2238,7 +2549,23 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
                 cJSON_ArrayForEach(x, cm) { char sh[24]; ct_short(x->valuestring, sh); if (nv && !strcmp(sh, nv)) known = true; }
                 cJSON_Delete(cm);
                 if (!known) { snprintf(m, sizeof(m), "channels.%s.ct_model: one of the models in get_config_schema (e.g. SCT-013-030)", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
-            } else { snprintf(m, sizeof(m), "channels.%s.%.20s: not writable over LLM (name, role, inside, ct_model)", id, k); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+            } else if (!strcmp(k, "short_name")) {
+                const char *sv = cJSON_GetStringValue(f);
+                if (!sv || strlen(sv) > 24) { snprintf(m, sizeof(m), "channels.%s.short_name: text, up to 24 bytes", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+            } else if (!strcmp(k, "phase") || !strcmp(k, "rated_power_w") || !strcmp(k, "max_current_a") || !strcmp(k, "charge_threshold_w") || !strcmp(k, "idle_timeout_min")) {
+                double lo = 0, hi = !strcmp(k, "phase") ? 7 : !strcmp(k, "max_current_a") ? 1000 : !strcmp(k, "idle_timeout_min") ? 1440 : 1000000;
+                bool integer = !strcmp(k, "phase") || !strcmp(k, "idle_timeout_min");
+                if (!cJSON_IsNumber(f) || f->valuedouble < lo || f->valuedouble > hi || (integer && f->valuedouble != (int)f->valuedouble)) {
+                    snprintf(m, sizeof(m), "channels.%s.%s: %s %g..%g", id, k, integer ? "integer" : "number", lo, hi); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL);
+                }
+                if (!o) o = cJSON_AddObjectToObject(nch, id);
+                cJSON_AddNumberToObject(o, k, f->valuedouble);
+                cJSON *d = cJSON_CreateObject();
+                char path[48]; snprintf(path, sizeof(path), "channels.%s.%s", id, k);
+                cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", ""); cJSON_AddNumberToObject(d, "to", f->valuedouble);
+                cJSON_AddItemToArray(diff, d);
+                continue;
+            } else { snprintf(m, sizeof(m), "channels.%s.%.20s: not writable", id, k); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "get_config_schema {section: channels} lists the fields."); }
             const char *nv = cJSON_GetStringValue(f);
             if (was && nv && !strcmp(was, nv)) continue;   /* no change */
             if (!o) o = cJSON_AddObjectToObject(nch, id);
@@ -2298,42 +2625,109 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
             } else if (!strcmp(k, "zones")) {
                 const cJSON *z;
                 cJSON *nz = cJSON_AddObjectToObject(nt, "zones");
+                const rbpower_tariff_plan_t *tpl = rbpower_tariff_get_current_plan();
                 cJSON_ArrayForEach(z, f) {
+                    int zi = zone_idx(z->string);
+                    if (zi < 0) { snprintf(m, sizeof(m), "tariff.zones.%.20s: zone types are night, morning_peak, day, evening_peak, late_evening, weekend, holiday, critical_peak", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                    if (!cJSON_IsObject(z)) { cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", "each tariff zone is an object", NULL); }
                     const cJSON *cz = cJSON_GetObjectItem(cJSON_GetObjectItem(ct, "zones"), z->string);
-                    if (!cz) { snprintf(m, sizeof(m), "tariff.zones.%.20s: not a zone of the plan (see get_config tariff)", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "Zone time windows are set on the hub's tariff page."); }
-                    const cJSON *r;
+                    const rbpower_tariff_zone_t *pz = plan_zone(tpl, zi);
+                    bool isnew = !cz;
                     cJSON *oz = NULL;
+                    if (isnew) {
+                        if (cJSON_IsFalse(cJSON_GetObjectItem(z, "enabled"))) continue;   /* removing a zone the plan does not have */
+                        if (!cJSON_IsNumber(cJSON_GetObjectItem(z, "buy_per_kwh")) || (!cJSON_GetObjectItem(z, "window") && !cJSON_GetObjectItem(z, "days"))) {
+                            snprintf(m, sizeof(m), "tariff.zones.%s: a new zone needs buy_per_kwh and a window and/or days", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL);
+                        }
+                        oz = cJSON_AddObjectToObject(nz, z->string);
+                        cJSON_AddTrueToObject(oz, "new");
+                        cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s", z->string);
+                        cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", ""); cJSON_AddStringToObject(d, "to", "added");
+                        cJSON_AddItemToArray(diff, d);
+                        cJSON_AddItemToArray(warn, cJSON_CreateString("A new zone counts from the next 15-min period. Where zones overlap, the zone with the higher priority wins; hours no zone covers count at the default zone."));
+                    }
+                    const cJSON *r;
                     cJSON_ArrayForEach(r, z) {
-                        if (!strcmp(r->string, "window")) {
+                        const char *rk = r->string;
+                        if (!strcmp(rk, "enabled")) {
+                            if (!cJSON_IsBool(r)) { cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", "tariff zone enabled: true or false (false removes the zone)", NULL); }
+                            if (isnew || cJSON_IsTrue(r)) continue;
+                            if (!oz) oz = cJSON_AddObjectToObject(nz, z->string);
+                            cJSON_AddFalseToObject(oz, "enabled");
+                            cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s", z->string);
+                            cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", "on"); cJSON_AddStringToObject(d, "to", "removed");
+                            cJSON_AddItemToArray(diff, d);
+                            cJSON_AddItemToArray(warn, cJSON_CreateString("A removed zone's hours count at the remaining zones (or the default zone) from the next 15-min period; hours already booked keep their zone."));
+                            continue;
+                        }
+                        if (!strcmp(rk, "days")) {
+                            int mask = parse_days(cJSON_GetStringValue(r));
+                            if (mask < 0) { snprintf(m, sizeof(m), "tariff.zones.%s.days: \"mon-fri\", \"sat,sun\", \"mon,wed-fri\", \"weekdays\", \"weekend\" or \"all\"", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                            char was[32] = "", nd[32]; if (pz) zone_days(pz, was);
+                            days_str(mask, nd);
+                            if (!isnew && !strcmp(was, nd)) continue;
+                            if (!oz) oz = cJSON_AddObjectToObject(nz, z->string);
+                            cJSON_AddStringToObject(oz, "days", nd);
+                            cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s.days", z->string);
+                            cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", was[0] || isnew ? was : "every day"); cJSON_AddStringToObject(d, "to", nd[0] ? nd : "every day");
+                            cJSON_AddItemToArray(diff, d);
+                            continue;
+                        }
+                        if (!strcmp(rk, "priority")) {
+                            if (!cJSON_IsNumber(r) || r->valuedouble < 1 || r->valuedouble > 100 || r->valuedouble != (int)r->valuedouble) { cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", "tariff zone priority: integer 1..100 (higher wins where zones overlap)", NULL); }
+                            int wasp = (pz && pz->conditions_count) ? pz->conditions[0].priority : 0;
+                            if (!isnew && wasp == r->valueint) continue;
+                            if (!oz) oz = cJSON_AddObjectToObject(nz, z->string);
+                            cJSON_AddNumberToObject(oz, "priority", r->valueint);
+                            cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s.priority", z->string);
+                            cJSON_AddStringToObject(d, "path", path); cJSON_AddNumberToObject(d, "from", wasp); cJSON_AddNumberToObject(d, "to", r->valueint);
+                            cJSON_AddItemToArray(diff, d);
+                            continue;
+                        }
+                        if (!strcmp(rk, "window")) {
                             int sh, sm, eh, em;
                             const char *was = cJSON_GetStringValue(cJSON_GetObjectItem(cz, "window"));
-                            if (!was) { snprintf(m, sizeof(m), "tariff.zones.%.20s.window: this zone is not one time window (weekdays, dates or several windows)", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "Change it on the hub's tariff page."); }
+                            if (!was && !isnew && zone_tr_count(pz) > 1) { snprintf(m, sizeof(m), "tariff.zones.%.20s.window: this zone has several time windows", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "Remove the zone (enabled:false) and add it again with one window, or keep it."); }
                             if (!cJSON_IsString(r) || !parse_window(r->valuestring, &sh, &sm, &eh, &em)) { snprintf(m, sizeof(m), "tariff.zones.%.20s.window: \"HH:MM-HH:MM\", minutes 00/15/30/45, from != to", z->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "Example \"22:00-06:00\" (wraps midnight); 24:00 is allowed as an end."); }
                             char nw[12]; snprintf(nw, sizeof(nw), "%02d:%02d-%02d:%02d", sh, sm, eh, em);
-                            if (!strcmp(nw, was)) continue;
+                            if (was && !strcmp(nw, was)) continue;
                             if (!oz) oz = cJSON_AddObjectToObject(nz, z->string);
                             cJSON_AddStringToObject(oz, "window", nw);
                             cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s.window", z->string);
-                            cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", was); cJSON_AddStringToObject(d, "to", nw);
+                            cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", was ? was : (isnew ? "" : "all day")); cJSON_AddStringToObject(d, "to", nw);
                             cJSON_AddItemToArray(diff, d);
                             cJSON_AddItemToArray(warn, cJSON_CreateString("A new zone window applies from the next 15-min period; hours already booked keep their zone. Hours no zone covers fall to the plan's default zone; overlaps go to the zone with the higher priority."));
                             continue;
                         }
-                        if (strcmp(r->string, "buy_per_kwh") && strcmp(r->string, "sell_per_kwh")) { snprintf(m, sizeof(m), "tariff.zones.%s.%.20s: buy_per_kwh, sell_per_kwh or window", z->string, r->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
-                        if (!cJSON_IsNumber(r) || r->valuedouble < 0 || r->valuedouble > 100) { snprintf(m, sizeof(m), "tariff.zones.%s.%s: 0..100 per kWh (before fees and VAT)", z->string, r->string); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "A price per MWh must be divided by 1000."); }
-                        double was = cJSON_GetNumberValue(cJSON_GetObjectItem(cz, r->string));
-                        if (fabs(was - r->valuedouble) < 1e-6) continue;
+                        if (strcmp(rk, "buy_per_kwh") && strcmp(rk, "sell_per_kwh")) { snprintf(m, sizeof(m), "tariff.zones.%s.%.20s: buy_per_kwh, sell_per_kwh, window, days, priority or enabled", z->string, rk); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                        if (!cJSON_IsNumber(r) || r->valuedouble < 0 || r->valuedouble > 100) { snprintf(m, sizeof(m), "tariff.zones.%s.%s: 0..100 per kWh (before fees and VAT)", z->string, rk); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "A price per MWh must be divided by 1000."); }
+                        double was = cz ? cJSON_GetNumberValue(cJSON_GetObjectItem(cz, rk)) : 0;
+                        if (!isnew && fabs(was - r->valuedouble) < 1e-6) continue;
                         if (!oz) oz = cJSON_AddObjectToObject(nz, z->string);
-                        cJSON_AddNumberToObject(oz, r->string, r->valuedouble);
-                        cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s.%s", z->string, r->string);
+                        cJSON_AddNumberToObject(oz, rk, r->valuedouble);
+                        cJSON *d = cJSON_CreateObject(); snprintf(path, sizeof(path), "tariff.zones.%s.%s", z->string, rk);
                         cJSON_AddStringToObject(d, "path", path); cJSON_AddNumberToObject(d, "from", was); cJSON_AddNumberToObject(d, "to", r->valuedouble);
                         cJSON_AddItemToArray(diff, d);
                     }
                 }
+            } else if (!strcmp(k, "default_zone")) {
+                const char *dz = cJSON_GetStringValue(f);
+                int zi = zone_idx(dz);
+                const rbpower_tariff_plan_t *tpl = rbpower_tariff_get_current_plan();
+                const cJSON *pzs = cJSON_GetObjectItem(ptf, "zones");
+                bool there = zi >= 0 && (plan_zone(tpl, zi) || (cJSON_GetObjectItem(pzs, dz) && !cJSON_IsFalse(cJSON_GetObjectItem(cJSON_GetObjectItem(pzs, dz), "enabled"))));
+                if (!there) { cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", "tariff.default_zone: one of the plan's zones (get_config tariff), or a zone added in the same patch", NULL); }
+                int wz = tpl ? (int)tpl->default_zone_id : -1;
+                if (wz == zi) continue;
+                cJSON_AddStringToObject(nt, "default_zone", dz);
+                cJSON *d = cJSON_CreateObject();
+                cJSON_AddStringToObject(d, "path", "tariff.default_zone"); cJSON_AddStringToObject(d, "from", wz >= 0 && wz < RBPOWER_TARIFF_ZONE_COUNT ? ZONE_N[wz] : ""); cJSON_AddStringToObject(d, "to", dz);
+                cJSON_AddItemToArray(diff, d);
+                cJSON_AddItemToArray(warn, cJSON_CreateString("Hours that no zone covers count at the default zone."));
             } else {
                 size_t q; bool hit = false;
                 for (q = 0; q < sizeof(NUMS) / sizeof(NUMS[0]); q++) if (!strcmp(k, NUMS[q].k)) { hit = true; break; }
-                if (!hit) { snprintf(m, sizeof(m), "tariff.%.24s: not writable over LLM (plan_name, provider, currency, vat_percent, energy_tax_per_kwh, grid_fee_per_kwh, levy_per_kwh, zones)", k); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                if (!hit) { snprintf(m, sizeof(m), "tariff.%.24s: not writable", k); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "get_config_schema {section: tariff} lists the fields."); }
                 if (!cJSON_IsNumber(f) || f->valuedouble < NUMS[q].lo || f->valuedouble > NUMS[q].hi) { snprintf(m, sizeof(m), "tariff.%s: %g..%g", k, NUMS[q].lo, NUMS[q].hi); cJSON_Delete(nt); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
                 double was = cJSON_GetNumberValue(cJSON_GetObjectItem(ct, k));
                 if (fabs(was - f->valuedouble) < 1e-6) continue;
@@ -2354,6 +2748,7 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
                 cJSON_AddItemToArray(warn, cJSON_CreateString("The hub still runs its demo plan: also set plan_name and provider (the user's supplier) so money stops counting as demo figures."));
         } else cJSON_Delete(nt);
     }
+    if (!check_more(cx, patch, norm, diff, warn)) { cJSON_Delete(norm); return NULL; }
     if (!cJSON_GetArraySize(diff)) { cJSON_Delete(norm); return fail(cx, "invalid_args", "the patch changes nothing", "Read get_config first."); }
     return norm;
 }
@@ -2383,23 +2778,60 @@ static bool apply_tariff(rbllm_cx_t *cx, const cJSON *nt, char *m, size_t mlen)
         cJSON_ReplaceItemInObject(plan, "valid_until_timestamp", cJSON_CreateNumber((double)now_s() + 365.0 * 86400.0));
     }
     const cJSON *z;
+    cJSON *dzs = cJSON_GetObjectItem(plan, "zones");
+    if (!dzs) dzs = cJSON_AddArrayToObject(plan, "zones");
     cJSON_ArrayForEach(z, cJSON_GetObjectItem(nt, "zones")) {
         char up[24]; strlcpy(up, z->string, sizeof(up)); for (char *q = up; *q; q++) if (*q >= 'a' && *q <= 'z') *q -= 32;
         cJSON *dz = NULL, *e;
-        cJSON_ArrayForEach(e, cJSON_GetObjectItem(plan, "zones")) { const char *zid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "zone_id")); if (zid && !strcmp(zid, up)) dz = e; }
+        int di = 0, at = -1;
+        cJSON_ArrayForEach(e, dzs) { const char *zid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "zone_id")); if (zid && !strcmp(zid, up)) { dz = e; at = di; } di++; }
+        if (cJSON_IsFalse(cJSON_GetObjectItem(z, "enabled"))) {   /* remove the zone */
+            if (at >= 0) cJSON_DeleteItemFromArray(dzs, at);
+            continue;
+        }
+        if (!dz && cJSON_IsTrue(cJSON_GetObjectItem(z, "new"))) {
+            if (cJSON_GetArraySize(dzs) >= RBPOWER_TARIFF_ZONE_COUNT) { cJSON_Delete(d); snprintf(m, mlen, "tariff.zones.%s: the plan holds no more zones", z->string); return false; }
+            dz = cJSON_CreateObject();
+            cJSON_AddStringToObject(dz, "zone_id", up);
+            char nm[24]; strlcpy(nm, z->string, sizeof(nm)); for (char *q = nm; *q; q++) if (*q == '_') *q = ' ';
+            if (nm[0] >= 'a' && nm[0] <= 'z') nm[0] -= 32;
+            cJSON_AddStringToObject(dz, "zone_name", nm);
+            cJSON_AddStringToObject(dz, "description", "");
+            cJSON_AddNumberToObject(dz, "rate_buying_per_kwh", 0);
+            cJSON_AddTrueToObject(dz, "conditions_and_logic");
+            cJSON_AddArrayToObject(dz, "conditions");
+            cJSON_AddTrueToObject(dz, "is_enabled");
+            cJSON_AddItemToArray(dzs, dz);
+        }
         if (!dz) { cJSON_Delete(d); snprintf(m, mlen, "tariff.zones.%s: zone not in the plan document", z->string); return false; }
         const cJSON *b = cJSON_GetObjectItem(z, "buy_per_kwh"), *sl = cJSON_GetObjectItem(z, "sell_per_kwh");
-        if (b) cJSON_ReplaceItemInObject(dz, "rate_buying_per_kwh", cJSON_CreateNumber(b->valuedouble));
-        if (sl) cJSON_ReplaceItemInObject(dz, "rate_selling_per_kwh", cJSON_CreateNumber(sl->valuedouble));
+        if (b) { cJSON_DeleteItemFromObject(dz, "rate_buying_per_kwh"); cJSON_AddNumberToObject(dz, "rate_buying_per_kwh", b->valuedouble); }
+        if (sl) { cJSON_DeleteItemFromObject(dz, "rate_selling_per_kwh"); cJSON_AddNumberToObject(dz, "rate_selling_per_kwh", sl->valuedouble); }
+        cJSON *conds = cJSON_GetObjectItem(dz, "conditions");
+        if (!conds) conds = cJSON_AddArrayToObject(dz, "conditions");
+        const cJSON *jp = cJSON_GetObjectItem(z, "priority");
+        int prio = cJSON_IsNumber(jp) ? jp->valueint : -1;
+        if (prio < 0) {   /* keep the zone's own priority for a condition added now */
+            cJSON *c0 = cJSON_GetArrayItem(conds, 0);
+            prio = c0 && cJSON_IsNumber(cJSON_GetObjectItem(c0, "priority")) ? cJSON_GetObjectItem(c0, "priority")->valueint : 10;
+        }
         const char *wv = cJSON_GetStringValue(cJSON_GetObjectItem(z, "window"));
         if (wv) {
             int sh, sm, eh, em;
             cJSON *tc = NULL, *c; int ntr = 0;
-            cJSON_ArrayForEach(c, cJSON_GetObjectItem(dz, "conditions")) {
+            cJSON_ArrayForEach(c, conds) {
                 const char *ty = cJSON_GetStringValue(cJSON_GetObjectItem(c, "condition_type"));
                 if (ty && !strcmp(ty, "TIME_RANGE") && cJSON_IsTrue(cJSON_GetObjectItem(c, "is_active"))) { tc = c; ntr++; }
             }
-            if (!parse_window(wv, &sh, &sm, &eh, &em) || ntr != 1) { cJSON_Delete(d); snprintf(m, mlen, "tariff.zones.%s.window: the zone has no single time window in the plan document", z->string); return false; }
+            if (!parse_window(wv, &sh, &sm, &eh, &em) || ntr > 1) { cJSON_Delete(d); snprintf(m, mlen, "tariff.zones.%s.window: the zone has several time windows in the plan document", z->string); return false; }
+            if (!tc) {
+                tc = cJSON_CreateObject();
+                cJSON_AddStringToObject(tc, "condition_type", "TIME_RANGE");
+                cJSON_AddObjectToObject(tc, "params");
+                cJSON_AddTrueToObject(tc, "is_active");
+                cJSON_AddNumberToObject(tc, "priority", prio);
+                cJSON_AddItemToArray(conds, tc);
+            }
             cJSON *pr = cJSON_GetObjectItem(tc, "params");
             if (!pr) pr = cJSON_AddObjectToObject(tc, "params");
             const char *ks[] = { "start_hour", "start_minute", "end_hour", "end_minute" };
@@ -2408,7 +2840,36 @@ static bool apply_tariff(rbllm_cx_t *cx, const cJSON *nt, char *m, size_t mlen)
             cJSON_DeleteItemFromObject(pr, "spans_midnight");
             cJSON_AddBoolToObject(pr, "spans_midnight", (sh * 60 + sm) > (eh * 60 + em));
         }
+        const char *dv = cJSON_GetStringValue(cJSON_GetObjectItem(z, "days"));
+        if (dv) {   /* replace the weekday conditions with one WEEKDAY mask ("" = every day = no condition) */
+            for (int q = cJSON_GetArraySize(conds) - 1; q >= 0; q--) {
+                const char *ty = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(conds, q), "condition_type"));
+                if (ty && (!strcmp(ty, "WEEKDAY") || !strcmp(ty, "WEEKEND"))) cJSON_DeleteItemFromArray(conds, q);
+            }
+            int mask = parse_days(dv);
+            if (mask > 0) {
+                cJSON *c = cJSON_CreateObject();
+                cJSON_AddStringToObject(c, "condition_type", "WEEKDAY");
+                cJSON *pr = cJSON_AddObjectToObject(c, "params");
+                cJSON_AddNumberToObject(pr, "weekday_mask", mask);
+                cJSON_AddTrueToObject(c, "is_active");
+                cJSON_AddNumberToObject(c, "priority", prio);
+                cJSON_AddItemToArray(conds, c);
+            }
+        }
+        if (cJSON_IsNumber(jp)) {
+            cJSON *c;
+            cJSON_ArrayForEach(c, conds) { cJSON_DeleteItemFromObject(c, "priority"); cJSON_AddNumberToObject(c, "priority", jp->valueint); }
+        }
+        if (cJSON_GetArraySize(conds) > 4) { cJSON_Delete(d); snprintf(m, mlen, "tariff.zones.%s: a zone holds at most 4 conditions", z->string); return false; }
     }
+    const char *dfz = cJSON_GetStringValue(cJSON_GetObjectItem(nt, "default_zone"));
+    if (dfz) {
+        char up[24]; strlcpy(up, dfz, sizeof(up)); for (char *q = up; *q; q++) if (*q >= 'a' && *q <= 'z') *q -= 32;
+        cJSON_DeleteItemFromObject(plan, "default_zone_id"); cJSON_AddStringToObject(plan, "default_zone_id", up);
+    }
+    if (!cJSON_GetArraySize(dzs)) { cJSON_Delete(d); snprintf(m, mlen, "tariff: a plan keeps at least one zone"); return false; }
+    cJSON_DeleteItemFromObject(plan, "active_zones_count"); cJSON_AddNumberToObject(plan, "active_zones_count", cJSON_GetArraySize(dzs));
     char *out = cJSON_PrintUnformatted(d);
     cJSON_Delete(d);
     if (!out) { snprintf(m, mlen, "tariff: out of memory"); return false; }
@@ -2463,8 +2924,19 @@ static cJSON *patch_between(const cJSON *cur, const cJSON *target)
         const cJSON *z;
         cJSON_ArrayForEach(z, cJSON_GetObjectItem(tt, "zones")) {
             const cJSON *cz = cJSON_GetObjectItem(cJSON_GetObjectItem(tc, "zones"), z->string);
-            if (!cz) continue;
+            if (!cz) {   /* the zone was removed since: add it back */
+                cJSON *one = cJSON_AddObjectToObject(zo, z->string);
+                const char *ks[] = { "buy_per_kwh", "sell_per_kwh", "window", "days" };
+                for (int q = 0; q < 4; q++) { const cJSON *v = cJSON_GetObjectItem(z, ks[q]); if (v) cJSON_AddItemToObject(one, ks[q], cJSON_Duplicate(v, false)); }
+                const cJSON *dv = cJSON_GetObjectItem(one, "days");
+                if (dv && !dv->valuestring[0]) cJSON_ReplaceItemInObject(one, "days", cJSON_CreateString("all"));
+                continue;
+            }
             cJSON *one = NULL;
+            {
+                const char *dx = cJSON_GetStringValue(cJSON_GetObjectItem(z, "days")), *dy = cJSON_GetStringValue(cJSON_GetObjectItem(cz, "days"));
+                if (dx && dy && strcmp(dx, dy)) { one = cJSON_AddObjectToObject(zo, z->string); cJSON_AddStringToObject(one, "days", dx[0] ? dx : "all"); }
+            }
             const char *ks[] = { "buy_per_kwh", "sell_per_kwh" };
             for (int q = 0; q < 2; q++) {
                 double x = cJSON_GetNumberValue(cJSON_GetObjectItem(z, ks[q])), y = cJSON_GetNumberValue(cJSON_GetObjectItem(cz, ks[q]));
@@ -2473,6 +2945,8 @@ static cJSON *patch_between(const cJSON *cur, const cJSON *target)
             const char *wx = cJSON_GetStringValue(cJSON_GetObjectItem(z, "window")), *wy = cJSON_GetStringValue(cJSON_GetObjectItem(cz, "window"));
             if (wx && wy && strcmp(wx, wy)) { if (!one) one = cJSON_AddObjectToObject(zo, z->string); cJSON_AddStringToObject(one, "window", wx); }
         }
+        cJSON_ArrayForEach(z, cJSON_GetObjectItem(tc, "zones"))   /* zones added since: remove them */
+            if (!cJSON_GetObjectItem(cJSON_GetObjectItem(tt, "zones"), z->string)) cJSON_AddFalseToObject(cJSON_AddObjectToObject(zo, z->string), "enabled");
         if (cJSON_GetArraySize(zo)) cJSON_AddItemToObject(o, "zones", zo); else cJSON_Delete(zo);
         if (cJSON_GetArraySize(o)) cJSON_AddItemToObject(p, "tariff", o); else cJSON_Delete(o);
     }
@@ -2538,7 +3012,7 @@ static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
     cJSON *r = cJSON_CreateObject();
     cJSON_AddItemToObject(r, "diff", diff);
     cJSON_AddItemToObject(r, "warnings", w2);
-    cJSON_AddBoolToObject(r, "restart_required", false);
+    cJSON_AddBoolToObject(r, "restart_required", patch_restarts_hub(norm));
     cJSON_AddBoolToObject(r, "module_restart", patch_restarts_module(norm));
     cJSON_AddStringToObject(r, "confirm_token", tok);
     cJSON_AddNumberToObject(r, "expires_in", PROP_TTL_S);
@@ -2557,6 +3031,11 @@ static bool apply_patch(rbllm_cx_t *cx, const cJSON *norm, const cJSON *before)
     cJSON *done = cJSON_CreateArray();
     bool ok = true;
     char m[200];
+    if (!apply_more_first(norm, m, sizeof(m))) {   /* nothing changed yet */
+        cJSON_Delete(done);
+        fail(cx, "conflict", m, "Nothing was changed. Fix that part and propose again.");
+        return false;
+    }
     cJSON_ArrayForEach(e, cJSON_GetObjectItem(norm, "channels")) {
         unsigned uid = 0; sscanf(e->string, "%4x", &uid);
         cJSON *body = cJSON_CreateObject();
@@ -2571,7 +3050,8 @@ static bool apply_patch(rbllm_cx_t *cx, const cJSON *norm, const cJSON *before)
                 cJSON *cm = ct_models(); const cJSON *x;
                 cJSON_ArrayForEach(x, cm) { char sh[24]; ct_short(x->valuestring, sh); if (!strcmp(sh, f->valuestring)) cJSON_AddNumberToObject(body, "ct_code", atoi(x->string)); }
                 cJSON_Delete(cm);
-            } else cJSON_AddStringToObject(body, f->string, f->valuestring);
+            } else if (cJSON_IsNumber(f)) cJSON_AddNumberToObject(body, f->string, f->valuedouble);
+            else cJSON_AddStringToObject(body, f->string, f->valuestring);
         }
         char *js = cJSON_PrintUnformatted(body);
         cJSON_Delete(body);
@@ -2598,6 +3078,7 @@ static bool apply_patch(rbllm_cx_t *cx, const cJSON *norm, const cJSON *before)
         if (rbpeak_set(d, em, sizeof(em)) != ESP_OK) { snprintf(m, sizeof(m), "peaks_cycle_day: the hub refused it (%s)", em); ok = false; }
         cJSON_Delete(d);
     }
+    if (ok && !apply_more_last(norm, m, sizeof(m))) ok = false;
     if (!ok) {
         /* undo what was applied: restore the before values of those channels */
         cJSON *undo = cJSON_CreateObject(), *uch = cJSON_AddObjectToObject(undo, "channels");
@@ -2634,7 +3115,7 @@ static cJSON *t_apply_config(const cJSON *a, rbllm_cx_t *cx)
     char h[17]; cfg_hash(cur, h);
     if (strcmp(h, p.base)) { cJSON_Delete(cur); cJSON_Delete(p.patch); return fail(cx, "conflict", "the settings changed since the proposal", "Read get_config and propose again."); }
     ver_sync("hub", NULL);   /* the state before, if not yet recorded */
-    bool modr = patch_restarts_module(p.patch);
+    bool modr = patch_restarts_module(p.patch), hubr = patch_restarts_hub(p.patch);
     bool ok = apply_patch(cx, p.patch, cur);
     cJSON_Delete(cur); cJSON_Delete(p.patch);
     if (!ok) return NULL;
@@ -2647,8 +3128,9 @@ static cJSON *t_apply_config(const cJSON *a, rbllm_cx_t *cx)
     cJSON *r = cJSON_CreateObject();
     cJSON_AddNumberToObject(r, "version", v);
     cJSON_AddBoolToObject(r, "applied", true);
-    cJSON_AddBoolToObject(r, "restart_required", false);
+    cJSON_AddBoolToObject(r, "restart_required", hubr);
     cJSON_AddBoolToObject(r, "module_restart", modr);
+    if (hubr) note(cx, "Part of this applies after a restart: ask the user, then restart_hub.");
     cJSON_AddStringToObject(r, "summary", p.summary);
     note(cx, "Applied. list_config_versions shows it; propose_config {rollback_to} undoes it.");
     cx->as_of = now_s();
@@ -2692,8 +3174,9 @@ static cJSON *t_rollback_config(const cJSON *a, rbllm_cx_t *cx)
 static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
 {
     const char *sec = cJSON_GetStringValue(cJSON_GetObjectItem(a, "section"));
-    if (!sec || (strcmp(sec, "channels") && strcmp(sec, "notifications") && strcmp(sec, "tariff") && strcmp(sec, "region")))
-        return fail(cx, "invalid_args", "section: channels, notifications, tariff or region", NULL);
+    if (!sec || (strcmp(sec, "channels") && strcmp(sec, "notifications") && strcmp(sec, "tariff") && strcmp(sec, "region") &&
+                 strcmp(sec, "hub") && strcmp(sec, "integrations") && strcmp(sec, "dynamic_price")))
+        return fail(cx, "invalid_args", "section: channels, notifications, tariff, region, hub, integrations or dynamic_price", NULL);
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "section", sec);
     cJSON *w = cJSON_AddObjectToObject(r, "writable");
@@ -2719,10 +3202,38 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
         ct_info_t ci[RBLLM_MAX_POINTS]; int nci = ct_infos(ci, RBLLM_MAX_POINTS);
         for (int q = 0; q < nci; q++) if (ci[q].settable) cJSON_AddItemToArray(on, cJSON_CreateString(ci[q].id));
         cJSON_AddStringToObject(f, "description", "The clamp model on the channel (printed on the clamp); only for the channels listed, whose module lets the user pick it.");
+        f = cJSON_AddObjectToObject(w, "short_name"); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 24);
+        cJSON_AddStringToObject(f, "description", "A short label for small screens.");
+        const struct { const char *k, *t; double hi; const char *d; } CN[] = {
+            { "phase", "integer", 7, "0 unset, 1..3 = L1..L3, 4 = three-phase, 5..7 = L1L2/L2L3/L3L1" },
+            { "rated_power_w", "number", 1000000, "the appliance's rated power, 0 = unset (used for load percent)" },
+            { "max_current_a", "number", 1000, "the circuit's breaker current, 0 = unset (used for overload warnings)" },
+            { "charge_threshold_w", "number", 1000000, "EV points: power above which a charge session runs, 0 = hub default" },
+            { "idle_timeout_min", "integer", 1440, "EV points: minutes below the threshold that end a session, 0 = hub default" } };
+        for (int q = 0; q < 5; q++) { f = cJSON_AddObjectToObject(w, CN[q].k); cJSON_AddStringToObject(f, "type", CN[q].t); cJSON_AddNumberToObject(f, "minimum", 0); cJSON_AddNumberToObject(f, "maximum", CN[q].hi); cJSON_AddStringToObject(f, "description", CN[q].d); }
     } else if (!strcmp(sec, "notifications")) {
         cJSON *f = cJSON_AddObjectToObject(w, "peaks_cycle_day");
         cJSON_AddStringToObject(f, "type", "integer"); cJSON_AddNumberToObject(f, "minimum", 1); cJSON_AddNumberToObject(f, "maximum", 28);
         cJSON_AddStringToObject(f, "description", "Day of the month the import-peak cycle starts (the grid operator's billing day).");
+        f = cJSON_AddObjectToObject(w, "price_rules"); cJSON_AddStringToObject(f, "type", "array");
+        cJSON_AddStringToObject(f, "description", "patch.price_rules: the WHOLE list of cheap-window rules, each as get_config notifications.price_rules shows one (kinds threshold, cheapest, deadline); replaces the list. The hub names a bad field at apply_config.");
+        f = cJSON_AddObjectToObject(w, "price_signal"); cJSON_AddStringToObject(f, "type", "object");
+        cJSON_AddStringToObject(f, "description", "patch.price_signal: the price notification settings, as get_config notifications.price_signal shows them.");
+        f = cJSON_AddObjectToObject(w, "peaks_reset"); cJSON_AddStringToObject(f, "type", "boolean");
+        cJSON_AddStringToObject(f, "description", "patch.peaks_reset: true clears the current cycle's import peaks (cannot be undone).");
+    } else if (!strcmp(sec, "region")) {
+        cJSON *f = cJSON_AddObjectToObject(w, "timezone"); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 31);
+        cJSON_AddStringToObject(f, "description", "patch.region.timezone: POSIX TZ with its offset and DST rule, e.g. CET-1CEST,M3.5.0,M10.5.0/3 (Berlin, Paris), EET-2EEST,M3.5.0/3,M10.5.0/4 (Kyiv, Helsinki), GMT0BST,M3.5.0/1,M10.5.0 (London), MSK-3 (Moscow), CST-8 (China), <+04>-4. Note the sign: east of UTC is negative.");
+    } else if (!strcmp(sec, "hub")) {
+        const char *ss[] = { "name", "location" };
+        for (int q = 0; q < 2; q++) { cJSON *f = cJSON_AddObjectToObject(w, ss[q]); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 31); }
+        cJSON_AddStringToObject(cJSON_GetObjectItem(w, "name"), "description", "patch.hub.name: the hub's name in the app and Home Assistant.");
+    } else if (!strcmp(sec, "integrations")) {
+        cJSON *f = cJSON_AddObjectToObject(w, "broker_uri"); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 159);
+        cJSON_AddStringToObject(f, "description", "patch.mqtt.broker_uri: mqtt://host:1883 or mqtts://user:password@host:8883 (the Home Assistant MQTT broker). Applies after restart_hub.");
+    } else if (!strcmp(sec, "dynamic_price")) {
+        cJSON *f = cJSON_AddObjectToObject(w, "dynamic_price"); cJSON_AddStringToObject(f, "type", "object");
+        cJSON_AddStringToObject(f, "description", "patch.dynamic_price: the provider settings, with the field names get_config {section: dynamic_price} shows (it also lists the providers the hub knows). Only the fields given change.");
     } else if (!strcmp(sec, "tariff")) {
         const char *ss[] = { "plan_name", "provider" };
         for (int q = 0; q < 2; q++) { cJSON *f = cJSON_AddObjectToObject(w, ss[q]); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 31); }
@@ -2733,12 +3244,13 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
         for (int q = 0; q < 4; q++) { f = cJSON_AddObjectToObject(w, NN[q].k); cJSON_AddStringToObject(f, "type", "number"); cJSON_AddNumberToObject(f, "minimum", 0); cJSON_AddNumberToObject(f, "maximum", NN[q].hi); cJSON_AddStringToObject(f, "description", NN[q].d); }
         f = cJSON_AddObjectToObject(w, "zones");
         cJSON_AddStringToObject(f, "type", "object");
-        cJSON_AddStringToObject(f, "description", "{<zone>: {buy_per_kwh?, sell_per_kwh?, window?}} for the zones get_config lists; prices 0..100 per kWh, before fees and VAT; window \"HH:MM-HH:MM\" (15-min grid, [from,to), wraps midnight when to < from) only for a zone get_config shows with a window. Weekdays, dates and priorities are set on the hub page.");
+        cJSON_AddStringToObject(f, "description", "{<zone>: {buy_per_kwh?, sell_per_kwh?, window?, days?, priority?, enabled?}}. Zone types: night, morning_peak, day, evening_peak, late_evening, weekend, holiday, critical_peak. Prices 0..100 per kWh before fees and VAT; window \"HH:MM-HH:MM\" (15-min grid, [from,to), wraps midnight); days \"mon-fri\", \"sat,sun\" or \"all\"; priority 1..100 (higher wins on overlap); enabled:false removes a zone. A zone the plan lacks is added: it needs buy_per_kwh and a window and/or days.");
+        f = cJSON_AddObjectToObject(w, "default_zone"); cJSON_AddStringToObject(f, "type", "string");
+        cJSON_AddStringToObject(f, "description", "The zone for hours no other zone covers.");
         note(cx, "A flat tariff on a two-zone plan: give every zone the same price.");
     } else {
-        note(cx, "Nothing in this section is writable over LLM yet; the user changes it on the hub page.");
     }
-    cJSON_AddStringToObject(r, "how", "propose_config {patch: {channels: {<id>: {field: value}}}}, {patch: {tariff: {field: value}}} or {patch: {peaks_cycle_day: n}}");
+    cJSON_AddStringToObject(r, "how", "propose_config {patch: {...}}: channels {<id>: {field}}, tariff {...}, peaks_cycle_day, price_rules, price_signal, peaks_reset, region {timezone}, hub {name, location}, mqtt {broker_uri}, dynamic_price {...}; several sections may go in one patch.");
     cx->as_of = now_s();
     return r;
 }
@@ -3135,7 +3647,9 @@ static const cJSON *sl_input(const cJSON *sl, int m, const char *label)
     const cJSON *e;
     cJSON_ArrayForEach(e, cJSON_GetObjectItem(sl, "sensors")) {
         const char *ifc = cJSON_GetStringValue(cJSON_GetObjectItem(e, "iface")), *lb = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ch_label"));
-        if (ifc && !strcmp(ifc, "i2c") && (int)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "module")) == m && lb && label && !strcasecmp(lb, label)) return e;
+        if (!ifc || strcmp(ifc, "i2c") || (int)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "module")) != m || !lb || !label) continue;
+        if (!strcasecmp(lb, label)) return e;
+        if (!strcmp(lb, "L1–L3") && (!strcasecmp(label, "L1-L3") || !strcasecmp(label, "L1–L3") || !strcasecmp(label, "phases"))) return e;
     }
     return NULL;
 }
@@ -3410,6 +3924,105 @@ static cJSON *t_restart_hub(const cJSON *a, rbllm_cx_t *cx)
     return r;
 }
 
+static cJSON *t_delete_point(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *cid = cJSON_GetStringValue(cJSON_GetObjectItem(a, "channel"));
+    unsigned uid = 0;
+    if (!cid || sscanf(cid, "%4x", &uid) != 1 || !uid) return fail(cx, "invalid_args", "channel: a channel id from list_channels", NULL);
+    const rbpower_unit_definition_t *def = rbpower_home_get_unit_definition((rbpower_unit_id_t)uid);
+    if (!def) return fail(cx, "not_found", "no such channel", "Call list_channels for the ids.");
+    if (def->role == RBPOWER_ROLE_MAIN_SUPPLY || def->role == RBPOWER_ROLE_ALTERNATIVE_SUPPLY)
+        return fail(cx, "invalid_args", "the supply point is not deleted: the grid figure and the bill depend on it", "Move it to the right input with move_point.");
+    char nm[48]; utf8_clean(def->name, nm, sizeof(nm));
+    int st = 0;
+    char *rep = rbgrid_units_delete((rbpower_unit_id_t)uid, &st);
+    cJSON *rj = rep ? cJSON_Parse(rep) : NULL;
+    free(rep);
+    if (st != 200) {
+        const char *em = rj ? cJSON_GetStringValue(cJSON_GetObjectItem(rj, "message")) : NULL;
+        char msg[160]; snprintf(msg, sizeof(msg), "the hub refused (%d: %.100s)", st, em ? em : "?");
+        cJSON_Delete(rj);
+        return fail(cx, st == 404 ? "not_found" : "conflict", msg, st == 409 ? "Points measured inside it go first (propose_config inside), or delete them." : NULL);
+    }
+    cJSON_Delete(rj);
+    char src[48]; llm_source(cx, src, sizeof(src));
+    char sm[120]; snprintf(sm, sizeof(sm), "point %04X deleted (%.40s)", uid, nm);
+    ver_sync(src, sm);
+    s_cfg_changed = true;
+    rbpower_diag_printf("llm: %s by '%s'", sm, cx->client ? cx->client : "?");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "deleted", true);
+    char h[5]; snprintf(h, sizeof(h), "%04X", uid);
+    cJSON_AddStringToObject(r, "channel", h);
+    note(cx, "The input is free again (create_point). The point's stored history stays in its slot until the slot is reused; its id is not given to a new point meanwhile.");
+    cx->as_of = now_s();
+    return r;
+}
+
+static cJSON *t_set_module_bus(const cJSON *a, rbllm_cx_t *cx)
+{
+    int m = cJSON_GetObjectItem(a, "module")->valueint, bus = cJSON_GetObjectItem(a, "bus")->valueint;
+    if (!s_i2c_action) return fail(cx, "internal", "module setup is not available on this hub", NULL);
+    cJSON *q = cJSON_CreateObject();
+    cJSON_AddStringToObject(q, "op", "bus");
+    cJSON_AddNumberToObject(q, "module", m);
+    cJSON_AddNumberToObject(q, "bus", bus);
+    int st = 500;
+    char *out = s_i2c_action(q, &st);
+    cJSON_Delete(q);
+    cJSON *rep = out ? cJSON_Parse(out) : NULL;
+    free(out);
+    if (st != 200 || !rep) return i2c_fail(cx, rep, st);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "moved", true);
+    modules_view(r, rep);
+    cJSON_Delete(rep);
+    rbpower_diag_printf("llm: module %d set to bus %d by '%s'", m, bus, cx->client ? cx->client : "?");
+    note(cx, "The hub now looks for the module on that bus at the same address; its points and history stay.");
+    cx->as_of = now_s();
+    return r;
+}
+
+static cJSON *t_list_nodes(const cJSON *a, rbllm_cx_t *cx)
+{
+    (void)a;
+    cJSON *st = core_cmd("get", "espnow", NULL);
+    const cJSON *d = cJSON_GetObjectItem(st, "data");
+    if (!st || (d && cJSON_GetStringValue(cJSON_GetObjectItem(d, "result")) && strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(d, "result")), "ok"))) {
+        cJSON_Delete(st);
+        return fail(cx, "not_found", "remote nodes (ESP-NOW) are not part of this hub's firmware", NULL);
+    }
+    cJSON_DeleteItemFromObject(st, "id");
+    note(cx, "Remote nodes are battery or mains boards that measure far from the hub and send over ESP-NOW; their channels show in list_channels like any other.");
+    cx->as_of = now_s(); cx->resolution = "live";
+    return st;
+}
+
+static cJSON *t_node_action(const cJSON *a, rbllm_cx_t *cx)
+{
+    const char *act = cJSON_GetStringValue(cJSON_GetObjectItem(a, "action"));
+    static const char *const OK[] = { "hub_on", "hub_off", "pair", "pair_cancel", "remove", "disable", "enable", "configure" };
+    bool known = false;
+    for (size_t i = 0; i < sizeof(OK) / sizeof(OK[0]); i++) if (act && !strcmp(act, OK[i])) known = true;
+    if (!known) return fail(cx, "invalid_args", "action: hub_on, hub_off, pair, pair_cancel, remove, disable, enable or configure", NULL);
+    bool needs_mac = !strcmp(act, "remove") || !strcmp(act, "disable") || !strcmp(act, "enable") || !strcmp(act, "configure");
+    if (needs_mac && !cJSON_GetStringValue(cJSON_GetObjectItem(a, "mac"))) return fail(cx, "invalid_args", "mac: the node's MAC from list_nodes", NULL);
+    cJSON *ack = core_cmd("set", "espnow", a);
+    char m[160];
+    bool ok = core_ok(ack, m, sizeof(m));
+    cJSON *rep = cJSON_DetachItemFromObject(cJSON_GetObjectItem(ack, "data"), "reply");
+    cJSON_Delete(ack);
+    if (!ok) { cJSON_Delete(rep); return fail(cx, strstr(m, "switched off") ? "conflict" : "invalid_args", m[0] ? m : "the hub refused the action", NULL); }
+    rbpower_diag_printf("llm: node action %s by '%s'", act, cx->client ? cx->client : "?");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "done", true);
+    cJSON_AddStringToObject(r, "action", act);
+    if (rep) cJSON_AddItemToObject(r, "reply", rep);
+    if (!strcmp(act, "pair")) note(cx, "The hub accepts a new node while the window is open: ask the user to power the node now; list_nodes shows it once paired.");
+    cx->as_of = now_s();
+    return r;
+}
+
 static const rbllm_tool_t TOOLS[] = {
     { "get_hub_info", RBLLM_SCOPE_READ,
       "When to call: first, to learn the hub's time zone, currency, firmware and what it can do. What it returns: hub id, name, firmware, "
@@ -3508,23 +4121,27 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"dynamic_price_sources\":{\"type\":\"array\"},\"hub_currency\":{\"type\":\"string\"}}}",
       t_get_regional_context },
     { "get_config", RBLLM_SCOPE_CONFIG,
-      "When to call: to explain how the hub is set up (points and their clamps, tariff, price rules, time zone) before advising a change. "
-      "What it returns: the chosen section(s) as a compact view plus the config version; no secrets.",
-      "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"tariff\",\"notifications\",\"region\"]}},\"additionalProperties\":false}",
+      "When to call: to explain how the hub is set up (points and their clamps, tariff, price rules, time zone, hub name, MQTT, dynamic price) before advising a change. "
+      "What it returns: the chosen section(s) as a compact view plus the config version number; passwords masked. dynamic_price only when asked by section.",
+      "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"tariff\",\"notifications\",\"region\",\"hub\",\"integrations\",\"dynamic_price\"]}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"channels\":{\"type\":\"array\"},\"tariff\":{\"type\":\"object\"}}}",
       t_get_config },
     { "get_config_schema", RBLLM_SCOPE_CONFIG,
       "When to call: before propose_config, to learn which fields of a section can be changed and their allowed values (roles, clamp "
       "models). What it returns: the writable fields with type, limits, enums and descriptions.",
-      "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"notifications\",\"tariff\",\"region\"]}},\"required\":[\"section\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"notifications\",\"tariff\",\"region\",\"hub\",\"integrations\",\"dynamic_price\"]}},\"required\":[\"section\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"writable\":{\"type\":\"object\"}}}",
       t_get_config_schema },
     { "propose_config", RBLLM_SCOPE_CONFIG,
-      "When to call: when the user wants to rename a channel, change its role, parent or clamp model, enter their tariff (prices, VAT, fees), set the peaks cycle day, or undo a change. "
-      "What it returns: the diff, warnings and a one-time confirm_token (10 min). Changes nothing; show the diff and ask the user.",
-      "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,role?,inside?,ct_model?}}, tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?,window?:\\\"HH:MM-HH:MM\\\"}}}, peaks_cycle_day?}\"},"
+      "When to call: for any settings change: channel names, roles, parents, clamp models and circuit data; the tariff (prices, VAT, fees, zones with "
+      "windows and weekdays, default zone); price rules and notifications; the time zone; the hub's name; the MQTT broker; the dynamic price "
+      "provider; or to undo a change. What it returns: the diff, warnings, restart_required and a one-time confirm_token (10 min). Changes "
+      "nothing; show the diff and ask the user.",
+      "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,short_name?,role?,inside?,ct_model?,phase?,rated_power_w?,max_current_a?,charge_threshold_w?,idle_timeout_min?}}, "
+      "tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,default_zone?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?,window?,days?,priority?,enabled?}}}, "
+      "peaks_cycle_day?, peaks_reset?, price_rules?:[...], price_signal?:{...}, region?:{timezone}, hub?:{name?,location?}, mqtt?:{broker_uri}, dynamic_price?:{...}}; get_config_schema per section\"},"
       "\"rollback_to\":{\"type\":\"integer\",\"description\":\"a version from list_config_versions\"}},\"additionalProperties\":false}",
-      "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"}}}",
+      "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"restart_required\":{\"type\":\"boolean\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"},\"base_version\":{\"type\":\"integer\"}}}",
       t_propose_config },
     { "apply_config", RBLLM_SCOPE_CONFIG,
       "When to call: only after the user said yes to a propose_config diff. What it returns: the new version number. Fails with conflict "
@@ -3598,6 +4215,32 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"restarting\":{\"type\":\"boolean\"},\"back_in_s\":{\"type\":\"integer\"}}}",
       t_restart_hub },
+    { "delete_point", RBLLM_SCOPE_CONFIG,
+      "When to call: when the user wants a point gone (a clamp removed, or a point made on the wrong input). What it does: deletes the "
+      "point; its input becomes free. The supply point is not deleted (move it with move_point); a point with points inside it goes last.",
+      "{\"type\":\"object\",\"properties\":{\"channel\":{\"type\":\"string\",\"description\":\"id from list_channels\"}},\"required\":[\"channel\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"deleted\":{\"type\":\"boolean\"},\"channel\":{\"type\":\"string\"}}}",
+      t_delete_point },
+    { "set_module_bus", RBLLM_SCOPE_CONFIG,
+      "When to call: after the user moved a module's cable to the other I2C bus. What it does: tells the hub to look for that module on "
+      "the other bus at the same address; points and history stay. The address must be free on the new bus.",
+      "{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":7},\"bus\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1}},\"required\":[\"module\",\"bus\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"moved\":{\"type\":\"boolean\"},\"modules\":{\"type\":\"array\"}}}",
+      t_set_module_bus },
+    { "list_nodes", RBLLM_SCOPE_READ,
+      "When to call: when the user has remote metering nodes (ESP-NOW boards far from the hub) or wants to add one. What it returns: "
+      "whether remote nodes are on, the pairing window, and each node with its MAC, state, link quality and channels.",
+      "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
+      "{\"type\":\"object\"}",
+      t_list_nodes },
+    { "node_action", RBLLM_SCOPE_CONFIG,
+      "When to call: to add or manage a remote node. What it does: hub_on / hub_off switch remote nodes on or off; pair opens a pairing "
+      "window (seconds) for a new node, pair_cancel closes it; remove, disable, enable act on one node (mac); configure sets a node's "
+      "channels and period_s.",
+      "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"hub_on\",\"hub_off\",\"pair\",\"pair_cancel\",\"remove\",\"disable\",\"enable\",\"configure\"]},"
+      "\"mac\":{\"type\":\"string\"},\"seconds\":{\"type\":\"integer\",\"minimum\":10,\"maximum\":600},\"channels\":{\"type\":\"array\"},\"period_s\":{\"type\":\"integer\"}},\"required\":[\"action\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"done\":{\"type\":\"boolean\"},\"reply\":{\"type\":\"object\"}}}",
+      t_node_action },
     { "forget_me", RBLLM_SCOPE_READ,
       "When to call: after pairing again with a wider scope, to give back the previous token, or when the user wants this assistant "
       "disconnected. What it does: revokes the token this call is made with. Then pair again to come back.",
@@ -3642,7 +4285,7 @@ static const char *const PLAYBOOKS[] = {
     "\"clamp=fixed: the clamps are calibrated with the module; never offer a clamp model. clamp=selectable: ask for the model printed on the clamp.\","
     "\"The hub starts with one main_supply point; without it on the grid clamp there is no grid figure and no bill: ask which input carries it and use move_point.\","
     "\"Bus pins and restarts: tell the user before set_bus_pins and ask before restart_hub.\","
-    "\"Up to the hub's max_modules (get_health) on one bus or both.\",\"Set the time zone and the tariff before reading money or days.\","
+    "\"Up to the hub's max_modules (get_health) on one bus or both.\",\"Set the time zone (propose_config region.timezone), the hub name and the tariff before reading money or days.\","
     "\"Names, roles, clamp models and tariff go through propose_config and the user's OK before apply_config.\",\"Answer in the user's language.\"]}",
 };
 
@@ -3728,7 +4371,8 @@ char *rbllm_manifest_json(void)
         bool fm = !strcmp(TOOLS[i].name, "forget_me");      /* read scope, but it revokes the caller's token */
         /* writes into a module or the board that the client should confirm with the user first (MCP clients ask on this hint) */
         bool ds = fm || !strcmp(TOOLS[i].name, "add_module") || !strcmp(TOOLS[i].name, "set_module_address") ||
-                  !strcmp(TOOLS[i].name, "set_bus_pins") || !strcmp(TOOLS[i].name, "restart_hub");
+                  !strcmp(TOOLS[i].name, "set_bus_pins") || !strcmp(TOOLS[i].name, "restart_hub") || !strcmp(TOOLS[i].name, "delete_point") ||
+                  !strcmp(TOOLS[i].name, "set_module_bus") || !strcmp(TOOLS[i].name, "node_action");
         bool ro = !fm && (TOOLS[i].scope == RBLLM_SCOPE_READ || !strncmp(TOOLS[i].name, "get_", 4) || !strcmp(TOOLS[i].name, "propose_config") ||
                   !strcmp(TOOLS[i].name, "list_config_versions"));   /* config scope but no change */
         cJSON_AddBoolToObject(an, "readOnlyHint", ro);
@@ -3843,7 +4487,8 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
             fail(&cx, "forbidden_scope", m, "Pair again with that scope on the hub's AI / LLM page.");
         } else if (S.read_only && !cx.internal && (!strcmp(t->name, "apply_config") || !strcmp(t->name, "rollback_config") || !strcmp(t->name, "propose_config") ||
                                                  !strcmp(t->name, "add_module") || !strcmp(t->name, "set_module_address") || !strcmp(t->name, "create_point") ||
-                                                 !strcmp(t->name, "move_point") || !strcmp(t->name, "set_bus_pins") || !strcmp(t->name, "restart_hub")))
+                                                 !strcmp(t->name, "move_point") || !strcmp(t->name, "set_bus_pins") || !strcmp(t->name, "restart_hub") ||
+                                                 !strcmp(t->name, "delete_point") || !strcmp(t->name, "set_module_bus") || !strcmp(t->name, "node_action")))
             fail(&cx, "read_only_mode", "the hub is in read-only mode for LLM clients", "The user can switch read-only off on the hub's AI / LLM page.");
         else if (!cJSON_IsObject(args)) fail(&cx, "invalid_args", "'args' must be an object", NULL);
         else if (check_args(&cx, t, args)) res = t->fn(args, &cx);
