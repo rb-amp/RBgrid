@@ -112,6 +112,9 @@ void rbllm_register_events_reader(char *(*fn)(uint32_t since, uint32_t limit, in
 struct cJSON;
 void rbllm_register_i2c_action(char *(*fn)(const struct cJSON *req, int *status));
 
+/** Register the module firmware update progress writer (JSON object into out); get_health shows it as module_firmware. */
+void rbllm_register_modfw_status(int (*fn)(char *out, size_t cap));
+
 #ifdef __cplusplus
 }
 #endif
