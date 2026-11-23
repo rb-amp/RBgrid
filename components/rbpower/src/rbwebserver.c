@@ -1208,6 +1208,7 @@ static esp_err_t register_uri_handlers(wifi_mode_t wifi_mode)
         };
         if (httpd_register_uri_handler(g_server_handle, &canary) != ESP_OK) {
             ESP_LOGE(TAG, "max_uri_handlers EXHAUSTED — some API routes are DEAD; raise the limit!");
+            rbpower_diag_printf("FAIL web: max_uri_handlers EXHAUSTED — some routes are not registered");   /* visible in the event log (release images have no console) */
         } else {
             httpd_unregister_uri_handler(g_server_handle, "/__canary", HTTP_GET);
         }
@@ -1256,7 +1257,7 @@ rbpower_err_t rbwebserver_start()
         sslc.port_secure = RBWEB_HTTPS_PORT;
         sslc.httpd.ctrl_port        = 32768;
         sslc.httpd.max_open_sockets = g_max_open_sockets;
-        sslc.httpd.max_uri_handlers = 192;  // 128 overflowed in 1.3.0 (LLM routes; modfw + rbi2c fell off); 72 overflowed — tail registrations (espnow GET/POST,
+        sslc.httpd.max_uri_handlers = 256;  // 128 overflowed in 1.3.0 (LLM routes; modfw + rbi2c fell off); 72 overflowed — tail registrations (espnow GET/POST,
         // provisioning) failed SILENTLY and the CORS OPTIONS wildcard turned them into 405s. ~86 needed.
         sslc.httpd.stack_size       = 14336;   // TLS handshake needs more stack than plain HTTP (+4 KB as plain HTTP: see below)
         sslc.httpd.lru_purge_enable = true;
@@ -1296,7 +1297,7 @@ rbpower_err_t rbwebserver_start()
         config.server_port = g_server_port;
         config.ctrl_port = 32768;
         config.max_open_sockets = g_max_open_sockets;
-        config.max_uri_handlers = 192; // 128 OVERFLOWED in 1.3.0: the LLM routes filled it and the late modfw + rbi2c
+        config.max_uri_handlers = 256; // 128 OVERFLOWED in 1.3.0: the LLM routes filled it and the late modfw + rbi2c
         // registrations failed (/api/v1/i2c dead). Earlier: 72 OVERFLOWED (espnow GET/POST fell off the table →
         // wildcard-OPTIONS made them 405). Count grew with history/export/backup/espnow; ~86 now, rest = headroom.
         /* 12 KB: the handlers keep fleet copies (rbamp_bridge_config_t, ~2.5x larger since 8 modules) and big cJSON

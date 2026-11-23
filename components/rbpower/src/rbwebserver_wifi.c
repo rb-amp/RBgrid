@@ -312,6 +312,7 @@ esp_err_t rbwebserver_wifi_config_handler(httpd_req_t *req)
     "            });"
     "        }"
     "        "
+    "        var HUB_HOST = (document.getElementById('hubhost') || {}).textContent || 'the hub';"
     "        document.getElementById('wifiForm').addEventListener('submit', function(e) {"
     "            e.preventDefault();"
     "            console.log('Submitting WiFi form...');"
@@ -357,7 +358,7 @@ esp_err_t rbwebserver_wifi_config_handler(httpd_req_t *req)
         uint8_t mac[6] = {0};
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
         char hs[96];
-        snprintf(hs, sizeof(hs), "<script>var HUB_HOST='rbgrid-%02x%02x.local';</script>", mac[4], mac[5]);
+        snprintf(hs, sizeof(hs), "<span id=\"hubhost\" hidden>rbgrid-%02x%02x.local</span>", mac[4], mac[5]);
         httpd_resp_sendstr_chunk(req, hs);
     }
     httpd_resp_sendstr_chunk(req, html_part2);
