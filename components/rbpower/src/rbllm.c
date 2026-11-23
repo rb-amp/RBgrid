@@ -3337,10 +3337,11 @@ char *rbllm_manifest_json(void)
         cJSON_AddItemToObject(t, "input_schema", cJSON_Parse(TOOLS[i].input));
         cJSON_AddItemToObject(t, "output_schema", cJSON_Parse(TOOLS[i].output));
         cJSON *an = cJSON_AddObjectToObject(t, "annotations");
-        bool ro = TOOLS[i].scope == RBLLM_SCOPE_READ || !strncmp(TOOLS[i].name, "get_", 4) || !strcmp(TOOLS[i].name, "propose_config") ||
-                  !strcmp(TOOLS[i].name, "list_config_versions");   /* config scope but no change */
+        bool fm = !strcmp(TOOLS[i].name, "forget_me");      /* read scope, but it revokes the caller's token */
+        bool ro = !fm && (TOOLS[i].scope == RBLLM_SCOPE_READ || !strncmp(TOOLS[i].name, "get_", 4) || !strcmp(TOOLS[i].name, "propose_config") ||
+                  !strcmp(TOOLS[i].name, "list_config_versions"));   /* config scope but no change */
         cJSON_AddBoolToObject(an, "readOnlyHint", ro);
-        cJSON_AddBoolToObject(an, "destructiveHint", false);
+        cJSON_AddBoolToObject(an, "destructiveHint", fm);
         cJSON_AddBoolToObject(an, "idempotentHint", ro);
         cJSON_AddItemToArray(tools, t);
     }
