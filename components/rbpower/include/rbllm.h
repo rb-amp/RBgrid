@@ -107,6 +107,10 @@ void rbllm_hub_id(char out[13]);
 
 /** @brief Register the event-log reader (rbevlog_json in rbgrid_app). @param fn Reader. */
 void rbllm_register_events_reader(char *(*fn)(uint32_t since, uint32_t limit, int minlvl));
+/** @brief Register the I2C module action (rbi2c_action: op state|scan|add|address …) for the module-setup tools.
+ *  @param fn returns a malloc'ed JSON reply and sets *status (HTTP-like); req is a cJSON object. */
+struct cJSON;
+void rbllm_register_i2c_action(char *(*fn)(const struct cJSON *req, int *status));
 
 #ifdef __cplusplus
 }

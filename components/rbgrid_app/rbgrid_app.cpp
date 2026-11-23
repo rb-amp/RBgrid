@@ -2383,6 +2383,7 @@ static void start_webserver(void)
         register_espnow_http();   // ESP-NOW management + health API onto the running server
         rbevlog_register_http();  // GET /api/v1/system/events (+ POST /api/v1/debug/cmd on debug builds)
         rbllm_register_events_reader(rbevlog_json);   // LLM tool get_events reads the same ring
+        rbllm_register_i2c_action(rbi2c_action);     // LLM module-setup tools: same path as the hub page's Add-a-module
         modfw_register_http();    // STD module firmware update API (main/modfw.c)
         rbi2c_register_http();    // I2C buses / scan / module address API (main/rbi2c_api.c)
     } else {

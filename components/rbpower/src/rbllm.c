@@ -109,6 +109,28 @@ static char *(*s_events_reader)(uint32_t, uint32_t, int) = NULL;
 
 void rbllm_register_events_reader(char *(*fn)(uint32_t, uint32_t, int)) { s_events_reader = fn; }
 
+/* I2C module actions (rbi2c_action in rbgrid_app): the module-setup tools go through the same validated path as the
+ * hub page's Add-a-module flow (bus/address checks, UID-confirmed address change). */
+static char *(*s_i2c_action)(const struct cJSON *, int *);
+void rbllm_register_i2c_action(char *(*fn)(const struct cJSON *, int *)) { s_i2c_action = fn; }
+/* Run one op; returns the parsed reply (caller deletes) and *st; NULL when unavailable. */
+static cJSON *i2c_do(const char *op, int bus, int module, int addr, int *st)
+{
+    *st = 500;
+    if (!s_i2c_action) return NULL;
+    cJSON *q = cJSON_CreateObject();
+    if (!q) return NULL;
+    cJSON_AddStringToObject(q, "op", op);
+    if (bus >= 0) cJSON_AddNumberToObject(q, "bus", bus);
+    if (module >= 0) cJSON_AddNumberToObject(q, "module", module);
+    if (addr >= 0) cJSON_AddNumberToObject(q, "addr", addr);
+    char *out = s_i2c_action(q, st);
+    cJSON_Delete(q);
+    cJSON *r = out ? cJSON_Parse(out) : NULL;
+    free(out);
+    return r;
+}
+
 static void lk(void)  { if (s_mx) xSemaphoreTake(s_mx, portMAX_DELAY); }
 static void ulk(void) { if (s_mx) xSemaphoreGive(s_mx); }
 static void ev_boot(void);
@@ -392,6 +414,7 @@ typedef struct {
     uint8_t  scopes;
     const char *client;
     bool internal;         /* the hub page (RBLLM_CLIENT_WEB, admin token): not subject to read-only mode */
+    const char *token_id;  /* the caller's token id ("" for the page) — forget_me */
     /* meta */
     uint32_t as_of;
     const char *resolution;
@@ -746,7 +769,10 @@ static cJSON *t_read_live(const cJSON *a, rbllm_cx_t *cx)
     rbpower_home_unlock();
     cJSON *r = cJSON_CreateObject();
     cJSON *sys = cJSON_AddObjectToObject(r, "grid");
-    cJSON_AddNumberToObject(sys, "power_w", r2(st.p_w));
+    int stale_n = 0, fresh_n = 0;
+    bool any_fresh = false;
+    for (int i = 0; i < n; i++) if (p[i].present && p[i].age_ms != UINT32_MAX && p[i].age_ms <= 30000u) any_fresh = true;
+    if (any_fresh) cJSON_AddNumberToObject(sys, "power_w", r2(st.p_w)); else cJSON_AddNullToObject(sys, "power_w");
     cJSON_AddStringToObject(sys, "sign", "positive = import from the grid");
     cJSON *arr = cJSON_AddArrayToObject(r, "channels");
     for (int i = 0; i < n; i++) {
@@ -756,6 +782,11 @@ static cJSON *t_read_live(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(o, "id", h);
         add_name(o, p[i].name);
         cJSON_AddBoolToObject(o, "present", p[i].present);
+        bool stale = !p[i].present || p[i].age_ms == UINT32_MAX || p[i].age_ms > 30000u;   /* no live data: null, never 0 */
+        if (stale) { stale_n++; cJSON_AddNullToObject(o, "power_w"); cJSON_AddNullToObject(o, "current_a"); cJSON_AddNullToObject(o, "voltage_v"); cJSON_AddNullToObject(o, "pf");
+                     if (p[i].age_ms != UINT32_MAX) cJSON_AddNumberToObject(o, "age_ms", p[i].age_ms); else cJSON_AddNullToObject(o, "age_ms");
+                     cJSON_AddItemToArray(arr, o); continue; }
+        fresh_n++;
         cJSON_AddNumberToObject(o, "power_w", r2(p[i].p_w));
         cJSON_AddNumberToObject(o, "current_a", round(p[i].i_a * 1000.0) / 1000.0);
         if (p[i].v_v > 1.0f) cJSON_AddNumberToObject(o, "voltage_v", r2(p[i].v_v));
@@ -766,6 +797,8 @@ static cJSON *t_read_live(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddItemToArray(arr, o);
     }
     free(p);
+    if (stale_n || !any_fresh) note(cx, "null = no live data (the channel's source is missing or silent for over 30 s) - not zero.");
+    (void)fresh_n;
     cx->as_of = now_s();
     cx->resolution = "live";
     return r;
@@ -799,6 +832,23 @@ static cJSON *t_get_health(const cJSON *a, rbllm_cx_t *cx)
     extern TaskHandle_t rbllm_worker_handle(void);
     TaskHandle_t wh = rbllm_worker_handle();
     if (wh) cJSON_AddNumberToObject(hp, "llm_stack_free_b", (double)uxTaskGetStackHighWaterMark(wh) * sizeof(StackType_t));
+    int ist = 0;
+    cJSON *i2cst = i2c_do("state", -1, -1, -1, &ist);
+    if (i2cst) {
+        cJSON *bs = cJSON_AddArrayToObject(r, "i2c_buses");
+        const cJSON *b;
+        cJSON_ArrayForEach(b, cJSON_GetObjectItem(i2cst, "buses")) {
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "bus", cJSON_GetNumberValue(cJSON_GetObjectItem(b, "bus")));
+            cJSON_AddBoolToObject(o, "running", cJSON_IsTrue(cJSON_GetObjectItem(b, "up")));
+            const cJSON *sda = cJSON_GetObjectItem(b, "sda"), *scl = cJSON_GetObjectItem(b, "scl");
+            if (cJSON_IsNumber(sda) && sda->valueint >= 0) cJSON_AddNumberToObject(o, "sda", sda->valueint);
+            if (cJSON_IsNumber(scl) && scl->valueint >= 0) cJSON_AddNumberToObject(o, "scl", scl->valueint);
+            cJSON_AddItemToArray(bs, o);
+        }
+        const cJSON *mx = cJSON_GetObjectItem(i2cst, "max_modules");
+        if (cJSON_IsNumber(mx)) cJSON_AddNumberToObject(r, "max_modules", mx->valueint);
+    }
     cJSON *mods = cJSON_AddArrayToObject(r, "modules");
     int on = 0, tot = 0;
     for (uint8_t m = 0; m < RBPOWER_MODULE_DESC_MAX; m++) {
@@ -809,6 +859,13 @@ static cJSON *t_get_health(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddNumberToObject(o, "module", m);
         char ad[8]; snprintf(ad, sizeof(ad), "0x%02X", d.addr);
         cJSON_AddStringToObject(o, "address", ad);
+        {   /* the bus the module sits on (from the I2C state) */
+            const cJSON *im;
+            cJSON_ArrayForEach(im, cJSON_GetObjectItem(i2cst, "modules"))
+                if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "module")) == m) {
+                    cJSON_AddNumberToObject(o, "bus", cJSON_GetNumberValue(cJSON_GetObjectItem(im, "bus"))); break;
+                }
+        }
         cJSON_AddStringToObject(o, "model", d.model);
         cJSON_AddStringToObject(o, "link", "i2c");
         cJSON_AddNumberToObject(o, "voltage_inputs", d.n_v);
@@ -820,6 +877,7 @@ static cJSON *t_get_health(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(o, "status", d.present ? "online" : "missing");
         cJSON_AddItemToArray(mods, o);
     }
+    cJSON_Delete(i2cst);
     cJSON_AddNumberToObject(r, "modules_online", on);
     cJSON_AddNumberToObject(r, "modules_known", tot);
     rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
@@ -1616,6 +1674,26 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
         }
     }
     if (!rbtime_is_time_valid()) finding(f, "clock_unsynced", "warning", NULL, "The hub clock is not synced.", "Check the hub's internet access (NTP); hours and costs need the clock.");
+    {   /* time zone still the default: days, presets and tariff zones run in UTC */
+        rbtime_config_t tc; memset(&tc, 0, sizeof(tc));
+        rbtime_get_config(&tc);
+        if (!tc.timezone[0] || !strcmp(tc.timezone, "UTC0") || !strcmp(tc.timezone, "UTC"))
+            finding(f, "timezone_not_set", "warning", NULL, "The hub's time zone is UTC (the default).",
+                    "Set the user's time zone on the hub (web app: Settings > Network & time); days, yesterday/last week and tariff zones follow it.");
+    }
+    {   /* a module on the factory address: the next new module would collide with it */
+        int ist = 0;
+        cJSON *is = i2c_do("state", -1, -1, -1, &ist);
+        const cJSON *im;
+        cJSON_ArrayForEach(im, cJSON_GetObjectItem(is, "modules")) {
+            if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "addr")) != 0x50) continue;
+            int mm = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "module")), bb = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "bus"));
+            snprintf(ev, sizeof(ev), "Module %d on bus %d sits at 0x50, the address every new module arrives with.", mm, bb);
+            finding(f, "module_on_factory_address", "info", NULL, ev,
+                    "Move it to a free address (set_module_address, e.g. 0x51) before connecting another module on the same bus.");
+        }
+        cJSON_Delete(is);
+    }
     rbgrid_tariff_now_t tn; rbgrid_core_tariff_now(&tn);
     if (tn.placeholder) finding(f, "tariff_not_set", "info", NULL, "No tariff plan is saved; money is computed off a demo plan.", "Enter the tariff on the hub's tariff page.");
     cJSON_AddNumberToObject(r, "checked_channels", n);
@@ -1882,7 +1960,7 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
 }
 
 /* ============================================================================================ config writes (stage 2) */
-/* Writable over LLM (v1): per channel name / role (load-class roles only; supply roles are topology, not a patch) /
+/* Writable over LLM (v1): per channel name / role (supply roles allowed with a warning, operator 23.11) /
  * inside; notifications.peaks_cycle_day. Versions: /llm_cfgver.json keeps the last 5 states of exactly these fields.
  * A change made elsewhere (hub page, REST, HA) is noticed by its hash and recorded as source "hub" at the next config
  * call, so every path gets a version (§1.8). */
@@ -2121,10 +2199,13 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
             } else if (!strcmp(k, "role")) {
                 const char *nr = cJSON_GetStringValue(f);
                 int r = role_from_name(nr);
-                if (r < 0) { snprintf(m, sizeof(m), "channels.%s.role: one of device_load, zone_load, circuit_breaker, ev_charging, heating_cooling, smart_appliance, renewable_source, storage_system", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
+                if (r < 0) { snprintf(m, sizeof(m), "channels.%s.role: unknown role", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "get_config_schema {section: channels} lists the roles (main_supply = the grid feed)."); }
                 int cr = role_from_name(was);
                 bool cs = cr == RBPOWER_ROLE_MAIN_SUPPLY || cr == RBPOWER_ROLE_ALTERNATIVE_SUPPLY, ns = r == RBPOWER_ROLE_MAIN_SUPPLY || r == RBPOWER_ROLE_ALTERNATIVE_SUPPLY;
-                if ((cs || ns) && r != cr) { snprintf(m, sizeof(m), "channels.%s.role: a supply role (main / alternative supply) is the hub's topology and is changed on the hub's points page", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "Ask the user to change it on the hub page."); }
+                if ((cs || ns) && r != cr && warn) {   /* full setup over LLM (operator 23.11): supply roles are allowed, with a warning */
+                    snprintf(m, sizeof(m), "channels.%s becomes %s: the grid figure, import/export and the bill follow the supply points.", id, nr);
+                    cJSON_AddItemToArray(warn, cJSON_CreateString(m));
+                }
             } else if (!strcmp(k, "inside")) {
                 const char *iv = cJSON_GetStringValue(f);
                 if (!iv) { cJSON_Delete(norm); return fail(cx, "invalid_args", "inside: a channel id, or \"\" for top level", NULL); }
@@ -2594,8 +2675,8 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
         f = cJSON_AddObjectToObject(w, "role");
         cJSON_AddStringToObject(f, "type", "string");
         cJSON *en = cJSON_AddArrayToObject(f, "enum");
-        for (int q = 0; q < 10; q++) if (q != RBPOWER_ROLE_MAIN_SUPPLY && q != RBPOWER_ROLE_ALTERNATIVE_SUPPLY) cJSON_AddItemToArray(en, cJSON_CreateString(role_name((uint8_t)q)));
-        cJSON_AddStringToObject(f, "description", "What the point measures. main_supply / alternative_supply are set on the hub page, not here.");
+        for (int q = 0; q < 10; q++) cJSON_AddItemToArray(en, cJSON_CreateString(role_name((uint8_t)q)));
+        cJSON_AddStringToObject(f, "description", "What the point measures. main_supply = the grid feed (the bill and the grid figure follow it); alternative_supply = a second feed.");
         f = cJSON_AddObjectToObject(w, "inside");
         cJSON_AddStringToObject(f, "type", "string");
         cJSON_AddStringToObject(f, "description", "The channel id this point is measured inside (a sub-meter of it), or \"\" for top level.");
@@ -2849,6 +2930,144 @@ static cJSON *t_identify_channel(const cJSON *a, rbllm_cx_t *cx)
     return r;
 }
 
+/* ---- module setup (scope config): the same path as the hub page's Add-a-module flow ---- */
+static cJSON *i2c_fail(rbllm_cx_t *cx, cJSON *rep, int st)
+{
+    const char *m = rep ? cJSON_GetStringValue(cJSON_GetObjectItem(rep, "message")) : NULL;
+    char msg[160]; snprintf(msg, sizeof(msg), "%s", m && m[0] ? m : "the I2C action failed");
+    cJSON_Delete(rep);
+    if (!s_i2c_action) return fail(cx, "internal", "module setup is not available on this hub", NULL);
+    const char *code = st == 404 ? "module_not_found" : st == 409 ? "conflict" : st == 400 ? "invalid_args" : "internal";
+    if (strstr(msg, "already taken") || strstr(msg, "configured for another module")) code = "address_taken";
+    else if (strstr(msg, "not present")) code = "module_not_found";
+    else if (strstr(msg, "not confirmed by UID") || strstr(msg, "may still answer")) code = "module_silent";
+    else if (strstr(msg, "out of 0x08")) code = "address_out_of_range";
+    return fail(cx, code, msg, st == 409 || !strcmp(code, "address_taken") ? "Call scan_modules to see what answers on the bus, then pick a free address." : NULL);
+}
+static void modules_view(cJSON *out, const cJSON *state)
+{
+    cJSON *mods = cJSON_AddArrayToObject(out, "modules");
+    const cJSON *im;
+    cJSON_ArrayForEach(im, cJSON_GetObjectItem(state, "modules")) {
+        cJSON *o = cJSON_CreateObject();
+        char ad[8]; snprintf(ad, sizeof(ad), "0x%02X", (int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "addr")));
+        cJSON_AddNumberToObject(o, "module", cJSON_GetNumberValue(cJSON_GetObjectItem(im, "module")));
+        cJSON_AddNumberToObject(o, "bus", cJSON_GetNumberValue(cJSON_GetObjectItem(im, "bus")));
+        cJSON_AddStringToObject(o, "address", ad);
+        const char *md = cJSON_GetStringValue(cJSON_GetObjectItem(im, "model"));
+        if (md) cJSON_AddStringToObject(o, "model", md);
+        cJSON_AddBoolToObject(o, "online", cJSON_IsTrue(cJSON_GetObjectItem(im, "present")));
+        cJSON_AddItemToArray(mods, o);
+    }
+}
+static cJSON *t_scan_modules(const cJSON *a, rbllm_cx_t *cx)
+{
+    const cJSON *ba = cJSON_GetObjectItem(a, "bus");
+    int b0 = cJSON_IsNumber(ba) ? ba->valueint : 0, b1 = cJSON_IsNumber(ba) ? ba->valueint : 1;
+    cJSON *r = cJSON_CreateObject();
+    cJSON *bl = cJSON_AddArrayToObject(r, "buses");
+    bool new50 = false, any = false;
+    for (int bus = b0; bus <= b1; bus++) {
+        int st = 0;
+        cJSON *rep = i2c_do("scan", bus, -1, -1, &st);
+        cJSON *bo = cJSON_CreateObject();
+        cJSON_AddNumberToObject(bo, "bus", bus);
+        if (st != 200 || !rep) {
+            const char *m = rep ? cJSON_GetStringValue(cJSON_GetObjectItem(rep, "message")) : NULL;
+            cJSON_AddBoolToObject(bo, "running", false);
+            cJSON_AddStringToObject(bo, "reason", m && m[0] ? m : "bus not running");
+            cJSON_Delete(rep); cJSON_AddItemToArray(bl, bo);
+            if (cJSON_IsNumber(ba)) { cJSON_Delete(r); return i2c_fail(cx, NULL, st); }
+            continue;
+        }
+        any = true;
+        cJSON_AddBoolToObject(bo, "running", true);
+        cJSON *dv = cJSON_AddArrayToObject(bo, "found");
+        const cJSON *d;
+        cJSON_ArrayForEach(d, cJSON_GetObjectItem(rep, "devices")) {
+            cJSON *o = cJSON_CreateObject();
+            int ad = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "addr"));
+            char ah[8]; snprintf(ah, sizeof(ah), "0x%02X", ad);
+            cJSON_AddStringToObject(o, "address", ah);
+            const char *md = cJSON_GetStringValue(cJSON_GetObjectItem(d, "model"));
+            if (md) cJSON_AddStringToObject(o, "model", md);
+            const char *fw = cJSON_GetStringValue(cJSON_GetObjectItem(d, "fw"));
+            if (fw) cJSON_AddStringToObject(o, "fw", fw);
+            const cJSON *mi = cJSON_GetObjectItem(d, "module");
+            bool known = cJSON_IsNumber(mi) && mi->valueint >= 0;
+            if (known) cJSON_AddNumberToObject(o, "module", mi->valueint); else cJSON_AddNullToObject(o, "module");
+            cJSON_AddBoolToObject(o, "added", known);
+            cJSON_AddBoolToObject(o, "factory_address", ad == 0x50);
+            if (!known && ad == 0x50) new50 = true;
+            cJSON_AddItemToArray(dv, o);
+        }
+        cJSON_Delete(rep);
+        cJSON_AddItemToArray(bl, bo);
+    }
+    if (!any && !cJSON_IsNumber(ba)) { cJSON_Delete(r); return fail(cx, "internal", "no I2C bus is running", NULL); }
+    if (new50) note(cx, "A new module answers at 0x50: add_module {bus, address 0x50}, then set_module_address to a free address before the user connects the next one.");
+    note(cx, "An address is unique on its bus; the same address may be used once on each bus. Two modules on one address answer as one: the hub cannot tell them apart, so connect one at a time.");
+    cx->as_of = now_s(); cx->resolution = "live";
+    return r;
+}
+static int parse_addr(const cJSON *v)
+{
+    if (cJSON_IsNumber(v)) return v->valueint;
+    const char *s = cJSON_GetStringValue(v);
+    if (!s) return -1;
+    char *e = NULL; long x = strtol(s, &e, 0);
+    return (e && *e == 0) ? (int)x : -1;
+}
+static cJSON *t_add_module(const cJSON *a, rbllm_cx_t *cx)
+{
+    int bus = cJSON_GetObjectItem(a, "bus")->valueint, ad = parse_addr(cJSON_GetObjectItem(a, "address"));
+    if (ad < 0x08 || ad > 0x77) return fail(cx, "invalid_args", "address: 0x08..0x77, e.g. \"0x50\"", NULL);
+    int st = 0;
+    cJSON *rep = i2c_do("add", bus, -1, ad, &st);
+    if (st != 200 || !rep) return i2c_fail(cx, rep, st);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "added", true);
+    modules_view(r, rep);
+    cJSON_Delete(rep);
+    if (ad == 0x50) note(cx, "The module is on the factory address 0x50: move it now with set_module_address, before the next module is connected on this bus.");
+    note(cx, "Its channels appear in list_channels within a few seconds; name them with propose_config.");
+    cx->as_of = now_s();
+    return r;
+}
+static cJSON *t_set_module_address(const cJSON *a, rbllm_cx_t *cx)
+{
+    int m = cJSON_GetObjectItem(a, "module")->valueint, ad = parse_addr(cJSON_GetObjectItem(a, "address"));
+    if (ad < 0x08 || ad > 0x77) return fail(cx, "invalid_args", "address: 0x08..0x77, e.g. \"0x51\"", NULL);
+    int st = 0;
+    cJSON *rep = i2c_do("address", -1, m, ad, &st);
+    if (st != 200 || !rep) return i2c_fail(cx, rep, st);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "moved", true);
+    modules_view(r, rep);
+    cJSON_Delete(rep);
+    note(cx, "The address is stored in the module and checked by its unique ID. The next module can be connected now.");
+    cx->as_of = now_s();
+    return r;
+}
+static cJSON *t_forget_me(const cJSON *a, rbllm_cx_t *cx)
+{
+    (void)a;
+    if (!cx->token_id || !cx->token_id[0]) return fail(cx, "invalid_args", "only a paired assistant can give its token back", NULL);
+    bool hit = false;
+    lk();
+    for (int i = 0; i < RBLLM_MAX_TOKENS; i++)
+        if (S.tok[i].id[0] && !strcmp(S.tok[i].id, cx->token_id)) { memset(&S.tok[i], 0, sizeof(S.tok[i])); hit = true; }
+    if (hit) save_locked();
+    ulk();
+    if (!hit) return fail(cx, "not_found", "this token is not on the hub any more", NULL);
+    rbpower_diag_printf("llm: an assistant gave its token back (%s)", cx->client ? cx->client : "?");
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "revoked", true);
+    note(cx, "This token no longer works; pair again to come back.");
+    cx->as_of = now_s();
+    return r;
+}
+
 static const rbllm_tool_t TOOLS[] = {
     { "get_hub_info", RBLLM_SCOPE_READ,
       "When to call: first, to learn the hub's time zone, currency, firmware and what it can do. What it returns: hub id, name, firmware, "
@@ -2858,7 +3077,7 @@ static const rbllm_tool_t TOOLS[] = {
       t_get_hub_info },
     { "list_channels", RBLLM_SCOPE_READ,
       "When to call: before any per-channel question, to map names to ids. What it returns: every measuring point with id, the user's name, "
-      "role (main = grid supply, load, generation, bidirectional), whether its source is present and whether it has stored history.",
+      "role (main = grid supply, load, generation, bidirectional), whether its source is present and whether it has a history slot (records appear as hours close).",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"present\":{\"type\":\"boolean\"},\"has_history\":{\"type\":\"boolean\"}}}}}}",
       t_list_channels },
@@ -2983,10 +3202,34 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"confirm_token\":{\"type\":\"string\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"applied\":{\"type\":\"boolean\"}}}",
       t_rollback_config },
+    { "scan_modules", RBLLM_SCOPE_READ,
+      "When to call: while setting up hardware, after the user connects a metering module, to see what answers on an I2C bus. "
+      "What it returns: every address that answers on the bus, the model, and whether it is already added (module number) or new.",
+      "{\"type\":\"object\",\"properties\":{\"bus\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1,\"description\":\"one I2C bus; omit for both\"}},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"buses\":{\"type\":\"array\"}}}",
+      t_scan_modules },
+    { "add_module", RBLLM_SCOPE_CONFIG,
+      "When to call: when scan_modules shows a new module (added=false). What it does: adds it to the hub on that bus and address; its "
+      "channels then appear as points. New modules arrive at 0x50: move it with set_module_address before the next one is connected.",
+      "{\"type\":\"object\",\"properties\":{\"bus\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1},\"address\":{\"type\":\"string\",\"description\":\"hex, e.g. 0x50\"}},\"required\":[\"bus\",\"address\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"added\":{\"type\":\"boolean\"},\"modules\":{\"type\":\"array\"}}}",
+      t_add_module },
+    { "set_module_address", RBLLM_SCOPE_CONFIG,
+      "When to call: right after adding a module that sits at 0x50, or to resolve an address clash. What it does: writes a new I2C "
+      "address into the module (stored in the module, checked by its unique ID). The address must be free on that bus.",
+      "{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":7},\"address\":{\"type\":\"string\",\"description\":\"hex 0x08..0x77, e.g. 0x51\"}},\"required\":[\"module\",\"address\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"moved\":{\"type\":\"boolean\"},\"modules\":{\"type\":\"array\"}}}",
+      t_set_module_address },
+    { "forget_me", RBLLM_SCOPE_READ,
+      "When to call: after pairing again with a wider scope, to give back the previous token, or when the user wants this assistant "
+      "disconnected. What it does: revokes the token this call is made with. Then pair again to come back.",
+      "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"revoked\":{\"type\":\"boolean\"}}}",
+      t_forget_me },
     { "get_analysis_playbook", RBLLM_SCOPE_READ,
       "When to call: when the user asks for a report or a check and you want the hub's recipe. What it returns: the steps (tools with argument "
       "hints), questions to ask the user and rules for the answer.",
-      "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"enum\":[\"monthly_report\",\"installation_check\"]}},\"required\":[\"id\"],\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"enum\":[\"monthly_report\",\"installation_check\",\"first_setup\"]}},\"required\":[\"id\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\"},\"rules\":{\"type\":\"array\"}}}",
       t_get_analysis_playbook },
 };
@@ -3003,6 +3246,17 @@ static const char *const PLAYBOOKS[] = {
     "{\"tool\":\"read_live\"},{\"tool\":\"get_events\",\"args_hint\":{\"limit\":30}}],"
     "\"ask_user\":[\"Which appliances are running now?\"],\"rules\":[\"A missing module or a channel that is not present comes first.\","
     "\"A reversed clamp is fixed at the clamp; never suggest a software sign flip.\",\"Answer in the user's language.\"]}",
+    "{\"id\":\"first_setup\",\"title\":\"First setup of a new hub\",\"steps\":[{\"tool\":\"get_hub_info\"},{\"tool\":\"get_health\"},"
+    "{\"tool\":\"scan_modules\",\"args_hint\":{\"bus\":0},\"repeat\":\"after each module the user connects\"},"
+    "{\"tool\":\"add_module\",\"args_hint\":{\"bus\":0,\"address\":\"0x50\"},\"when\":\"scan shows a module with added=false\"},"
+    "{\"tool\":\"set_module_address\",\"args_hint\":{\"module\":0,\"address\":\"0x51\"},\"when\":\"the module sits at 0x50\"},"
+    "{\"tool\":\"list_channels\"},{\"tool\":\"identify_channel\",\"args_hint\":{\"action\":\"start\"},\"when\":\"to tell which clamp is which\"},"
+    "{\"tool\":\"propose_config\",\"when\":\"name the channels and set their roles, the CT model and the tariff\"},{\"tool\":\"check_installation\"}],"
+    "\"ask_user\":[\"Connect ONE module now (cable to the hub, module powered) and tell me when it is done.\",\"What does this clamp measure?\"],"
+    "\"rules\":[\"Every new module arrives at I2C address 0x50. Connect modules one at a time: add it, move it off 0x50 (0x51, 0x52 ...), only then ask for the next one.\","
+    "\"An address is unique on its bus; the same address may be used once on each bus. Bus 1 works once its pins are set on the hub page.\","
+    "\"Up to the hub's max_modules (get_health) on one bus or both.\",\"Set the time zone and the tariff before reading money or days.\","
+    "\"Changes to names, roles, CT model and tariff go through propose_config and the user's OK before apply_config.\",\"Answer in the user's language.\"]}",
 };
 
 static cJSON *t_get_analysis_playbook(const cJSON *a, rbllm_cx_t *cx)
@@ -3173,7 +3427,8 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
     int64_t t0 = esp_timer_get_time();
     rbllm_cx_t cx = { .deadline_us = deadline_us ? deadline_us : t0 + (int64_t)RBLLM_CALL_TIMEOUT_MS * 1000,
                       .scopes = caller ? caller->scopes : 0, .client = caller ? caller->client : "",
-                      .internal = caller && !caller->token_id[0] && !strcmp(caller->client, RBLLM_CLIENT_WEB) };
+                      .internal = caller && !caller->token_id[0] && !strcmp(caller->client, RBLLM_CLIENT_WEB),
+                      .token_id = caller ? caller->token_id : "" };
     cJSON *req = (len && len <= RBLLM_MAX_REQUEST_BYTES) ? cJSON_ParseWithLength(body, len) : NULL;
     const char *rid = req ? cJSON_GetStringValue(cJSON_GetObjectItem(req, "request_id")) : NULL;
     char ridb[65] = {0};
@@ -3194,7 +3449,8 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
         else if (!(cx.scopes & t->scope)) {
             char m[64]; snprintf(m, sizeof(m), "the tool needs scope '%s'", t->scope == RBLLM_SCOPE_CONFIG ? "config" : "read");
             fail(&cx, "forbidden_scope", m, "Pair again with that scope on the hub's AI / LLM page.");
-        } else if (S.read_only && !cx.internal && (!strcmp(t->name, "apply_config") || !strcmp(t->name, "rollback_config") || !strcmp(t->name, "propose_config")))
+        } else if (S.read_only && !cx.internal && (!strcmp(t->name, "apply_config") || !strcmp(t->name, "rollback_config") || !strcmp(t->name, "propose_config") ||
+                                                 !strcmp(t->name, "add_module") || !strcmp(t->name, "set_module_address")))
             fail(&cx, "read_only_mode", "the hub is in read-only mode for LLM clients", "The user can switch read-only off on the hub's AI / LLM page.");
         else if (!cJSON_IsObject(args)) fail(&cx, "invalid_args", "'args' must be an object", NULL);
         else if (check_args(&cx, t, args)) res = t->fn(args, &cx);
