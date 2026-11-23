@@ -281,6 +281,31 @@ static esp_err_t serve_lang(httpd_req_t *req, const char *rel /* "lang/xx.json" 
 
 /* GET  /api/system/lang            → {"code":"de","bytes":N} | {"code":null}
  * POST /api/system/lang?code=xx    body = the pack JSON (admin token) → stored, the previous pack removed */
+/* The installed UI kit's version (ui-manifest.json ui_version, else version) for the LLM get_hub_info; false = no kit. */
+bool rbwebserver_ui_kit_version(char *out, size_t n)
+{
+    if (!s_mounted) rbwebserver_ui_mount();
+    if (!s_mounted || !out || n < 2) return false;
+    FILE *f = fopen(UIFS_CUR "/ui-manifest.json", "rb");
+    if (!f) return false;
+    char *b = malloc(4096);
+    size_t got = b ? fread(b, 1, 4095, f) : 0;
+    fclose(f);
+    if (!b) return false;
+    b[got] = '\0';
+    /* the manifest's head carries the version; a long file list may be cut off, so read the keys without a full parse */
+    bool ok = false;
+    const char *keys[] = { "\"ui_version\"", "\"version\"" };
+    for (int i = 0; i < 2 && !ok; i++) {
+        const char *k = strstr(b, keys[i]);
+        const char *q = k ? strchr(k + strlen(keys[i]), '"') : NULL;
+        const char *e = q ? strchr(q + 1, '"') : NULL;
+        if (q && e && e > q + 1) { snprintf(out, n, "%.*s", (int)(e - q - 1), q + 1); ok = true; }
+    }
+    free(b);
+    return ok;
+}
+
 /* The installed language pack's code (2 letters) for the LLM get_hub_info; false = none (built-in English). */
 bool rbwebserver_ui_lang_code(char out[3])
 {
