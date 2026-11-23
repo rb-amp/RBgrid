@@ -1468,6 +1468,15 @@ static uint8_t heal_absent_modules(void)
  * verb), so the hour image on NVS holds everything measured while the hub was alive and the
  * reboot-gap tail covers only the real downtime. */
 static int64_t s_last_collect_ok_us[RBAMP_MAX_MODULES];   /* last VALID period snapshot (pre-restart flush skip) */
+/* BASIC repeated-window detector (rbamp-dev.root 23.11, basic-period-double-window): a BASIC module keeps valid=1 and
+ * the last latched window until the next latch executes, and has no window counter. A lost latch therefore reads
+ * back the PREVIOUS window with valid=1; the next latch then closes a double-length window. The repeat is
+ * recognised bit-exactly by the same module-reported latch_ms and module_window_ms. Such a read is not booked:
+ * the hub re-latches, and the master time of the discarded read is carried into the next booked window. */
+static bool     s_prev_win_ok[RBAMP_MAX_MODULES];
+static uint32_t s_prev_latch_ms[RBAMP_MAX_MODULES];
+static uint32_t s_prev_win_ms[RBAMP_MAX_MODULES];
+static uint32_t s_carry_dt_ms[RBAMP_MAX_MODULES];         /* master ms of discarded repeat reads, added to the next window */
 /** Planned-restart hook: flush the open quarter of every present module (see above). */
 static void bridge_pre_restart_flush(void)
 {
@@ -3179,14 +3188,41 @@ esp_err_t rbamp_bridge_collect_period(uint8_t module, rbpower_stat_period_type_t
     rbamp_period_snapshot_t snap = {0};
     esp_err_t err = ESP_ERR_INVALID_RESPONSE;
     bool skip_latch = false;
+    bool basic_chk = !virt_is(module) && s_line[module] == 0;
+    int repeats = 0;
     for (int attempt = 0; attempt < 4; ++attempt) {
         bus_take();
         err = br_period_snapshot(module, &snap,
                                          skip_latch ? 0 : 50, skip_latch);
         bus_give();
+        if (err == ESP_OK && snap.valid && basic_chk && s_prev_win_ok[module] && !snap.module_restarted &&
+            snap.latch_ms == s_prev_latch_ms[module] && snap.module_window_ms == s_prev_win_ms[module]) {
+            /* the previous window again: the latch did not execute. Not booked; its master time is carried on,
+             * and the retry LATCHES again (a skip_latch read would return the same old window). */
+            s_carry_dt_ms[module] += snap.master_dt_ms;
+            repeats++;
+            rbpower_diag_printf("FAIL QTR m%u repeated window (latch_ms=%lu win=%lums) — latch not executed, re-latching (carry %lums)",
+                                module, (unsigned long)snap.latch_ms, (unsigned long)snap.module_window_ms,
+                                (unsigned long)s_carry_dt_ms[module]);
+            snap.valid = false;
+            skip_latch = false;
+            vTaskDelay(pdMS_TO_TICKS(120 + 60 * attempt));
+            continue;
+        }
         if (err == ESP_OK && snap.valid) break;
-        skip_latch = true;                       /* keep the window; just wait for VALID */
+        skip_latch = (repeats == 0);             /* keep the window; just wait for VALID (after a repeat: latch again) */
         vTaskDelay(pdMS_TO_TICKS(60 + 60 * attempt));
+    }
+    if (err == ESP_OK && snap.valid && basic_chk) {
+        s_prev_win_ok[module] = true;
+        s_prev_latch_ms[module] = snap.latch_ms;
+        s_prev_win_ms[module] = snap.module_window_ms;
+        if (s_carry_dt_ms[module]) {             /* the booked window covers the discarded read(s) too */
+            rbpower_diag_printf("QTR m%u window after repeat: master %lums + carried %lums", module,
+                                (unsigned long)snap.master_dt_ms, (unsigned long)s_carry_dt_ms[module]);
+            snap.master_dt_ms += s_carry_dt_ms[module];
+            s_carry_dt_ms[module] = 0;
+        }
     }
     /* UI5/UI7: avg_p of ch3+ from the same latch (the module latches every channel atomically) */
     float hi_avg_p[RBAMP_MAX_CHANNELS];
