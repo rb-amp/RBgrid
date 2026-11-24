@@ -956,6 +956,20 @@ static cJSON *t_get_health(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddNumberToObject(r, "uptime_s", (double)(esp_timer_get_time() / 1000000LL));
     cJSON_AddStringToObject(r, "last_reset", reset_name(esp_reset_reason()));
     cJSON_AddBoolToObject(r, "clock_synced", rbtime_is_time_valid());
+    {   /* where the hub's time comes from, and when it was last set */
+        static const char *const SRC[] = { "none", "internet", "hub", "manual", "rtc", "gps" };
+        rbtime_statistics_t ts; memset(&ts, 0, sizeof(ts));
+        rbtime_config_t tc; memset(&tc, 0, sizeof(tc)); rbtime_get_config(&tc);
+        cJSON *ck = cJSON_AddObjectToObject(r, "clock");
+        bool st_ok = rbtime_get_statistics(&ts) == RBPOWER_OK;
+        int si = st_ok ? (int)ts.active_source : 0;
+        cJSON_AddStringToObject(ck, "source", si >= 0 && si < 6 ? SRC[si] : "none");
+        uint64_t up = (uint64_t)esp_timer_get_time();
+        if (st_ok && ts.last_sync_timestamp_us && ts.last_sync_timestamp_us <= up && rbtime_is_time_valid()) add_time(ck, "last_set", now_s() - (uint32_t)((up - ts.last_sync_timestamp_us) / 1000000ULL));
+        else cJSON_AddNullToObject(ck, "last_set");
+        cJSON_AddStringToObject(ck, "time_server", tc.sntp_server);
+        cJSON_AddStringToObject(ck, "timezone", tc.timezone);
+    }
     cJSON *hp = cJSON_AddObjectToObject(r, "heap");
     cJSON_AddNumberToObject(hp, "internal_free_b", heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     cJSON_AddNumberToObject(hp, "internal_min_b", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -4328,6 +4342,9 @@ static cJSON *t_set_clock(const cJSON *a, rbllm_cx_t *cx)
         if (rbtime_set_manual_time(ts) != RBPOWER_OK) return fail(cx, "internal", "the hub did not take the time", NULL);
     }
     rbpower_err_t se = rbtime_force_sync(RBTIME_SOURCE_SNTP, 5000);   /* an Internet time source refines it when there is one */
+    if (!t && se != RBPOWER_OK)
+        return fail(cx, "conflict", "no Internet time server answered; the clock is unchanged",
+                    "Check the hub's internet access, or ask the user for the time on their clock and call set_clock {time} with its offset.");
     uint32_t after = now_s();
     rbpower_diag_printf("llm: clock %s by '%s' (%+ld s)", t ? "set" : "synced", cx->client ? cx->client : "?", (long)((int64_t)after - before));
     cJSON *r = cJSON_CreateObject();
@@ -4924,6 +4941,7 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
         cJSON_AddBoolToObject(m, "gaps", cx.gaps);
         cJSON_AddBoolToObject(m, "estimated", cx.estimated);
         if (cx.resolution) cJSON_AddStringToObject(m, "resolution", cx.resolution);
+        if (!rbtime_is_time_valid()) cJSON_AddTrueToObject(m, "clock_unsynced");   /* every time in this answer is the hub's unsynced clock */
         if (cx.open_hour) {
             if (!cx.notes) cx.notes = cJSON_CreateArray();
             if (cx.open_cost_exact)
