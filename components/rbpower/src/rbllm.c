@@ -1671,6 +1671,13 @@ static cJSON *t_compare_periods(const cJSON *a, rbllm_cx_t *cx)
             else cJSON_AddNullToObject(o, "delta_pct");
             cJSON_AddNumberToObject(o, "delta_cost", r4(ta[i].cost - tb[i].cost));
         } else { cJSON_AddNullToObject(o, "delta_kwh"); cJSON_AddNullToObject(o, "delta_pct"); cJSON_AddNullToObject(o, "delta_cost"); }
+        /* the other direction: generation, a battery's discharge, the grid feed's export */
+        if (ta[i].any) cJSON_AddNumberToObject(o, "a_export_kwh", r4(ta[i].e_out / 1000.0)); else cJSON_AddNullToObject(o, "a_export_kwh");
+        if (tb[i].any) cJSON_AddNumberToObject(o, "b_export_kwh", r4(tb[i].e_out / 1000.0)); else cJSON_AddNullToObject(o, "b_export_kwh");
+        if (ta[i].any && tb[i].any) {
+            cJSON_AddNumberToObject(o, "delta_export_kwh", r4((ta[i].e_out - tb[i].e_out) / 1000.0));
+            cJSON_AddNumberToObject(o, "delta_revenue", r4(ta[i].rev - tb[i].rev));
+        } else { cJSON_AddNullToObject(o, "delta_export_kwh"); cJSON_AddNullToObject(o, "delta_revenue"); }
         if (!ta[i].any || !tb[i].any) cx->gaps = true;
         if (ta[i].newest > newest) newest = ta[i].newest;
         cJSON_AddItemToArray(arr, o);
@@ -2217,6 +2224,23 @@ static cJSON *t_get_regional_context(const cJSON *a, rbllm_cx_t *cx)
 }
 
 /* ---- get_config: compact, LLM-facing projection of the settings (never the raw files, never a token) ---- */
+/* The per-point fields propose_config writes beyond name/role/inside/clamp (get_config_schema: channels.writable). */
+static const char *const CH_NUM_K[] = { "phase", "rated_power_w", "max_current_a", "charge_threshold_w", "idle_timeout_min" };
+static void chan_extras(cJSON *o, uint16_t uid)
+{
+    char sn[48] = ""; double v[5] = { 0 }; bool have = false;
+    rbpower_home_lock();
+    const rbpower_unit_definition_t *d = rbpower_home_get_unit_definition((rbpower_unit_id_t)uid);
+    if (d) {
+        utf8_clean(d->short_name, sn, sizeof(sn));
+        v[0] = d->phase; v[1] = r2(d->rated_power_w); v[2] = r2(d->max_current_a); v[3] = d->ev_charge_threshold_w; v[4] = d->ev_idle_timeout_min;
+        have = true;
+    }
+    rbpower_home_unlock();
+    if (!have) return;
+    cJSON_AddStringToObject(o, "short_name", sn);
+    for (int k = 0; k < 5; k++) cJSON_AddNumberToObject(o, CH_NUM_K[k], v[k]);
+}
 static void cfg_channels(cJSON *r)
 {
     rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
@@ -2234,6 +2258,7 @@ static void cfg_channels(cJSON *r)
         cJSON_AddStringToObject(o, "point", p[i].point);
         cJSON_AddStringToObject(o, "role_detail", role_name(p[i].role));
         if (p[i].inside) { char ih[5]; uid_hex(p[i].inside, ih); cJSON_AddStringToObject(o, "inside", ih); } else cJSON_AddNullToObject(o, "inside");
+        chan_extras(o, p[i].unit_id);
         const cJSON *e;
         cJSON_ArrayForEach(e, cJSON_GetObjectItem(sl, "sensors")) {
             const char *uid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
@@ -2433,6 +2458,7 @@ static cJSON *cfg_capture(void)
             cJSON_AddStringToObject(o, "role", role_name(p[i].role));
             if (p[i].inside) { char ih[5]; uid_hex(p[i].inside, ih); cJSON_AddStringToObject(o, "inside", ih); }
             else cJSON_AddStringToObject(o, "inside", "");
+            chan_extras(o, p[i].unit_id);
         }
         free(p);
     }
@@ -2540,11 +2566,20 @@ static int ver_sync(const char *source, const char *summary)
     const char *lh = last ? cJSON_GetStringValue(cJSON_GetObjectItem(last, "hash")) : NULL;
     int num = last ? (int)cJSON_GetNumberValue(cJSON_GetObjectItem(last, "version")) : 0;
     cJSON *lst = last ? cJSON_GetObjectItem(last, "state") : NULL;
-    if (lh && strcmp(lh, h) && lst && !cJSON_GetObjectItem(lst, "region")) {
-        /* the newest version was recorded before the time zone and hub labels were versioned: if the rest is equal,
-         * add them to that version in place instead of recording a spurious "changed outside the LLM API" one */
+    const cJSON *lch0 = lst ? cJSON_GetArrayItem(cJSON_GetObjectItem(lst, "channels"), 0) : NULL;
+    bool old_fmt = lst && (!cJSON_GetObjectItem(lst, "region") || (lch0 && !cJSON_GetObjectItem(lch0, "phase")));
+    if (lh && strcmp(lh, h) && old_fmt) {
+        /* the newest version was recorded before the time zone, hub labels or the per-point extras were versioned: if the
+         * rest is equal, add them to that version in place instead of recording a spurious "changed outside the LLM API" one */
         cJSON *old = cJSON_Duplicate(cap, true);
-        cJSON_DeleteItemFromObject(old, "region"); cJSON_DeleteItemFromObject(old, "hub");
+        if (!cJSON_GetObjectItem(lst, "region")) { cJSON_DeleteItemFromObject(old, "region"); cJSON_DeleteItemFromObject(old, "hub"); }
+        if (lch0 && !cJSON_GetObjectItem(lch0, "phase")) {
+            cJSON *c;
+            cJSON_ArrayForEach(c, cJSON_GetObjectItem(old, "channels")) {
+                cJSON_DeleteItemFromObject(c, "short_name");
+                for (int k = 0; k < 5; k++) cJSON_DeleteItemFromObject(c, CH_NUM_K[k]);
+            }
+        }
         char ho[17]; cfg_hash(old, ho);
         cJSON_Delete(old);
         if (!strcmp(ho, lh)) {
@@ -3063,16 +3098,20 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
                 const char *sv = cJSON_GetStringValue(f);
                 if (!sv || strlen(sv) > 24) { snprintf(m, sizeof(m), "channels.%s.short_name: text, up to 24 bytes", id); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL); }
             } else if (!strcmp(k, "phase") || !strcmp(k, "rated_power_w") || !strcmp(k, "max_current_a") || !strcmp(k, "charge_threshold_w") || !strcmp(k, "idle_timeout_min")) {
-                double lo = 0, hi = !strcmp(k, "phase") ? 7 : !strcmp(k, "max_current_a") ? 1000 : !strcmp(k, "idle_timeout_min") ? 1440 : 1000000;
-                bool integer = !strcmp(k, "phase") || !strcmp(k, "idle_timeout_min");
+                double lo = 0, hi = !strcmp(k, "phase") ? 7 : !strcmp(k, "max_current_a") ? 1000 : !strcmp(k, "idle_timeout_min") ? 1440 : !strcmp(k, "charge_threshold_w") ? 100000 : 1000000;
+                bool integer = !strcmp(k, "phase") || !strcmp(k, "idle_timeout_min") || !strcmp(k, "charge_threshold_w");
                 if (!cJSON_IsNumber(f) || f->valuedouble < lo || f->valuedouble > hi || (integer && f->valuedouble != (int)f->valuedouble)) {
                     snprintf(m, sizeof(m), "channels.%s.%s: %s %g..%g", id, k, integer ? "integer" : "number", lo, hi); cJSON_Delete(norm); return fail(cx, "invalid_args", m, NULL);
                 }
+                const cJSON *wn = cJSON_GetObjectItem(c, k);
+                if (cJSON_IsNumber(wn) && fabs(wn->valuedouble - f->valuedouble) < 1e-6) continue;   /* no change */
                 if (!o) o = cJSON_AddObjectToObject(nch, id);
                 cJSON_AddNumberToObject(o, k, f->valuedouble);
                 cJSON *d = cJSON_CreateObject();
                 char path[48]; snprintf(path, sizeof(path), "channels.%s.%s", id, k);
-                cJSON_AddStringToObject(d, "path", path); cJSON_AddStringToObject(d, "from", ""); cJSON_AddNumberToObject(d, "to", f->valuedouble);
+                cJSON_AddStringToObject(d, "path", path);
+                if (cJSON_IsNumber(wn)) cJSON_AddNumberToObject(d, "from", wn->valuedouble); else cJSON_AddNullToObject(d, "from");
+                cJSON_AddNumberToObject(d, "to", f->valuedouble);
                 cJSON_AddItemToArray(diff, d);
                 continue;
             } else { snprintf(m, sizeof(m), "channels.%s.%.20s: not writable", id, k); cJSON_Delete(norm); return fail(cx, "invalid_args", m, "get_config_schema {section: channels} lists the fields."); }
@@ -3424,6 +3463,15 @@ static cJSON *patch_between(const cJSON *cur, const cJSON *target)
         for (int k = 0; k < 4; k++) {
             const char *a = cJSON_GetStringValue(cJSON_GetObjectItem(c, ks[k])), *b = cJSON_GetStringValue(cJSON_GetObjectItem(t, ks[k]));
             if (a && b && strcmp(a, b)) { if (!o) o = cJSON_AddObjectToObject(ch, t->string); cJSON_AddStringToObject(o, ks[k], b); }
+        }
+        const char *sa = cJSON_GetStringValue(cJSON_GetObjectItem(c, "short_name")), *sb = cJSON_GetStringValue(cJSON_GetObjectItem(t, "short_name"));
+        if (sa && sb && strcmp(sa, sb)) { if (!o) o = cJSON_AddObjectToObject(ch, t->string); cJSON_AddStringToObject(o, "short_name", sb); }
+        for (int k = 0; k < 5; k++) {
+            const cJSON *na = cJSON_GetObjectItem(c, CH_NUM_K[k]), *nb = cJSON_GetObjectItem(t, CH_NUM_K[k]);
+            if (cJSON_IsNumber(na) && cJSON_IsNumber(nb) && fabs(na->valuedouble - nb->valuedouble) > 1e-6) {
+                if (!o) o = cJSON_AddObjectToObject(ch, t->string);
+                cJSON_AddNumberToObject(o, CH_NUM_K[k], nb->valuedouble);
+            }
         }
     }
     double a = cJSON_GetNumberValue(cJSON_GetObjectItem(cur, "peaks_cycle_day")), b = cJSON_GetNumberValue(cJSON_GetObjectItem(target, "peaks_cycle_day"));
@@ -3780,7 +3828,7 @@ static cJSON *t_list_config_versions(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_Delete(v);
-    note(cx, "Versions cover channel names, roles, inside, clamp models, the tariff prices/VAT/fees, the peaks cycle day, the time zone and the hub's name and location. Price rules, telemetry, integrations, the dynamic price, the mains voltage/frequency and the grid system are not versioned either. Modules, module addresses, points made or moved and bus pins are not versioned: a rollback does not undo them.");
+    note(cx, "Versions cover channel names, short names, roles, inside, clamp models, phases, rated power, breaker current, EV thresholds, the tariff prices/VAT/fees, the peaks cycle day, the time zone and the hub's name and location. Price rules, telemetry, integrations, the dynamic price, the mains voltage/frequency and the grid system are not versioned either. Modules, module addresses, points made or moved and bus pins are not versioned: a rollback does not undo them.");
     cx->as_of = now_s();
     return r;
 }
@@ -3829,7 +3877,7 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
             { "phase", "integer", 7, "0 unset, 1..3 = L1..L3, 4 = three-phase, 5..7 = L1L2/L2L3/L3L1" },
             { "rated_power_w", "number", 1000000, "the appliance's rated power, 0 = unset (used for load percent)" },
             { "max_current_a", "number", 1000, "the circuit's breaker current, 0 = unset (used for overload warnings)" },
-            { "charge_threshold_w", "number", 1000000, "EV points: power above which a charge session runs, 0 = hub default" },
+            { "charge_threshold_w", "integer", 100000, "EV points: power above which a charge session runs, 0 = hub default" },
             { "idle_timeout_min", "integer", 1440, "EV points: minutes below the threshold that end a session, 0 = hub default" } };
         for (int q = 0; q < 5; q++) { f = cJSON_AddObjectToObject(w, CN[q].k); cJSON_AddStringToObject(f, "type", CN[q].t); cJSON_AddNumberToObject(f, "minimum", 0); cJSON_AddNumberToObject(f, "maximum", CN[q].hi); cJSON_AddStringToObject(f, "description", CN[q].d); }
     } else if (!strcmp(sec, "notifications")) {
@@ -4836,7 +4884,7 @@ static const rbllm_tool_t TOOLS[] = {
       t_get_hub_info },
     { "list_channels", RBLLM_SCOPE_READ,
       "When to call: before any per-channel question, to map names to ids. What it returns: every measuring point with id, the user's name, "
-      "role (main = grid supply, load, generation, bidirectional), whether its source is present, whether it has a history slot (records appear as hours close), and history_from: where its stored "
+      "role (main = grid supply, load, generation, bidirectional), whether its source is present, whether it has a history slot (the hour in progress fills every 15 min as its 15-min periods close; the hour's record is stored when the hour closes), and history_from: where its stored "
       "records start (null = none yet). Before history_from the hub answers null: no data, not zero.",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"present\":{\"type\":\"boolean\"},\"has_history\":{\"type\":\"boolean\"},\"history_from\":{\"type\":[\"string\",\"null\"]}}}}}}",
@@ -4888,10 +4936,11 @@ static const rbllm_tool_t TOOLS[] = {
       t_get_cost_breakdown },
     { "compare_periods", RBLLM_SCOPE_READ,
       "When to call: for 'more or less than before'. What it returns: per channel the energy of period a and period b, the difference in kWh "
-      "and percent, and the cost difference. Give b, or a baseline relative to a.",
+      "and percent, and the cost difference; and the other direction (a_export_kwh, b_export_kwh, delta_export_kwh, delta_revenue): what a "
+      "generation point produced, or the grid feed exported. Give b, or a baseline relative to a.",
       "{\"type\":\"object\",\"properties\":{\"a\":" S_PERIOD ",\"b\":" S_PERIOD ",\"baseline\":{\"type\":\"string\",\"enum\":[\"previous_period\",\"previous_month\",\"same_month_last_year\"],\"description\":\"previous_period: as long as a, just before it; previous_month: the same calendar dates one month earlier; same_month_last_year: the same dates a year earlier\"},"
       "\"channels\":" S_CHANNELS "},\"required\":[\"a\"],\"additionalProperties\":false}",
-      "{\"type\":\"object\",\"properties\":{\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"delta_kwh\":{\"type\":\"number\"},\"delta_pct\":{\"type\":[\"number\",\"null\"]}}}}}}",
+      "{\"type\":\"object\",\"properties\":{\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"delta_kwh\":{\"type\":\"number\"},\"delta_pct\":{\"type\":[\"number\",\"null\"]},\"delta_export_kwh\":{\"type\":[\"number\",\"null\"]},\"delta_revenue\":{\"type\":[\"number\",\"null\"]}}}}}}",
       t_compare_periods },
     { "get_load_profile", RBLLM_SCOPE_READ,
       "When to call: for the shape of a period on one channel (which hours or days used more, a standby floor). What it returns: rows "
@@ -4929,7 +4978,7 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"dynamic_price_sources\":{\"type\":\"array\"},\"hub_currency\":{\"type\":\"string\"}}}",
       t_get_regional_context },
     { "get_config", RBLLM_SCOPE_CONFIG,
-      "When to call: to explain how the hub is set up (points and their clamps, tariff, price rules, time zone, hub name, MQTT, dynamic price) before advising a change. "
+      "When to call: to explain how the hub is set up (points with their clamps, short names, phases, ratings and EV thresholds, tariff, price rules, time zone, hub name, MQTT, dynamic price) before advising a change. "
       "What it returns: the chosen section(s) as a compact view plus the config version number; passwords masked. dynamic_price only when asked by section.",
       "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\",\"enum\":[\"channels\",\"tariff\",\"notifications\",\"region\",\"hub\",\"integrations\",\"dynamic_price\"]}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"channels\":{\"type\":\"array\"},\"tariff\":{\"type\":\"object\"}}}",
