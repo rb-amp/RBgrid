@@ -833,6 +833,45 @@ static void add_period(cJSON *o, uint32_t from, uint32_t to)
 
 /* ============================================================================================ tools */
 
+/* Where a point's stored history starts: the start of its oldest day record, or of its oldest hour record while no day
+ * has closed yet. 0 = nothing stored. Records only grow at the new end, so a short cache spares the flash walk; the
+ * old end moves only when the ring wraps (400 days) or the point is deleted. */
+#define HIST_CACHE_US (10LL * 60 * 1000000)
+typedef struct { uint16_t u; uint32_t from; int64_t at; } hist_c_t;
+static hist_c_t s_hist[RBLLM_MAX_POINTS];
+static portMUX_TYPE s_hist_mux = portMUX_INITIALIZER_UNLOCKED;
+static void hist_min(const rbpower_period_statistics_t *s, void *v)
+{
+    uint32_t *m = v, ts = (uint32_t)(s->period_start_us / 1000000LL);
+    if (ts < *m) *m = ts;
+}
+static uint32_t history_from(uint16_t u, int64_t deadline_us)
+{
+    int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL(&s_hist_mux);
+    for (int i = 0; i < RBLLM_MAX_POINTS; i++)
+        if (s_hist[i].u == u && s_hist[i].at && now - s_hist[i].at < HIST_CACHE_US) { uint32_t f = s_hist[i].from; portEXIT_CRITICAL(&s_hist_mux); return f; }
+    portEXIT_CRITICAL(&s_hist_mux);
+    uint32_t m = UINT32_MAX, from = 0;   /* record ts = the period's end */
+    rbgrid_foreach_valid_record_ex(u, RBPOWER_STAT_PERIOD_DAILY, RBPOWER_PERIOD_DAY, 0, UINT32_MAX, false, deadline_us, hist_min, &m);
+    if (m != UINT32_MAX) from = local_floor(m - 1, 'd');
+    else {
+        rbgrid_foreach_valid_record_ex(u, RBPOWER_STAT_PERIOD_1HOUR, RBPOWER_PERIOD_HOUR, 0, UINT32_MAX, false, deadline_us, hist_min, &m);
+        if (m != UINT32_MAX) from = local_floor(m - 1, 'h');
+    }
+    if (esp_timer_get_time() > deadline_us) return from;   /* walk cut short: answer, but don't cache */
+    portENTER_CRITICAL(&s_hist_mux);
+    int k = 0;
+    for (int i = 0; i < RBLLM_MAX_POINTS; i++) { if (s_hist[i].u == u) { k = i; break; } if (s_hist[i].at < s_hist[k].at) k = i; }
+    s_hist[k] = (hist_c_t){ u, from, now };
+    portEXIT_CRITICAL(&s_hist_mux);
+    return from;
+}
+static void add_history_from(cJSON *o, const char *k, uint32_t from)
+{
+    if (from) add_time(o, k, from); else cJSON_AddNullToObject(o, k);
+}
+
 /* The hub's name as the user set it (hub page / propose_config hub.name), else the device name: one name everywhere
  * (get_hub_info, the manifest, the AI / LLM page's connect block). */
 static void hub_display_name(char *b, size_t n)
@@ -873,6 +912,19 @@ static cJSON *t_get_hub_info(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddItemToArray(cap, cJSON_CreateString("config_read"));
     cJSON_AddItemToArray(cap, cJSON_CreateString("config"));
     cJSON_AddBoolToObject(r, "read_only_mode", S.read_only);
+    {   /* how far back the hub can answer: depth limits, and where the oldest point's records start */
+        cJSON *h = cJSON_AddObjectToObject(r, "history");
+        cJSON_AddNumberToObject(h, "hourly_days", HOUR_DEPTH_S / 86400u);
+        cJSON_AddNumberToObject(h, "daily_days", DAY_DEPTH_S / 86400u);
+        rbgrid_point_snap_t *p = calloc(RBLLM_MAX_POINTS, sizeof(*p));
+        uint32_t first = 0;
+        if (p) {
+            int np = snapshot(p, RBLLM_MAX_POINTS);
+            for (int i = 0; i < np; i++) { uint32_t f = history_from(p[i].unit_id, cx->deadline_us); if (f && (!first || f < first)) first = f; }
+            free(p);
+        }
+        add_history_from(h, "from", first);
+    }
     {   /* the web app's language pack on the hub (installed from the hub page; null = the app's built-in English) */
         char lc[3];
         if (rbwebserver_ui_lang_code(lc)) cJSON_AddStringToObject(r, "ui_language", lc); else cJSON_AddNullToObject(r, "ui_language");
@@ -910,10 +962,12 @@ static cJSON *t_list_channels(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddBoolToObject(o, "present", p[i].present);
         cJSON_AddBoolToObject(o, "estimated_energy", p[i].estimated);
         cJSON_AddBoolToObject(o, "has_history", rbpower_flash_unit_has_history(p[i].unit_id));
+        add_history_from(o, "history_from", history_from(p[i].unit_id, cx->deadline_us));
         cJSON_AddItemToArray(arr, o);
     }
     free(p);
     note(cx, "Energy direction is reported, not set: a reversed clamp is fixed at the clamp, not in software.");
+    note(cx, "history_from is where a channel's stored records start (the first day may be partial); before it the hub answers null: no data, not zero.");
     cx->as_of = now_s();
     return r;
 }
@@ -4748,15 +4802,17 @@ static const rbllm_tool_t TOOLS[] = {
     { "get_hub_info", RBLLM_SCOPE_READ,
       "When to call: first, to learn the hub's time zone, currency, firmware and what it can do. What it returns: hub id, name, firmware, "
       "protocol version, board, hub time with offset, time zone, currency, uptime, capabilities, the installed web app kit (ui_kit) and "
-      "its language (ui_language), and hub_page_only: what is done on the hub's own page.",
+      "its language (ui_language), history (hourly_days, daily_days kept; from = where the oldest stored records start, null if none), "
+      "and hub_page_only: what is done on the hub's own page.",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
-      "{\"type\":\"object\",\"properties\":{\"hub_id\":{\"type\":\"string\"},\"fw\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"currency\":{\"type\":\"string\"},\"hub_time\":{\"type\":\"string\"},\"ui_kit\":{\"type\":[\"string\",\"null\"]},\"ui_language\":{\"type\":[\"string\",\"null\"]}}}",
+      "{\"type\":\"object\",\"properties\":{\"hub_id\":{\"type\":\"string\"},\"fw\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"currency\":{\"type\":\"string\"},\"hub_time\":{\"type\":\"string\"},\"ui_kit\":{\"type\":[\"string\",\"null\"]},\"ui_language\":{\"type\":[\"string\",\"null\"]},\"history\":{\"type\":\"object\",\"properties\":{\"hourly_days\":{\"type\":\"integer\"},\"daily_days\":{\"type\":\"integer\"},\"from\":{\"type\":[\"string\",\"null\"]}}}}}",
       t_get_hub_info },
     { "list_channels", RBLLM_SCOPE_READ,
       "When to call: before any per-channel question, to map names to ids. What it returns: every measuring point with id, the user's name, "
-      "role (main = grid supply, load, generation, bidirectional), whether its source is present and whether it has a history slot (records appear as hours close).",
+      "role (main = grid supply, load, generation, bidirectional), whether its source is present, whether it has a history slot (records appear as hours close), and history_from: where its stored "
+      "records start (null = none yet). Before history_from the hub answers null: no data, not zero.",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
-      "{\"type\":\"object\",\"properties\":{\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"present\":{\"type\":\"boolean\"},\"has_history\":{\"type\":\"boolean\"}}}}}}",
+      "{\"type\":\"object\",\"properties\":{\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"present\":{\"type\":\"boolean\"},\"has_history\":{\"type\":\"boolean\"},\"history_from\":{\"type\":[\"string\",\"null\"]}}}}}}",
       t_list_channels },
     { "read_live", RBLLM_SCOPE_READ,
       "When to call: for what is happening right now. What it returns: the grid power (positive = import) and per channel the power in W, "
