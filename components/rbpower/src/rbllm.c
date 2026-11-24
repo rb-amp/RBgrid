@@ -1784,6 +1784,11 @@ static void finding(cJSON *arr, const char *type, const char *sev, const char *c
     cJSON_AddStringToObject(o, "fix_hint", fix);
     cJSON_AddItemToArray(arr, o);
 }
+/* check_installation reads history internally (export, records per point): those reads must not leave their period
+ * meta (gaps, open hour, estimated cost, their notes) on an answer that returns findings, not figures. */
+#define CX_QUIET_BEGIN(cx) cJSON *q_notes = (cx)->notes; bool q_g = (cx)->gaps, q_o = (cx)->open_hour, q_e = (cx)->estimated; (cx)->notes = NULL
+#define CX_QUIET_END(cx) do { cJSON_Delete((cx)->notes); (cx)->notes = q_notes; (cx)->gaps = q_g; (cx)->open_hour = q_o; \
+                              (cx)->estimated = q_e; (cx)->open_cost_exact = false; } while (0)
 static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
 {
     (void)a;
@@ -1919,13 +1924,15 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
             bool sel1[RBLLM_MAX_POINTS] = { false }; sel1[mi] = true;
             tot_t *tt = calloc(RBLLM_MAX_POINTS, sizeof(tot_t));
             uint32_t to = now_s(), from = local_add(local_floor(to, 'd'), 'd', -7);
-            if (tt && totals(cx, p, n, sel1, from, to, tt) && tt[mi].any && tt[mi].e_out > 1000.0) {
+            CX_QUIET_BEGIN(cx);
+            bool okt = tt && totals(cx, p, n, sel1, from, to, tt);
+            CX_QUIET_END(cx);
+            if (okt && tt[mi].any && tt[mi].e_out > 1000.0) {
                 uid_hex(p[mi].unit_id, h);
                 snprintf(ev, sizeof(ev), "The grid feed sent %.1f kWh to the grid in the last 7 days (took %.1f kWh), and no point is set as generation.", tt[mi].e_out / 1000.0, tt[mi].e_in / 1000.0);
                 finding(f, "generation_not_configured", "warning", h, ev, "Ask the user about solar panels, an inverter or a battery: if there is one, create_point on its clamp with role renewable_source (or storage_system). If there is none, the grid clamp may face the wrong way.");
             }
             free(tt);
-            cx->open_cost_exact = false;   /* a money detail of totals(), not part of this answer */
         }
     }
     {   /* a point that is live but has stored nothing for a day: its energy is missing from every report */
@@ -1935,7 +1942,10 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
             for (int i = 0; i < n; i++) { sel2[i] = p[i].present; k2 += sel2[i]; }
             tot_t *t2 = k2 ? calloc(RBLLM_MAX_POINTS, sizeof(tot_t)) : NULL;
             uint32_t to = now_s(), from = to > 86400 ? to - 86400 : 0;
-            if (t2 && totals(cx, p, n, sel2, from, to, t2)) {
+            CX_QUIET_BEGIN(cx);
+            bool okt = t2 && totals(cx, p, n, sel2, from, to, t2);
+            CX_QUIET_END(cx);
+            if (okt) {
                 for (int i = 0; i < n; i++) {
                     if (!sel2[i] || t2[i].any) continue;
                     uid_hex(p[i].unit_id, h);
@@ -1944,7 +1954,6 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
                 }
             }
             free(t2);
-            cx->open_cost_exact = false;
         }
     }
     {   /* the hub's own Wi-Fi access point still uses the printed setup password */
