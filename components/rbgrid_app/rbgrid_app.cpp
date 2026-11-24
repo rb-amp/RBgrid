@@ -3271,6 +3271,9 @@ static rbpower_extended_config_t* app_core_init(void)
     // Configure auto-start measurements (default true)
     extended_config->auto_start_measurements = true;  // Automatically start measurements after initialization
     
+    // Every point gets a slug (the legacy default points are built without one)
+    (void)rbgrid_config_backfill_points(config_handle);
+
     // Pass units array created through API functions
     extended_config->units_config.predefined_units = config_ctx->units_array;
     extended_config->units_config.predefined_units_count = config_ctx->units_count;

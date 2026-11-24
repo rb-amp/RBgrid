@@ -22,6 +22,7 @@
 #include "rbgrid.h"      /* legacy-id physics backfill (RBGRID_IS_I2C_UNIT / I2C_GET_*) */
 #include "rbgrid_rbamp_config.h"   /* rbamp_bridge_config_t (fleet consistency filter) */
 #include "rbgrid_config_storage.h"
+#include "rbpoint.h"
 #include "littlefs_raw.h"
 #include "external_flash_config.h"
 #include "rbjson.h"
@@ -1229,6 +1230,12 @@ esp_err_t rbgrid_storage_load_units(rbgrid_config_handle_t config_handle)
                 if ((j = cJSON_GetObjectItem(unit, "short_name")) && cJSON_IsString(j)) {
                     strncpy(def->short_name, j->valuestring, sizeof(def->short_name) - 1);
                     def->short_name[sizeof(def->short_name) - 1] = '\0';
+                }
+                /* The point slug: the legacy recreate path does not carry it, so a slug set on a default
+                 * point (set_point_slug / rename) came back empty after every restart. */
+                if ((j = cJSON_GetObjectItem(unit, "point")) && cJSON_IsString(j) && rbpoint_slug_valid(j->valuestring)) {
+                    strncpy(def->point, j->valuestring, sizeof(def->point) - 1);
+                    def->point[sizeof(def->point) - 1] = '\0';
                 }
             }
           }

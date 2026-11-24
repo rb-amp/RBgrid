@@ -1537,6 +1537,9 @@ static cJSON *t_compare_periods(const cJSON *a, rbllm_cx_t *cx)
 {
     uint32_t af, at, bf, bt;
     const char *bl = cJSON_GetStringValue(cJSON_GetObjectItem(a, "baseline"));
+    if (!cJSON_GetObjectItem(a, "a") || (!bl && !cJSON_GetObjectItem(a, "b")))
+        return fail(cx, "invalid_args", "a and either b or baseline required",
+                    "Pass a:{preset:\"this_month\"} with baseline:\"previous_period\", or a and b as periods.");
     if (!parse_period(cx, cJSON_GetObjectItem(a, "a"), &af, &at)) return NULL;
     if (bl) {
         if (!strcmp(bl, "previous_period")) { bt = af; bf = af - (at - af); }

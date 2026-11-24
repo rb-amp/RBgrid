@@ -1407,6 +1407,28 @@ int rbgrid_config_rename_point(rbpower_unit_id_t unit_id, const char* new_point,
     return RBGRID_CONFIG_OK;
 }
 
+/* Every point carries a slug. The legacy default points (main supply, voltage bus, ADC-typed loads) are built
+ * without one; derive it from the name here, once the builder holds every unit, so a fresh hub's main point has
+ * a slug like any other and the persisted ones (restored by load_units) are kept. */
+int rbgrid_config_backfill_points(rbgrid_config_handle_t config)
+{
+    rbgrid_config_context_t* ctx = (rbgrid_config_context_t*)config;
+    if (!ctx || !ctx->units_array) return 0;
+    int n = 0;
+    for (uint16_t i = 0; i < ctx->units_count; i++) {
+        rbpower_unit_definition_t* u = &ctx->units_array[i];
+        if (u->point[0]) continue;
+        char base[RBPOINT_SLUG_MAX + 1];
+        rbpoint_slug_from_name(u->name, base);
+        rbpoint_slug_uniquify(base, u->point, point_taken_builder, ctx);
+        if (u->caps == 0 && u->sources_count > 0)
+            u->caps = rbpoint_caps_for_source(u->sources[0].source_type, u->type, u->bidirectional_metering);
+        ESP_LOGI(TAG, "point slug backfilled: unit 0x%04X '%s' -> '%s'", (unsigned)u->unit_id, u->name, u->point);
+        n++;
+    }
+    return n;
+}
+
 int rbgrid_config_add_persisted_unit(rbgrid_config_handle_t config,
                                      const rbpower_unit_definition_t* def)
 {
