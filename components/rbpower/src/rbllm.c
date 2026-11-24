@@ -1505,7 +1505,8 @@ static cJSON *t_get_cost_breakdown(const cJSON *a, rbllm_cx_t *cx)
     rbgrid_tariff_now_t tn;
     rbgrid_core_tariff_now(&tn);
     cJSON *tj = cJSON_AddObjectToObject(r, "tariff_now");
-    cJSON_AddStringToObject(tj, "price_source", tn.external ? "dynamic" : "plan");
+    cJSON_AddStringToObject(tj, "price_source", tn.external ? "dynamic" : tn.placeholder ? "demo" : "plan");
+    cJSON_AddBoolToObject(r, "tariff_saved", !tn.placeholder);
     if (tn.zone[0]) cJSON_AddStringToObject(tj, "zone", tn.zone);
     cJSON_AddNumberToObject(tj, "buy_price_per_kwh", r4(tn.buy_rate_all_in));
     if (tn.placeholder) { cx->estimated = true; note(cx, "No tariff plan is saved: money is computed off the built-in demo plan."); }
@@ -1839,8 +1840,24 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
         }
         cJSON_Delete(is);
     }
+    {   /* the grid feed exports but no generation point exists: a generator the hub cannot see (or a reversed grid clamp) */
+        int gens = 0, mi = -1;
+        for (int i = 0; i < n; i++) { const char *rc = role_class(p[i].role); if (strcmp(rc, "main") && strcmp(rc, "load")) gens++; if (p[i].role == RBPOWER_ROLE_MAIN_SUPPLY && mi < 0) mi = i; }
+        if (!gens && mi >= 0) {
+            bool sel1[RBLLM_MAX_POINTS] = { false }; sel1[mi] = true;
+            tot_t *tt = calloc(RBLLM_MAX_POINTS, sizeof(tot_t));
+            uint32_t to = now_s(), from = local_add(local_floor(to, 'd'), 'd', -7);
+            if (tt && totals(cx, p, n, sel1, from, to, tt) && tt[mi].any && tt[mi].e_out > 1000.0) {
+                uid_hex(p[mi].unit_id, h);
+                snprintf(ev, sizeof(ev), "The grid feed sent %.1f kWh to the grid in the last 7 days (took %.1f kWh), and no point is set as generation.", tt[mi].e_out / 1000.0, tt[mi].e_in / 1000.0);
+                finding(f, "generation_not_configured", "warning", h, ev, "Ask the user about solar panels, an inverter or a battery: if there is one, create_point on its clamp with role renewable_source (or storage_system). If there is none, the grid clamp may face the wrong way.");
+            }
+            free(tt);
+            cx->open_cost_exact = false;   /* a money detail of totals(), not part of this answer */
+        }
+    }
     rbgrid_tariff_now_t tn; rbgrid_core_tariff_now(&tn);
-    if (tn.placeholder) finding(f, "tariff_not_set", "info", NULL, "No tariff plan is saved; money is computed off a demo plan.", "Ask the user for their tariff and enter it with propose_config {tariff}.");
+    if (tn.placeholder) finding(f, "tariff_not_set", "warning", NULL, "No tariff plan is saved; every money figure is computed off a demo plan and is not the user's cost.", "Ask the user for their tariff and enter it with propose_config {tariff}.");
     cJSON_AddNumberToObject(r, "checked_channels", n);
     if (!cJSON_GetArraySize(f)) note(cx, "No installation problem found in the live data and this boot's log.");
     note(cx, "This tool detects only; it changes nothing on the hub.");
@@ -3836,6 +3853,11 @@ static cJSON *t_list_module_inputs(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(o, "model", md ? md : "");
         const char *ln = cJSON_GetStringValue(cJSON_GetObjectItem(mo, "line"));
         cJSON_AddStringToObject(o, "series", ln && !strcmp(ln, "std") ? "STD" : "BASIC");
+        {   /* the module's clamp family: 1 = split-core SCT-013 clamps, 2 = wired CTs; null = not reported */
+            rbpower_module_desc_t md2;
+            if (rbpower_get_module_desc((uint8_t)m, &md2) && md2.sensor_class != 0 && md2.sensor_class != 0xFF) cJSON_AddNumberToObject(o, "sensor_class", md2.sensor_class);
+            else cJSON_AddNullToObject(o, "sensor_class");
+        }
         cJSON_AddBoolToObject(o, "online", cJSON_IsTrue(cJSON_GetObjectItem(mo, "present")));
         const char *ck = clamp_kind(mo);
         cJSON_AddStringToObject(o, "clamp", ck);
@@ -3947,6 +3969,10 @@ static cJSON *t_create_point(const cJSON *a, rbllm_cx_t *cx)
     cJSON *c = cJSON_AddObjectToObject(r, "channel");
     cJSON_AddStringToObject(c, "id", id);
     cJSON_AddStringToObject(c, "name", name);
+    {   /* the slug the hub derived from the name (MQTT topics, HA entity ids); set_point_slug changes it */
+        unsigned u2 = 0; const rbpower_unit_definition_t *d2 = sscanf(id, "%4x", &u2) == 1 ? rbpower_home_get_unit_definition((rbpower_unit_id_t)u2) : NULL;
+        cJSON_AddStringToObject(c, "point", d2 ? d2->point : "");
+    }
     cJSON_AddStringToObject(c, "role", role_name((uint8_t)role));
     cJSON_AddNumberToObject(c, "module", m);
     cJSON_AddStringToObject(c, "input", lb ? lb : "");
@@ -4366,8 +4392,9 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"delta_kwh\":{\"type\":\"number\"},\"delta_pct\":{\"type\":[\"number\",\"null\"]}}}}}}",
       t_compare_periods },
     { "get_load_profile", RBLLM_SCOPE_READ,
-      "When to call: for when power was high or low over a period on one channel (shape of the day, peaks, standby). What it returns: rows "
-      "of {from, avg_w, min_w, max_w} per stored hour or day; min/max are null where the record has no extremes.",
+      "When to call: for the shape of a period on one channel (which hours or days used more, a standby floor). What it returns: rows "
+      "of {from, avg_w, min_w, max_w} per stored hour or day. avg_w is the average power of the step; min_w/max_w are null on points fed "
+      "by measuring modules (their records carry no extremes), so judge peaks and standby from avg_w.",
       "{\"type\":\"object\",\"properties\":{\"channel\":{\"type\":\"string\",\"description\":\"Channel id from list_channels.\"},\"period\":" S_PERIOD ","
       "\"resolution\":{\"type\":\"string\",\"enum\":[\"hour\",\"day\"]}},\"required\":[\"channel\",\"period\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"resolution\":{\"type\":\"string\"},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"avg_w\":{\"type\":\"number\"},\"min_w\":{\"type\":[\"number\",\"null\"]},\"max_w\":{\"type\":[\"number\",\"null\"]}}}}}}",
