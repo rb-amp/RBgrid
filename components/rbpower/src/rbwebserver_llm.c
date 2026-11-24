@@ -56,7 +56,13 @@ static bool llm_gate(httpd_req_t *req, rbllm_caller_t *who)
 {
     /* §2: the open onboarding state (no admin token) never opens the LLM API — the pairing code would be readable by
      * anyone on the network through the open hub page */
-    if (!rbllm_enabled() || !rbwebserver_api_token_armed()) {
+    if (!rbwebserver_api_token_armed()) {   /* no admin password: never set, or the hub's settings were erased (tokens go with them) */
+        send_json(req, 403, rbllm_error_json(NULL, "llm_disabled", "the hub has no admin password, so the LLM API and every assistant token are off",
+                                             "Ask the user to set the admin password on the hub page, switch the LLM API on and pair again. A hub that had one "
+                                             "loses it, and every pairing, when its settings are erased.", 0));
+        return false;
+    }
+    if (!rbllm_enabled()) {
         send_json(req, 403, rbllm_error_json(NULL, "llm_disabled", "the LLM API is off",
                                              "Ask the user to switch it on on the hub's AI / LLM page.", 0));
         return false;
@@ -143,7 +149,8 @@ static esp_err_t h_pair(httpd_req_t *req)
     char *body = read_body(req, 512);
     if (!rbwebserver_api_token_armed()) {
         free(body);
-        return send_json(req, 403, rbllm_error_json(NULL, "llm_disabled", "the hub has no admin token", "Set an admin token on the hub first.", 0));
+        return send_json(req, 403, rbllm_error_json(NULL, "llm_disabled", "the hub has no admin password, so the LLM API and every assistant token are off",
+                                                    "Ask the user to set the admin password on the hub page, switch the LLM API on and pair again.", 0));
     }
     int st = 400;
     char *out = strstr(req->uri, "/pair/start") ? rbllm_pair_start(body, &st) : rbllm_pair_complete(body, &st);
