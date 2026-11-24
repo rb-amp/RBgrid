@@ -2524,6 +2524,132 @@ static void mqtt_saved_uri(char *out, size_t n)
     if (!(littlefs_raw_exists("/mqtt_broker") && littlefs_raw_read("/mqtt_broker", out, n - 1, &act) == ESP_OK)) out[0] = '\0';
     else out[act < n ? act : n - 1] = '\0';
 }
+/* Common IANA zone names -> their POSIX rule (tzdata, current rules), so an assistant can pass "Europe/Lisbon" instead of
+ * composing a DST rule from memory. Unknown names are not guessed: the caller then asks for the POSIX string. */
+static const struct { const char *iana, *posix; } TZ_IANA[] = {
+    { "UTC", "UTC0" },
+    { "Etc/UTC", "UTC0" },
+    { "Europe/Lisbon", "WET0WEST,M3.5.0/1,M10.5.0" },
+    { "Atlantic/Madeira", "WET0WEST,M3.5.0/1,M10.5.0" },
+    { "Atlantic/Canary", "WET0WEST,M3.5.0/1,M10.5.0" },
+    { "Atlantic/Azores", "<-01>1<+00>,M3.5.0/0,M10.5.0/1" },
+    { "Europe/London", "GMT0BST,M3.5.0/1,M10.5.0" },
+    { "Europe/Dublin", "GMT0IST,M3.5.0/1,M10.5.0" },
+    { "Europe/Berlin", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Paris", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Madrid", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Rome", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Amsterdam", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Brussels", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Vienna", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Zurich", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Stockholm", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Oslo", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Copenhagen", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Warsaw", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Prague", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Budapest", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Belgrade", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Zagreb", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Ljubljana", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Bratislava", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Luxembourg", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Monaco", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Malta", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Andorra", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Tirane", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Sarajevo", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Skopje", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Podgorica", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Vaduz", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/San_Marino", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Vatican", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Gibraltar", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Busingen", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Africa/Ceuta", "CET-1CEST,M3.5.0,M10.5.0/3" },
+    { "Europe/Kyiv", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Kiev", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Helsinki", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Riga", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Tallinn", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Vilnius", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Sofia", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Bucharest", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Athens", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Chisinau", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Mariehamn", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Asia/Nicosia", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Nicosia", "EET-2EEST,M3.5.0/3,M10.5.0/4" },
+    { "Europe/Istanbul", "<+03>-3" },
+    { "Europe/Moscow", "MSK-3" },
+    { "Europe/Minsk", "<+03>-3" },
+    { "Europe/Kaliningrad", "EET-2" },
+    { "Europe/Samara", "<+04>-4" },
+    { "Asia/Yekaterinburg", "<+05>-5" },
+    { "Asia/Omsk", "<+06>-6" },
+    { "Asia/Novosibirsk", "<+07>-7" },
+    { "Asia/Krasnoyarsk", "<+07>-7" },
+    { "Asia/Irkutsk", "<+08>-8" },
+    { "Asia/Yakutsk", "<+09>-9" },
+    { "Asia/Vladivostok", "<+10>-10" },
+    { "Asia/Magadan", "<+11>-11" },
+    { "Asia/Kamchatka", "<+12>-12" },
+    { "Asia/Tbilisi", "<+04>-4" },
+    { "Asia/Yerevan", "<+04>-4" },
+    { "Asia/Baku", "<+04>-4" },
+    { "Asia/Tashkent", "<+05>-5" },
+    { "Asia/Almaty", "<+05>-5" },
+    { "Asia/Dubai", "<+04>-4" },
+    { "Asia/Kolkata", "IST-5:30" },
+    { "Asia/Calcutta", "IST-5:30" },
+    { "Asia/Shanghai", "CST-8" },
+    { "Asia/Hong_Kong", "HKT-8" },
+    { "Asia/Taipei", "CST-8" },
+    { "Asia/Singapore", "<+08>-8" },
+    { "Asia/Kuala_Lumpur", "<+08>-8" },
+    { "Asia/Bangkok", "<+07>-7" },
+    { "Asia/Ho_Chi_Minh", "<+07>-7" },
+    { "Asia/Jakarta", "WIB-7" },
+    { "Asia/Manila", "PST-8" },
+    { "Asia/Tokyo", "JST-9" },
+    { "Asia/Seoul", "KST-9" },
+    { "Asia/Jerusalem", "IST-2IDT,M3.4.4/26,M10.5.0" },
+    { "Africa/Johannesburg", "SAST-2" },
+    { "Africa/Lagos", "WAT-1" },
+    { "Africa/Nairobi", "EAT-3" },
+    { "America/New_York", "EST5EDT,M3.2.0,M11.1.0" },
+    { "America/Detroit", "EST5EDT,M3.2.0,M11.1.0" },
+    { "America/Toronto", "EST5EDT,M3.2.0,M11.1.0" },
+    { "America/Chicago", "CST6CDT,M3.2.0,M11.1.0" },
+    { "America/Winnipeg", "CST6CDT,M3.2.0,M11.1.0" },
+    { "America/Denver", "MST7MDT,M3.2.0,M11.1.0" },
+    { "America/Edmonton", "MST7MDT,M3.2.0,M11.1.0" },
+    { "America/Phoenix", "MST7" },
+    { "America/Los_Angeles", "PST8PDT,M3.2.0,M11.1.0" },
+    { "America/Vancouver", "PST8PDT,M3.2.0,M11.1.0" },
+    { "America/Anchorage", "AKST9AKDT,M3.2.0,M11.1.0" },
+    { "America/Halifax", "AST4ADT,M3.2.0,M11.1.0" },
+    { "Pacific/Honolulu", "HST10" },
+    { "America/Mexico_City", "CST6" },
+    { "America/Sao_Paulo", "<-03>3" },
+    { "America/Argentina/Buenos_Aires", "<-03>3" },
+    { "America/Bogota", "<-05>5" },
+    { "America/Lima", "<-05>5" },
+    { "Australia/Sydney", "AEST-10AEDT,M10.1.0,M4.1.0/3" },
+    { "Australia/Melbourne", "AEST-10AEDT,M10.1.0,M4.1.0/3" },
+    { "Australia/Hobart", "AEST-10AEDT,M10.1.0,M4.1.0/3" },
+    { "Australia/Brisbane", "AEST-10" },
+    { "Australia/Adelaide", "ACST-9:30ACDT,M10.1.0,M4.1.0/3" },
+    { "Australia/Darwin", "ACST-9:30" },
+    { "Australia/Perth", "AWST-8" },
+    { "Pacific/Auckland", "NZST-12NZDT,M9.5.0,M4.1.0/3" },
+};
+static const char *tz_from_iana(const char *n)
+{
+    if (!n || !strchr(n, '/')) return strcmp(n ? n : "", "UTC") ? NULL : "UTC0";
+    for (size_t i = 0; i < sizeof(TZ_IANA) / sizeof(TZ_IANA[0]); i++) if (!strcasecmp(n, TZ_IANA[i].iana)) return TZ_IANA[i].posix;
+    return NULL;
+}
 /* Validate the extra sections into norm; false = fail set. */
 static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *diff, cJSON *warn)
 {
@@ -2537,6 +2663,13 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
         const cJSON *jtz = cJSON_GetObjectItem(rg, "timezone");
         if (jtz) {
             const char *tz = cJSON_GetStringValue(jtz);
+            const char *iana = NULL;
+            if (tz && strchr(tz, '/')) {   /* an IANA name: take its POSIX rule from the table, never a guess */
+                const char *px = tz_from_iana(tz);
+                if (!px) { snprintf(m, sizeof(m), "region.timezone: \"%.40s\" is not in the hub's zone table", tz);
+                           fail(cx, "invalid_args", m, "Pass the POSIX TZ string for that place, or the IANA name of a nearby city in the same zone (e.g. Europe/Berlin, America/New_York)."); return false; }
+                iana = tz; tz = px;
+            }
             if (!tz || !tz[0] || strlen(tz) > 31 || !rbtime_timezone_is_valid(tz)) {
                 fail(cx, "invalid_args", "region.timezone: a POSIX TZ string with its offset", "E.g. \"CET-1CEST,M3.5.0,M10.5.0/3\" (Berlin), \"EET-2EEST,M3.5.0/3,M10.5.0/4\" (Kyiv), \"MSK-3\", \"CST-8\" (China), \"<+04>-4\"."); return false;
             }
@@ -2545,6 +2678,7 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
                 cJSON *ng = cJSON_GetObjectItem(norm, "region"); if (!ng) ng = cJSON_AddObjectToObject(norm, "region");
                 cJSON_AddStringToObject(ng, "timezone", tz);
                 dadd(diff, "region.timezone", tc.timezone, tz);
+                if (iana) { char wv[120]; snprintf(wv, sizeof(wv), "%.40s is stored as its rule %s.", iana, tz); cJSON_AddItemToArray(warn, cJSON_CreateString(wv)); }
                 cJSON_AddItemToArray(warn, cJSON_CreateString("From now on days, yesterday/last week and tariff zones follow the new time zone. Hourly figures already stored are kept by their instant, so they show at their new local hours; closed days, weeks and months keep the day boundaries of the old time zone; costs already booked keep the zone and price they were booked at."));
             }
         }
@@ -3619,7 +3753,7 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(f, "description", "patch.peaks_reset: true clears the current cycle's import peaks (cannot be undone).");
     } else if (!strcmp(sec, "region")) {
         cJSON *f = cJSON_AddObjectToObject(w, "timezone"); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 31);
-        cJSON_AddStringToObject(f, "description", "patch.region.timezone: POSIX TZ with its offset and DST rule, e.g. CET-1CEST,M3.5.0,M10.5.0/3 (Berlin, Paris), EET-2EEST,M3.5.0/3,M10.5.0/4 (Kyiv, Helsinki), GMT0BST,M3.5.0/1,M10.5.0 (London), MSK-3 (Moscow), CST-8 (China), <+04>-4. Note the sign: east of UTC is negative.");
+        cJSON_AddStringToObject(f, "description", "patch.region.timezone: an IANA name (Europe/Lisbon, America/New_York: the hub turns common ones into their rule) or a POSIX TZ with its offset and DST rule, e.g. CET-1CEST,M3.5.0,M10.5.0/3 (Berlin, Paris), EET-2EEST,M3.5.0/3,M10.5.0/4 (Kyiv, Helsinki), GMT0BST,M3.5.0/1,M10.5.0 (London), MSK-3 (Moscow), CST-8 (China), <+04>-4. Note the sign: east of UTC is negative.");
         f = cJSON_AddObjectToObject(w, "nominal_voltage"); cJSON_AddStringToObject(f, "type", "number"); cJSON_AddNumberToObject(f, "minimum", 90); cJSON_AddNumberToObject(f, "maximum", 260);
         cJSON_AddStringToObject(f, "description", "patch.region.nominal_voltage: mains line-to-neutral volts (230 Europe, 220 China/CIS, 120 North America, 100 Japan); used for channels that measure current only. Full effect after restart_hub.");
         f = cJSON_AddObjectToObject(w, "nominal_frequency"); cJSON_AddStringToObject(f, "type", "integer"); cJSON *fe = cJSON_AddArrayToObject(f, "enum");
