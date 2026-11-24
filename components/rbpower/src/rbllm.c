@@ -117,6 +117,7 @@ void rbllm_register_events_reader(char *(*fn)(uint32_t, uint32_t, int)) { s_even
 static char *(*s_i2c_action)(const struct cJSON *, int *);
 void rbllm_register_i2c_action(char *(*fn)(const struct cJSON *, int *)) { s_i2c_action = fn; }
 bool rbwebserver_ui_lang_code(char out[3]);   /* rbwebserver_ui.c */
+bool rbgrid_ap_user_password(char *out, size_t n);   /* rbwebserver_wifi.c: true = the user set the AP password */
 bool rbwebserver_ui_kit_version(char *out, size_t n);   /* rbwebserver_ui.c */
 static int (*s_modfw_status)(char *, size_t);
 void rbllm_register_modfw_status(int (*fn)(char *out, size_t cap)) { s_modfw_status = fn; }
@@ -851,7 +852,7 @@ static cJSON *t_get_hub_info(const cJSON *a, rbllm_cx_t *cx)
     }
     {   /* kept on the hub's own page on purpose: they change the assistant's own access or link, or need a file */
         cJSON *hp = cJSON_AddArrayToObject(r, "hub_page_only");
-        const char *const HP[] = { "wifi", "admin_password", "assistant_access", "firmware_update", "factory_reset", "backup_restore", "language_pack", "mqtt_ca" };
+        const char *const HP[] = { "wifi", "admin_password", "assistant_access", "firmware_update", "factory_reset", "backup_restore", "language_pack", "mqtt_ca", "read_only" };
         for (size_t q = 0; q < sizeof(HP) / sizeof(HP[0]); q++) cJSON_AddItemToArray(hp, cJSON_CreateString(HP[q]));
     }
     cx->as_of = n;
@@ -1855,6 +1856,32 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
             free(tt);
             cx->open_cost_exact = false;   /* a money detail of totals(), not part of this answer */
         }
+    }
+    {   /* a point that is live but has stored nothing for a day: its energy is missing from every report */
+        uint32_t up_s = (uint32_t)(esp_timer_get_time() / 1000000);
+        if (up_s > 7200) {
+            bool sel2[RBLLM_MAX_POINTS]; int k2 = 0;
+            for (int i = 0; i < n; i++) { sel2[i] = p[i].present; k2 += sel2[i]; }
+            tot_t *t2 = k2 ? calloc(RBLLM_MAX_POINTS, sizeof(tot_t)) : NULL;
+            uint32_t to = now_s(), from = to > 86400 ? to - 86400 : 0;
+            if (t2 && totals(cx, p, n, sel2, from, to, t2)) {
+                for (int i = 0; i < n; i++) {
+                    if (!sel2[i] || t2[i].any) continue;
+                    uid_hex(p[i].unit_id, h);
+                    snprintf(ev, sizeof(ev), "'%.40s' is live (%.0f W now) but has no stored record in the last 24 h, so its energy is missing from every report.", p[i].name, p[i].p_w);
+                    finding(f, "channel_no_history", "warning", h, ev, "The point's records are not being written: note the time and report it; a restart (restart_hub) may resume writing. get_events {source: log} shows storage errors.");
+                }
+            }
+            free(t2);
+            cx->open_cost_exact = false;
+        }
+    }
+    {   /* the hub's own Wi-Fi access point still uses the printed setup password */
+        char apw[72];
+        if (!rbgrid_ap_user_password(apw, sizeof(apw)))
+            finding(f, "ap_password_default", "warning", NULL, "The hub's own Wi-Fi access point still uses the setup password printed for all hubs, so anyone nearby who knows it can join the hub's network.",
+                    "Ask the user to set their own access point password on the hub's Wi-Fi page (get_hub_info.hub_page_only: wifi).");
+        memset(apw, 0, sizeof(apw));
     }
     rbgrid_tariff_now_t tn; rbgrid_core_tariff_now(&tn);
     if (tn.placeholder) finding(f, "tariff_not_set", "warning", NULL, "No tariff plan is saved; every money figure is computed off a demo plan and is not the user's cost.", "Ask the user for their tariff and enter it with propose_config {tariff}.");
@@ -3193,6 +3220,7 @@ static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddItemToObject(r, "diff", diff);
     cJSON_AddItemToObject(r, "warnings", w2);
     cJSON_AddBoolToObject(r, "restart_required", patch_restarts_hub(norm));
+    if (S.read_only) { cJSON_AddTrueToObject(r, "read_only"); note(cx, "The hub is in read-only mode: this diff cannot be applied until the user switches read-only off on the hub's AI / LLM page."); }
     cJSON_AddBoolToObject(r, "module_restart", patch_restarts_module(norm));
     cJSON_AddStringToObject(r, "confirm_token", tok);
     cJSON_AddNumberToObject(r, "expires_in", PROP_TTL_S);
@@ -4870,11 +4898,10 @@ char *rbllm_call(const char *body, size_t len, const rbllm_caller_t *caller, int
         else if (!(cx.scopes & t->scope)) {
             char m[64]; snprintf(m, sizeof(m), "the tool needs scope '%s'", t->scope == RBLLM_SCOPE_CONFIG ? "config" : "read");
             fail(&cx, "forbidden_scope", m, "Pair again with that scope on the hub's AI / LLM page.");
-        } else if (S.read_only && !cx.internal && (!strcmp(t->name, "apply_config") || !strcmp(t->name, "rollback_config") || !strcmp(t->name, "propose_config") ||
-                                                 !strcmp(t->name, "add_module") || !strcmp(t->name, "set_module_address") || !strcmp(t->name, "create_point") ||
-                                                 !strcmp(t->name, "move_point") || !strcmp(t->name, "set_bus_pins") || !strcmp(t->name, "restart_hub") ||
-                                                 !strcmp(t->name, "delete_point") || !strcmp(t->name, "set_module_bus") || !strcmp(t->name, "node_action")))
-            fail(&cx, "read_only_mode", "the hub is in read-only mode for LLM clients", "The user can switch read-only off on the hub's AI / LLM page.");
+        } else if (S.read_only && !cx.internal && t->scope == RBLLM_SCOPE_CONFIG &&   /* every writer; reads and the preview stay */
+                   strcmp(t->name, "get_config") && strcmp(t->name, "get_config_schema") && strcmp(t->name, "list_config_versions") && strcmp(t->name, "propose_config"))
+            fail(&cx, "read_only_mode", "the hub is in read-only mode for LLM clients: the user switched changes by assistants off",
+                 "Only the user can switch read-only off, on the hub's AI / LLM page (get_hub_info.hub_page_only: read_only). propose_config still checks a change and shows its diff.");
         else if (!cJSON_IsObject(args)) fail(&cx, "invalid_args", "'args' must be an object", NULL);
         else if (check_args(&cx, t, args)) res = t->fn(args, &cx);
         cJSON_Delete(empty);
