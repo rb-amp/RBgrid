@@ -3119,6 +3119,41 @@ static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
         patch = own;
     } else if (!cJSON_IsObject(patch)) { cJSON_Delete(cur); return fail(cx, "invalid_args", "patch must be an object", NULL); }
     cJSON *diff = cJSON_CreateArray(), *warn = cJSON_CreateArray();
+    {   /* tariff.prices_from_bill: the zone buy prices are the bill's per-kWh price (VAT and per-kWh fees included);
+         * the plan stores the energy price, so turn each one back: net = gross / (1 + VAT/100) - fees */
+        const cJSON *ptf = cJSON_GetObjectItem(patch, "tariff"), *pfb = cJSON_GetObjectItem(ptf, "prices_from_bill");
+        if (pfb) {
+            if (!cJSON_IsBool(pfb)) { cJSON_Delete(diff); cJSON_Delete(warn); cJSON_Delete(own); cJSON_Delete(cur); return fail(cx, "invalid_args", "tariff.prices_from_bill: true or false", NULL); }
+            cJSON *cp = cJSON_Duplicate(patch, true);
+            cJSON *t2 = cJSON_GetObjectItem(cp, "tariff");
+            cJSON_DeleteItemFromObject(t2, "prices_from_bill");
+            if (cJSON_IsTrue(pfb)) {
+                const rbpower_tariff_plan_t *tp = rbpower_tariff_get_current_plan();
+                #define PFB_NUM(key, dflt) (cJSON_IsNumber(cJSON_GetObjectItem(t2, key)) ? cJSON_GetObjectItem(t2, key)->valuedouble : (double)(dflt))
+                double vat = PFB_NUM("vat_percent", tp ? tp->vat_percent : 0);
+                double fees = PFB_NUM("energy_tax_per_kwh", tp ? tp->energy_tax_per_kwh : 0) + PFB_NUM("grid_fee_per_kwh", tp ? tp->grid_usage_fee_per_kwh : 0) +
+                              PFB_NUM("levy_per_kwh", tp ? tp->renewable_levy_per_kwh : 0);
+                #undef PFB_NUM
+                cJSON *z; int nconv = 0;
+                cJSON_ArrayForEach(z, cJSON_GetObjectItem(t2, "zones")) {
+                    cJSON *b = cJSON_GetObjectItem(z, "buy_per_kwh");
+                    if (!cJSON_IsNumber(b)) continue;
+                    double net = b->valuedouble / (1.0 + vat / 100.0) - fees;
+                    if (net < 0) {
+                        char m[160]; snprintf(m, sizeof(m), "tariff.zones.%.20s.buy_per_kwh: %.4f from the bill is less than the fees and VAT alone", z->string, b->valuedouble);
+                        cJSON_Delete(cp); cJSON_Delete(diff); cJSON_Delete(warn); cJSON_Delete(own); cJSON_Delete(cur);
+                        return fail(cx, "invalid_args", m, "Check the VAT and per-kWh fees in the plan (get_config tariff); with prices_from_bill the hub subtracts them.");
+                    }
+                    char wv[200]; snprintf(wv, sizeof(wv), "Zone %.20s: %.4f from the bill is stored as the energy price %.4f (divided by %.0f%% VAT, minus %.4f fees per kWh); the cost adds them back.", z->string, b->valuedouble, net, vat, fees);
+                    cJSON_AddItemToArray(warn, cJSON_CreateString(wv));
+                    cJSON_SetNumberValue(b, round(net * 10000.0) / 10000.0);
+                    nconv++;
+                }
+                if (!nconv) { cJSON_Delete(cp); cJSON_Delete(diff); cJSON_Delete(warn); cJSON_Delete(own); cJSON_Delete(cur); return fail(cx, "invalid_args", "tariff.prices_from_bill: no zone buy_per_kwh in this patch to convert", NULL); }
+            }
+            cJSON_Delete(own); own = cp; patch = own;
+        }
+    }
     cJSON *norm = check_patch(cx, patch, cur, diff, warn);
     cJSON_Delete(own); cJSON_Delete(cur);
     if (!norm) { cJSON_Delete(diff); cJSON_Delete(warn); return NULL; }
@@ -3403,7 +3438,9 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
         for (int q = 0; q < 4; q++) { f = cJSON_AddObjectToObject(w, NN[q].k); cJSON_AddStringToObject(f, "type", "number"); cJSON_AddNumberToObject(f, "minimum", 0); cJSON_AddNumberToObject(f, "maximum", NN[q].hi); cJSON_AddStringToObject(f, "description", NN[q].d); }
         f = cJSON_AddObjectToObject(w, "zones");
         cJSON_AddStringToObject(f, "type", "object");
-        cJSON_AddStringToObject(f, "description", "{<zone>: {buy_per_kwh?, sell_per_kwh?, window?, days?, priority?, enabled?}}. Zone types: night, morning_peak, day, evening_peak, late_evening, weekend, holiday, critical_peak. Prices 0..100 per kWh before fees and VAT; window \"HH:MM-HH:MM\" (15-min grid, [from,to), wraps midnight); days \"mon-fri\", \"sat,sun\" or \"all\"; priority 1..100 (higher wins on overlap); enabled:false removes a zone. A zone the plan lacks is added: it needs buy_per_kwh and a window and/or days.");
+        cJSON_AddStringToObject(f, "description", "{<zone>: {buy_per_kwh?, sell_per_kwh?, window?, days?, priority?, enabled?}}. Zone types: night, morning_peak, day, evening_peak, late_evening, weekend, holiday, critical_peak. Prices 0..100 per kWh before fees and VAT (a price read off the bill includes them: send it as is with prices_from_bill:true); window \"HH:MM-HH:MM\" (15-min grid, [from,to), wraps midnight); days \"mon-fri\", \"sat,sun\" or \"all\"; priority 1..100 (higher wins on overlap); enabled:false removes a zone. A zone the plan lacks is added: it needs buy_per_kwh and a window and/or days.");
+        f = cJSON_AddObjectToObject(w, "prices_from_bill"); cJSON_AddStringToObject(f, "type", "boolean");
+        cJSON_AddStringToObject(f, "description", "true when the zone buy prices in this patch are the per-kWh price from the bill (VAT and per-kWh fees included), which is what a user reads; the hub divides by 1 + VAT/100 and subtracts the fees before storing. Leave it out for prices before fees and VAT. sell_per_kwh is not converted.");
         f = cJSON_AddObjectToObject(w, "default_zone"); cJSON_AddStringToObject(f, "type", "string");
         cJSON_AddStringToObject(f, "description", "The zone for hours no other zone covers.");
         note(cx, "A flat tariff on a two-zone plan: give every zone the same price.");
@@ -3642,6 +3679,9 @@ static cJSON *i2c_fail(rbllm_cx_t *cx, cJSON *rep, int st)
     else if (strstr(msg, "not present")) code = "module_not_found";
     else if (strstr(msg, "not confirmed by UID") || strstr(msg, "may still answer")) code = "module_silent";
     else if (strstr(msg, "out of 0x08")) code = "address_out_of_range";
+    if (strstr(msg, "is not running") || !strcmp(msg, "ESP_ERR_INVALID_STATE"))
+        return fail(cx, "conflict", "I2C bus 1 is not running: it has no pins yet, so nothing on it can be scanned, added or read",
+                    "Ask which GPIO pins the bus-1 connector uses (SDA, SCL), call set_bus_pins, then restart_hub after the user agrees, then scan_modules {bus: 1}.");
     return fail(cx, code, msg, st == 409 || !strcmp(code, "address_taken") ? "Call scan_modules to see what answers on the bus, then pick a free address." : NULL);
 }
 static void modules_view(cJSON *out, const cJSON *state)
@@ -3674,10 +3714,16 @@ static cJSON *t_scan_modules(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddNumberToObject(bo, "bus", bus);
         if (st != 200 || !rep) {
             const char *m = rep ? cJSON_GetStringValue(cJSON_GetObjectItem(rep, "message")) : NULL;
+            bool stopped = !m || !m[0] || !strcmp(m, "ESP_ERR_INVALID_STATE");   /* no pins: the bus was never started */
             cJSON_AddBoolToObject(bo, "running", false);
-            cJSON_AddStringToObject(bo, "reason", m && m[0] ? m : "bus not running");
+            cJSON_AddStringToObject(bo, "reason", stopped ? "no pins set: nothing on this bus can be scanned, added or read until set_bus_pins and a restart" : m);
+            if (cJSON_IsNumber(ba)) {
+                cJSON *rr = stopped ? NULL : rep; if (stopped) cJSON_Delete(rep);
+                cJSON_Delete(bo); cJSON_Delete(r);
+                if (stopped) { cJSON *fake = cJSON_CreateObject(); cJSON_AddStringToObject(fake, "message", "bus 1 is not running"); return i2c_fail(cx, fake, 409); }
+                return i2c_fail(cx, rr, st);
+            }
             cJSON_Delete(rep); cJSON_AddItemToArray(bl, bo);
-            if (cJSON_IsNumber(ba)) { cJSON_Delete(r); return i2c_fail(cx, NULL, st); }
             continue;
         }
         any = true;
@@ -3921,6 +3967,11 @@ static cJSON *t_create_point(const cJSON *a, rbllm_cx_t *cx)
     const char *bound = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
     if (bound) { snprintf(msg, sizeof(msg), "input %s of module %d already carries point %s", lb, m, bound); cJSON_Delete(sl); return fail(cx, "conflict", msg, "Rename that point with propose_config, or pick a free input."); }
     int code = -1;
+    if (!ctm && !strcmp(clamp_kind(mo), "selectable")) {   /* a guessed rating would mis-book every watt from now on, with no recount */
+        cJSON_Delete(sl);
+        return fail(cx, "invalid_args", "ct_model: this module takes clamps of several ratings; the model printed on the clamp is needed",
+                    "Ask the user to read the model on the clamp (e.g. SCT-013-030) and pass it as ct_model; list_module_inputs lists ct_models.");
+    }
     if (ctm) {
         if (strcmp(clamp_kind(mo), "selectable")) { cJSON_Delete(sl); return fail(cx, "invalid_args", "this module's clamps are calibrated with it: no clamp model to choose", "Leave ct_model out."); }
         code = ct_code_of(ctm);
@@ -4443,7 +4494,7 @@ static const rbllm_tool_t TOOLS[] = {
       "supply type; the MQTT broker and telemetry format; the dynamic price provider; or to undo a change. What it returns: the diff, warnings, restart_required and a one-time confirm_token (10 min). Changes "
       "nothing; show the diff and ask the user.",
       "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,short_name?,role?,inside?,ct_model?,phase?,rated_power_w?,max_current_a?,charge_threshold_w?,idle_timeout_min?}}, "
-      "tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,default_zone?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?,window?,days?,priority?,enabled?}}}, "
+      "tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,default_zone?,prices_from_bill?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?,window?,days?,priority?,enabled?}}}, "
       "peaks_cycle_day?, peaks_reset?, price_rules?:[...], price_signal?:{...}, region?:{timezone?,nominal_voltage?,nominal_frequency?}, hub?:{name?,location?,grid_system?}, mqtt?:{broker_uri}, telemetry?:{profile?,frame?}, dynamic_price?:{...}}; get_config_schema per section\"},"
       "\"rollback_to\":{\"type\":\"integer\",\"description\":\"a version from list_config_versions\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"restart_required\":{\"type\":\"boolean\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"},\"base_version\":{\"type\":\"integer\"}}}",
@@ -4601,6 +4652,7 @@ static const char *const PLAYBOOKS[] = {
     "\"ask_user\":[\"Which appliances are running now?\"],\"rules\":[\"A missing module or a channel that is not present comes first.\","
     "\"A reversed clamp is fixed at the clamp; never suggest a software sign flip.\",\"Answer in the user's language.\"]}",
     "{\"id\":\"first_setup\",\"title\":\"First setup of a new hub\",\"steps\":[{\"tool\":\"get_hub_info\"},{\"tool\":\"get_health\"},"
+    "{\"tool\":\"set_bus_pins\",\"when\":\"a module is connected to bus 1 and get_health shows bus 1 running=false: set its pins first, then restart_hub after the user agrees\"},"
     "{\"tool\":\"scan_modules\",\"args_hint\":{\"bus\":0},\"repeat\":\"after each module the user connects\"},"
     "{\"tool\":\"add_module\",\"args_hint\":{\"bus\":0,\"address\":\"0x50\"},\"when\":\"scan shows a module with added=false\"},"
     "{\"tool\":\"set_module_address\",\"args_hint\":{\"module\":0,\"address\":\"0x51\"},\"when\":\"the module sits at 0x50; use the bus's next_free_address\"},"
@@ -4608,7 +4660,6 @@ static const char *const PLAYBOOKS[] = {
     "{\"tool\":\"create_point\",\"args_hint\":{\"module\":1,\"input\":\"I0\",\"name\":\"Kitchen\"},\"when\":\"for each current input in use without a point; ct_model only when clamp=selectable\"},"
     "{\"tool\":\"list_channels\"},{\"tool\":\"move_point\",\"when\":\"the main_supply point is not on the input with the grid clamp\"},"
     "{\"tool\":\"identify_channel\",\"args_hint\":{\"action\":\"start\"},\"when\":\"to tell which clamp is which\"},"
-    "{\"tool\":\"set_bus_pins\",\"when\":\"modules go on bus 1 and it is not running; then restart_hub after the user agrees\"},"
     "{\"tool\":\"propose_config\",\"when\":\"rename points, change roles or clamp models, enter the tariff\"},{\"tool\":\"check_installation\"}],"
     "\"ask_user\":[\"Connect ONE module now (cable to the hub, module powered) and tell me when it is done.\",\"Which inputs of this module have a clamp, and what does each one measure?\","
     "\"Which clamp model is printed on it?\",\"Which clamp sits on the grid feed (the main supply)?\"],"
