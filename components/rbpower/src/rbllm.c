@@ -1989,6 +1989,33 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
             free(tt);
         }
     }
+    {   /* a generation point that books mostly consumption: its clamp faces the wrong way, so production lands in energy_kwh
+         * (live power positive, the same side as its kWh). ct_reversed covers loads only; storage is two-way and is left out. */
+        bool selg[RBLLM_MAX_POINTS] = { false }; int ng = 0;
+        for (int i = 0; i < n; i++)
+            if (p[i].present && (p[i].role == RBPOWER_ROLE_RENEWABLE_SOURCE || p[i].role == RBPOWER_ROLE_ALTERNATIVE_SUPPLY)) { selg[i] = true; ng++; }
+        tot_t *tg = ng ? calloc(RBLLM_MAX_POINTS, sizeof(tot_t)) : NULL;
+        bool okg = false;
+        if (tg) {
+            uint32_t to = now_s(), from = local_add(local_floor(to, 'd'), 'd', -7);
+            CX_QUIET_BEGIN(cx);
+            okg = totals(cx, p, n, selg, from, to, tg);
+            CX_QUIET_END(cx);
+        }
+        for (int i = 0; i < n; i++) {
+            if (!selg[i]) continue;
+            uid_hex(p[i].unit_id, h);
+            if (okg && tg[i].any && tg[i].e_in > 2000.0 && tg[i].e_out < 0.1 * tg[i].e_in) {
+                snprintf(ev, sizeof(ev), "Generation point '%.40s' took %.1f kWh and delivered %.1f kWh in the last 7 days: its production is booked as consumption.",
+                         p[i].name, tg[i].e_in / 1000.0, tg[i].e_out / 1000.0);
+                finding(f, "generation_reversed", "warning", h, ev, "Turn this clamp round on the generator's wire. Until then its production counts as consumption in every report.");
+            } else if (p[i].p_w > 200.0f) {
+                snprintf(ev, sizeof(ev), "Generation point '%.40s' reads %.0f W (positive, the consumption side) right now.", p[i].name, p[i].p_w);
+                finding(f, "generation_reversed", "info", h, ev, "If the generator is producing now, its clamp faces the wrong way: turn it round. A software sign flip is not the fix.");
+            }
+        }
+        free(tg);
+    }
     {   /* a point that is live but has stored nothing for a day: its energy is missing from every report */
         uint32_t up_s = (uint32_t)(esp_timer_get_time() / 1000000);
         if (up_s > 7200) {
@@ -4884,7 +4911,7 @@ static const rbllm_tool_t TOOLS[] = {
     { "check_installation", RBLLM_SCOPE_READ,
       "When to call: after setup, or when numbers look wrong. What it returns: findings {type, severity, channel, evidence, fix_hint}: "
       "no_main_supply, channel_absent, channel_no_history, module_missing, module_without_points, module_uncalibrated, "
-      "module_on_factory_address, no_voltage, ct_reversed, ct_rating_mismatch, sum_mismatch, generation_not_configured, clock_unsynced, "
+      "module_on_factory_address, no_voltage, ct_reversed, ct_rating_mismatch, sum_mismatch, generation_not_configured, generation_reversed, clock_unsynced, "
       "timezone_not_set, timezone_implausible, tariff_not_set, ap_password_default, unexpected_restart. Detects only; a reversed clamp is fixed at the clamp.",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"severity\":{\"type\":\"string\"},\"fix_hint\":{\"type\":\"string\"}}}}}}",
