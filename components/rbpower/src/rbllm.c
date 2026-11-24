@@ -4422,7 +4422,7 @@ static cJSON *t_set_point_slug(const cJSON *a, rbllm_cx_t *cx)
         const char *code = rj ? cJSON_GetStringValue(cJSON_GetObjectItem(rj, "code")) : NULL;
         const char *em = rj ? cJSON_GetStringValue(cJSON_GetObjectItem(rj, "message")) : NULL;
         char msg[160]; snprintf(msg, sizeof(msg), "%.120s", em ? em : "the hub refused the slug");
-        const char *hint = code && !strcmp(code, "POINT_TOMBSTONED") ? "This slug belonged to a deleted point; reuse:true gives it (and its Home Assistant history) to this point - ask the user first." : NULL;
+        const char *hint = code && !strcmp(code, "POINT_TOMBSTONED") ? "This slug is retired: a deleted point had it, or a point had it before a rename. reuse:true gives it (and its Home Assistant history) to this point - ask the user first." : NULL;
         cJSON_Delete(rj);
         return fail(cx, st == 409 ? "conflict" : st == 404 ? "not_found" : "invalid_args", msg, hint);
     }
@@ -4687,9 +4687,10 @@ static const rbllm_tool_t TOOLS[] = {
       t_set_module_drdy },
     { "set_point_slug", RBLLM_SCOPE_CONFIG,
       "When to call: when the user wants a point's machine name changed (the 'point' slug in list_channels, used in MQTT topics and Home "
-      "Assistant entity ids). The display name is changed with propose_config instead. What it does: renames the slug.",
+      "Assistant entity ids). The display name is changed with propose_config instead. What it does: renames the slug. The old slug is "
+      "retired, so it cannot be given back, even to this point, without reuse:true.",
       "{\"type\":\"object\",\"properties\":{\"channel\":{\"type\":\"string\",\"description\":\"id from list_channels\"},\"point\":{\"type\":\"string\",\"pattern\":\"^[a-z0-9_.-]{1,32}$\"},"
-      "\"reuse\":{\"type\":\"boolean\",\"description\":\"take over the slug of a deleted point\"}},\"required\":[\"channel\",\"point\"],\"additionalProperties\":false}",
+      "\"reuse\":{\"type\":\"boolean\",\"description\":\"take over a retired slug (a deleted point's, or one renamed away)\"}},\"required\":[\"channel\",\"point\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"renamed\":{\"type\":\"boolean\"},\"channel\":{\"type\":\"string\"},\"point\":{\"type\":\"string\"}}}",
       t_set_point_slug },
     { "forget_me", RBLLM_SCOPE_READ,
