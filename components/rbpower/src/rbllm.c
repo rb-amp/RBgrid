@@ -2672,7 +2672,9 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
         if (jtz) {
             const char *tz = cJSON_GetStringValue(jtz);
             const char *iana = NULL;
-            if (tz && (strchr(tz, '/') || !strcmp(tz, "UTC"))) {   /* an IANA name: take its POSIX rule from the table, never a guess */
+            /* an IANA name is Area/City: a slash and no comma (a POSIX rule has its slashes only inside its comma-separated
+             * DST rules, e.g. CET-1CEST,M3.5.0,M10.5.0/3) */
+            if (tz && ((strchr(tz, '/') && !strchr(tz, ',') && !strchr(tz, '<')) || !strcmp(tz, "UTC"))) {   /* an IANA name: take its POSIX rule from the table, never a guess */
                 const char *px = tz_from_iana(tz);
                 if (!px) { snprintf(m, sizeof(m), "region.timezone: \"%.40s\" is not in the hub's zone table", tz);
                            fail(cx, "invalid_args", m, "Pass the POSIX TZ string for that place, or the IANA name of a nearby city in the same zone (e.g. Europe/Berlin, America/New_York)."); return false; }
