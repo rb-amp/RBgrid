@@ -4421,7 +4421,8 @@ static const rbllm_tool_t TOOLS[] = {
       t_list_channels },
     { "read_live", RBLLM_SCOPE_READ,
       "When to call: for what is happening right now. What it returns: the grid power (positive = import) and per channel the power in W, "
-      "current in A and voltage in V, from the hub's 3-second data.",
+      "current in A and voltage in V, from the hub's 3-second data. A load channel reading negative power has its clamp facing the wrong "
+      "way (on a BASIC module that energy is not booked at all, so the load looks small).",
       "{\"type\":\"object\",\"properties\":{\"channels\":" S_CHANNELS "},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"grid\":{\"type\":\"object\"},\"channels\":{\"type\":\"array\"}}}",
       t_read_live },
@@ -4487,8 +4488,9 @@ static const rbllm_tool_t TOOLS[] = {
       t_get_import_export_balance },
     { "check_installation", RBLLM_SCOPE_READ,
       "When to call: after setup, or when numbers look wrong. What it returns: findings {type, severity, channel, evidence, fix_hint}: "
-      "no_main_supply, channel_absent, module_missing, no_voltage, ct_reversed, ct_rating_mismatch, sum_mismatch, clock_unsynced, "
-      "tariff_not_set. Detects only; a reversed clamp is fixed at the clamp.",
+      "no_main_supply, channel_absent, channel_no_history, module_missing, module_without_points, module_uncalibrated, "
+      "module_on_factory_address, no_voltage, ct_reversed, ct_rating_mismatch, sum_mismatch, generation_not_configured, clock_unsynced, "
+      "timezone_not_set, tariff_not_set, ap_password_default. Detects only; a reversed clamp is fixed at the clamp.",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"severity\":{\"type\":\"string\"},\"fix_hint\":{\"type\":\"string\"}}}}}}",
       t_check_installation },
