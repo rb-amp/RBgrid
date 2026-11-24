@@ -555,6 +555,13 @@ extern "C"
      */
     rbpower_unit_definition_t* rbgrid_config_unit_def_mutable(rbgrid_config_handle_t config, int unit_uid);
 
+    /**
+     * @brief Give every builder unit without a point slug one derived from its name (unique, not tombstoned).
+     * @param[in] config Configuration handle.
+     * @return Number of units that got a slug.
+     */
+    int rbgrid_config_backfill_points(rbgrid_config_handle_t config);
+
     // ========== TARIFF BUILDER ==========
 
     /**
