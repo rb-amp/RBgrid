@@ -1835,6 +1835,23 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
         if (!tc.timezone[0] || !strcmp(tc.timezone, "UTC0") || !strcmp(tc.timezone, "UTC"))
             finding(f, "timezone_not_set", "warning", NULL, "The hub's time zone is UTC (the default).",
                     "Ask where the hub is and set the time zone: propose_config {region: {timezone}}; days, yesterday/last week and tariff zones follow it.");
+        else if (rbtime_is_time_valid()) {   /* a zone set, but far from where the tariff's currency is used */
+            time_t tn0 = (time_t)now_s(); struct tm lt0; rbgrid_localtime_r(&tn0, &lt0);
+            double off_h = (double)(civil_seconds(&lt0) - (int64_t)tn0) / 3600.0;
+            static const struct { const char *cur; double lo, hi; } CZ[] = {
+                { "EUR", -1, 3 }, { "GBP", 0, 1 }, { "CHF", 1, 2 }, { "PLN", 1, 2 }, { "CZK", 1, 2 }, { "HUF", 1, 2 }, { "SEK", 1, 2 },
+                { "NOK", 1, 2 }, { "DKK", 1, 2 }, { "RON", 2, 3 }, { "BGN", 2, 3 }, { "UAH", 2, 3 }, { "TRY", 3, 3 }, { "RUB", 2, 12 },
+                { "CNY", 8, 8 }, { "JPY", 9, 9 }, { "KRW", 9, 9 }, { "INR", 5.5, 5.5 }, { "AUD", 8, 11 }, { "USD", -10, -4 }, { "CAD", -8, -2.5 } };
+            const char *cur = rbpower_tariff_currency();
+            for (size_t q = 0; cur && q < sizeof(CZ) / sizeof(CZ[0]); q++) {
+                if (strcmp(cur, CZ[q].cur)) continue;
+                if (off_h < CZ[q].lo - 0.01 || off_h > CZ[q].hi + 0.01) {
+                    snprintf(ev, sizeof(ev), "The time zone puts the hub at UTC%+.1f h, far from where %s is used; days and tariff zones are cut at those hours.", off_h, cur);
+                    finding(f, "timezone_implausible", "warning", NULL, ev, "Ask where the hub is; if the zone is wrong, propose_config {region: {timezone}}. A whole-hour error with clock.source internet is a zone error, not a clock error: do not use set_clock.");
+                }
+                break;
+            }
+        }
     }
     {   /* a module on the factory address: the next new module would collide with it */
         int ist = 0;
@@ -2445,7 +2462,7 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
                 cJSON *ng = cJSON_GetObjectItem(norm, "region"); if (!ng) ng = cJSON_AddObjectToObject(norm, "region");
                 cJSON_AddStringToObject(ng, "timezone", tz);
                 dadd(diff, "region.timezone", tc.timezone, tz);
-                cJSON_AddItemToArray(warn, cJSON_CreateString("Days, yesterday/last week and tariff zones follow the new time zone from now on; records already stored keep their time."));
+                cJSON_AddItemToArray(warn, cJSON_CreateString("From now on days, yesterday/last week and tariff zones follow the new time zone. Hourly figures already stored are kept by their instant, so they show at their new local hours; closed days, weeks and months keep the day boundaries of the old time zone; costs already booked keep the zone and price they were booked at."));
             }
         }
         const rbpower_extended_config_t *ecn = rbgrid_core_ext_cfg();
@@ -4507,7 +4524,7 @@ static const rbllm_tool_t TOOLS[] = {
       "When to call: after setup, or when numbers look wrong. What it returns: findings {type, severity, channel, evidence, fix_hint}: "
       "no_main_supply, channel_absent, channel_no_history, module_missing, module_without_points, module_uncalibrated, "
       "module_on_factory_address, no_voltage, ct_reversed, ct_rating_mismatch, sum_mismatch, generation_not_configured, clock_unsynced, "
-      "timezone_not_set, tariff_not_set, ap_password_default. Detects only; a reversed clamp is fixed at the clamp.",
+      "timezone_not_set, timezone_implausible, tariff_not_set, ap_password_default. Detects only; a reversed clamp is fixed at the clamp.",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"severity\":{\"type\":\"string\"},\"fix_hint\":{\"type\":\"string\"}}}}}}",
       t_check_installation },
