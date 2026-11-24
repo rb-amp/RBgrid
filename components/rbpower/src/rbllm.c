@@ -415,6 +415,23 @@ static uint32_t local_add(uint32_t ts, char unit, int n)
     return (uint32_t)rbgrid_mktime(&lt);
 }
 
+/* The same local wall time one calendar month earlier; a day past that month's end clamps to its last day
+ * (31 Mar -> 28/29 Feb), so a month baseline never runs into the month it is compared with. */
+static uint32_t local_month_back(uint32_t ts)
+{
+    time_t t = (time_t)ts;
+    struct tm lt;
+    rbgrid_localtime_r(&t, &lt);
+    lt.tm_mon -= 1;
+    if (lt.tm_mon < 0) { lt.tm_mon += 12; lt.tm_year -= 1; }
+    static const int DM[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    int y = lt.tm_year + 1900;
+    int dm = DM[lt.tm_mon] + (lt.tm_mon == 1 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0));
+    if (lt.tm_mday > dm) lt.tm_mday = dm;
+    lt.tm_isdst = -1;
+    return (uint32_t)rbgrid_mktime(&lt);
+}
+
 /* ============================================================================================ call context */
 
 typedef struct {
@@ -635,7 +652,9 @@ typedef struct {
     uint32_t  newest_hour_end;   /* end of the newest HOUR record seen (open-hour de-duplication) */
     bool      no_open;           /* leave the open hour out (exact-cost path) */
     double    open_cost, open_rev;   /* the estimate added for the open hour */
+    uint32_t  want_secs;         /* the span asked for (clipped to now) */
 } sum_ctx_t;
+#define PARTIAL_NOTE "Part of the period has no stored data (hub off or restarting, or the point added later): the figures cover only the recorded part, not the whole period."
 
 static int bucket_index(const sum_ctx_t *c, uint32_t ts)
 {
@@ -705,6 +724,7 @@ static void sum_range(sum_ctx_t *c, uint16_t u, uint32_t from, uint32_t to)
     uint32_t now = now_s();
     if (to > now) to = now;
     if (from >= to) return;
+    c->want_secs += to - from;
     if (now - from > DAY_DEPTH_S) {
         c->cx->gaps = true;
         note(c->cx, "Part of the range is older than the daily history (400 days); it was left out.");
@@ -744,6 +764,14 @@ static void sum_range(sum_ctx_t *c, uint16_t u, uint32_t from, uint32_t to)
         }
     }
     if (late(c->cx)) c->timed_out = true;
+}
+
+/* Records cover less of the span than asked: a day or hour the hub was off (a day record carries its covered seconds).
+ * Slack: the newest 15-min period not booked yet, plus a minute per hour for record jitter. */
+static bool sum_partial(const sum_ctx_t *c)
+{
+    uint32_t got = c->hour_secs + c->day_secs, tol = 1200u + c->want_secs / 3600u * 60u;
+    return got && c->want_secs > got + tol;
 }
 
 static double r4(double v) { return round(v * 10000.0) / 10000.0; }
@@ -805,6 +833,14 @@ static void add_period(cJSON *o, uint32_t from, uint32_t to)
 
 /* ============================================================================================ tools */
 
+/* The hub's name as the user set it (hub page / propose_config hub.name), else the device name: one name everywhere
+ * (get_hub_info, the manifest, the AI / LLM page's connect block). */
+static void hub_display_name(char *b, size_t n)
+{
+    const rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
+    rbgrid_json_context_t *jc = rbgrid_core_json_ctx();
+    utf8_clean(ec && ec->home_name && ec->home_name[0] ? ec->home_name : (jc && jc->device_info.device_name[0] ? jc->device_info.device_name : "RBgrid"), b, n);
+}
 static cJSON *t_get_hub_info(const cJSON *a, rbllm_cx_t *cx)
 {
     (void)a;
@@ -812,12 +848,7 @@ static cJSON *t_get_hub_info(const cJSON *a, rbllm_cx_t *cx)
     const esp_app_desc_t *ad = esp_app_get_description();
     char id[13]; rbllm_hub_id(id);
     cJSON_AddStringToObject(r, "hub_id", id);
-    rbgrid_json_context_t *jc = rbgrid_core_json_ctx();
-    {   /* the user's hub name (hub page / propose_config hub.name), as the app shows it */
-        const rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
-        char b[48]; utf8_clean(ec && ec->home_name && ec->home_name[0] ? ec->home_name : (jc && jc->device_info.device_name[0] ? jc->device_info.device_name : "RBgrid"), b, sizeof(b));
-        cJSON_AddStringToObject(r, "name", b);
-    }
+    { char b[48]; hub_display_name(b, sizeof(b)); cJSON_AddStringToObject(r, "name", b); }
     cJSON_AddStringToObject(r, "fw", ad ? ad->version : "");
     cJSON_AddStringToObject(r, "proto", RBLLM_PROTO);
 #if CONFIG_IDF_TARGET_ESP32S3
@@ -1223,8 +1254,9 @@ static cJSON *events_typed(uint32_t since, uint32_t lim, rbllm_cx_t *cx)
         case EV_CONFIG: {
             char b[40]; strlcpy(b, e->info, sizeof(b));
             char *bar = strchr(b, '|');
-            if (bar) { *bar = 0; cJSON_AddNumberToObject(d, "version", atoi(b)); cJSON_AddStringToObject(d, "source", bar + 1); }
-            snprintf(msg, sizeof(msg), "Configuration version %s saved (%s)", b, bar ? bar + 1 : "?");
+            if (bar) { *bar = 0; if (atoi(b) > 0) cJSON_AddNumberToObject(d, "version", atoi(b)); else cJSON_AddNullToObject(d, "version"); cJSON_AddStringToObject(d, "source", bar + 1); }
+            if (atoi(b) > 0) snprintf(msg, sizeof(msg), "Configuration version %s saved (%s)", b, bar ? bar + 1 : "?");
+            else snprintf(msg, sizeof(msg), "Configuration changed, not versioned (%s)", bar ? bar + 1 : "?");
             break; }
         case EV_MODULE_LOST: cJSON_AddStringToObject(d, "name", e->info); snprintf(msg, sizeof(msg), "No data from channel \"%s\"", e->info); break;
         case EV_MODULE_BACK: cJSON_AddStringToObject(d, "name", e->info); snprintf(msg, sizeof(msg), "Channel \"%s\" reports again", e->info); break;
@@ -1403,6 +1435,7 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
         } else { cJSON_AddNullToObject(tot, "energy_kwh"); cJSON_AddNullToObject(tot, "export_kwh"); }
         if (empty) { cx->gaps = true; note(cx, "Rows with null have no stored record (hub off, point added later, or beyond the history depth)."); }
         if (!c.hour_secs && !c.day_secs) cx->gaps = true;
+        else if (!empty && sum_partial(&c)) { cx->gaps = true; note(cx, PARTIAL_NOTE); }
         if (c.newest_end > newest) newest = c.newest_end;
         cJSON_AddItemToArray(arr, o);
         free(b);
@@ -1415,7 +1448,7 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
 }
 
 /* Totals per selected point over [from,to): fills the out arrays. Returns false on timeout. */
-typedef struct { double e_in, e_out, cost, rev; uint32_t newest; bool any; double open_cost, open_rev; } tot_t;
+typedef struct { double e_in, e_out, cost, rev; uint32_t newest; bool any; double open_cost, open_rev; bool partial; } tot_t;
 static bool totals(rbllm_cx_t *cx, const rbgrid_point_snap_t *p, int n, const bool sel[], uint32_t from, uint32_t to, tot_t *t)
 {
     for (int i = 0; i < n; i++) {
@@ -1425,7 +1458,8 @@ static bool totals(rbllm_cx_t *cx, const rbgrid_point_snap_t *p, int n, const bo
         sum_ctx_t c = { .b = &b, .nb = 1, .unit = 't', .cx = cx };
         sum_range(&c, p[i].unit_id, from, to);
         if (c.timed_out) return false;
-        t[i] = (tot_t){ b.e_in, b.e_out, b.cost, b.rev, c.newest_end, b.recs > 0, c.open_cost, c.open_rev };
+        t[i] = (tot_t){ b.e_in, b.e_out, b.cost, b.rev, c.newest_end, b.recs > 0, c.open_cost, c.open_rev, b.recs > 0 && sum_partial(&c) };
+        if (t[i].partial) { cx->gaps = true; note(cx, PARTIAL_NOTE); }
     }
     return true;
 }
@@ -1543,7 +1577,10 @@ static cJSON *t_compare_periods(const cJSON *a, rbllm_cx_t *cx)
     if (!parse_period(cx, cJSON_GetObjectItem(a, "a"), &af, &at)) return NULL;
     if (bl) {
         if (!strcmp(bl, "previous_period")) { bt = af; bf = af - (at - af); }
-        else if (!strcmp(bl, "previous_month")) { bf = local_add(local_floor(af, 'm'), 'm', -1); bt = bf + (at - af); }
+        else if (!strcmp(bl, "previous_month")) {   /* calendar months: a = October -> September 1..October 1, never by a's length in seconds */
+            bf = local_month_back(af); bt = local_month_back(at);
+            if (bt > af) bt = af;
+        }
         else if (!strcmp(bl, "same_month_last_year")) { bf = local_add(af, 'y', -1); bt = local_add(at, 'y', -1); }
         else return fail(cx, "invalid_args", "baseline: previous_period, previous_month or same_month_last_year", NULL);
         if (now_s() - bf > DAY_DEPTH_S + 86400u) return fail(cx, "out_of_history", "the baseline is beyond the stored daily history (400 days)", NULL);
@@ -1916,6 +1953,25 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
             finding(f, "ap_password_default", "warning", NULL, "The hub's own Wi-Fi access point still uses the setup password printed for all hubs, so anyone nearby who knows it can join the hub's network.",
                     "Ask the user to set their own access point password on the hub's Wi-Fi page (get_hub_info.hub_page_only: wifi).");
         memset(apw, 0, sizeof(apw));
+    }
+    if (s_ev_loaded && s_ev_mx) {   /* unexpected restarts (panic, watchdog, brownout) in the last 7 days, from the event log */
+        int cnt = 0; uint32_t lts = 0; char lr[16] = ""; uint32_t nw = now_s();
+        xSemaphoreTake(s_ev_mx, portMAX_DELAY);
+        for (int i = 0; i < EV_N; i++) {
+            const ev_rec_t *e = &s_ev.r[i];
+            if (e->type != EV_REBOOT || e->sev != SEV_WARNING || !e->ts || nw < e->ts || nw - e->ts > 7u * 86400u) continue;
+            cnt++;
+            if (e->ts > lts) { lts = e->ts; strlcpy(lr, e->info, sizeof(lr)); }
+        }
+        xSemaphoreGive(s_ev_mx);
+        if (cnt) {
+            char ev[200], tb[32];
+            time_t tt = (time_t)lts; struct tm lt; rbgrid_localtime_r(&tt, &lt); strftime(tb, sizeof(tb), "%Y-%m-%d %H:%M", &lt);
+            snprintf(ev, sizeof(ev), "The hub restarted unexpectedly %d time(s) in the last 7 days; the last at %s hub time (reset: %s).", cnt, tb, lr);
+            finding(f, "unexpected_restart", cnt > 1 ? "warning" : "info", NULL, ev,
+                    !strcmp(lr, "brownout") ? "A brownout is a power dip: ask the user to check the hub's power supply and cable."
+                                            : "Stored data is kept across restarts. If it repeats, note what was happening at that time (get_events) and report it to the maker.");
+        }
     }
     rbgrid_tariff_now_t tn; rbgrid_core_tariff_now(&tn);
     if (tn.placeholder) finding(f, "tariff_not_set", "warning", NULL, "No tariff plan is saved; every money figure is computed off a demo plan and is not the user's cost.", "Ask the user for their tariff and enter it with propose_config {tariff}.");
@@ -2322,6 +2378,15 @@ static cJSON *cfg_capture(void)
         }
         { int dz = (int)tp->default_zone_id; cJSON_AddStringToObject(t, "default_zone", dz >= 0 && dz < RBPOWER_TARIFF_ZONE_COUNT ? ZONE_N[dz] : ""); }
     }
+    {   /* the time zone and the hub's labels: versioned too, so apply_config never reports a version it did not record */
+        rbtime_config_t tc; memset(&tc, 0, sizeof(tc)); rbtime_get_config(&tc);
+        cJSON_AddStringToObject(cJSON_AddObjectToObject(r, "region"), "timezone", tc.timezone);
+        const rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
+        cJSON *h = cJSON_AddObjectToObject(r, "hub");
+        char b[48];
+        utf8_clean(ec && ec->home_name ? ec->home_name : "", b, sizeof(b)); cJSON_AddStringToObject(h, "name", b);
+        utf8_clean(ec && ec->location ? ec->location : "", b, sizeof(b)); cJSON_AddStringToObject(h, "location", b);
+    }
     return r;
 }
 /* The zone's time window "HH:MM-HH:MM" when it has exactly one active TIME_RANGE condition (the only shape writable over
@@ -2384,6 +2449,21 @@ static int ver_sync(const char *source, const char *summary)
     cJSON *last = n ? cJSON_GetArrayItem(arr, n - 1) : NULL;
     const char *lh = last ? cJSON_GetStringValue(cJSON_GetObjectItem(last, "hash")) : NULL;
     int num = last ? (int)cJSON_GetNumberValue(cJSON_GetObjectItem(last, "version")) : 0;
+    cJSON *lst = last ? cJSON_GetObjectItem(last, "state") : NULL;
+    if (lh && strcmp(lh, h) && lst && !cJSON_GetObjectItem(lst, "region")) {
+        /* the newest version was recorded before the time zone and hub labels were versioned: if the rest is equal,
+         * add them to that version in place instead of recording a spurious "changed outside the LLM API" one */
+        cJSON *old = cJSON_Duplicate(cap, true);
+        cJSON_DeleteItemFromObject(old, "region"); cJSON_DeleteItemFromObject(old, "hub");
+        char ho[17]; cfg_hash(old, ho);
+        cJSON_Delete(old);
+        if (!strcmp(ho, lh)) {
+            cJSON_ReplaceItemInObject(last, "state", cJSON_Duplicate(cap, true));
+            cJSON_ReplaceItemInObject(last, "hash", cJSON_CreateString(h));
+            ver_save(v);
+            lh = h;
+        }
+    }
     if (!lh || strcmp(lh, h)) {
         int next = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(v, "next"));
         if (next < 1) next = 1;
@@ -2513,7 +2593,15 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
                 continue;
             }
             if (strcmp(k->string, "name") && strcmp(k->string, "location")) { snprintf(m, sizeof(m), "hub.%.24s: name, location or grid_system", k->string); fail(cx, "invalid_args", m, NULL); return false; }
-            if (!valid_name(cJSON_GetStringValue(k))) { snprintf(m, sizeof(m), "hub.%s: 1..31 bytes of UTF-8 text", k->string); fail(cx, "invalid_args", m, NULL); return false; }
+            if (!strcmp(k->string, "location") && (cJSON_IsNull(k) || (cJSON_IsString(k) && !k->valuestring[0]))) {   /* clear it */
+                const char *wl = ec && ec->location ? ec->location : "";
+                if (!wl[0]) continue;
+                if (!nh) nh = cJSON_AddObjectToObject(norm, "hub");
+                cJSON_AddStringToObject(nh, "location", "");
+                dadd(diff, "hub.location", wl, "");
+                continue;
+            }
+            if (!valid_name(cJSON_GetStringValue(k))) { snprintf(m, sizeof(m), !strcmp(k->string, "location") ? "hub.location: 1..31 bytes of UTF-8 text, or \"\" / null to clear it" : "hub.%s: 1..31 bytes of UTF-8 text", k->string); fail(cx, "invalid_args", m, NULL); return false; }
             const char *was = ec ? (!strcmp(k->string, "name") ? ec->home_name : ec->location) : "";
             if (was && !strcmp(was, k->valuestring)) continue;
             if (!nh) nh = cJSON_AddObjectToObject(norm, "hub");
@@ -2955,7 +3043,7 @@ static cJSON *check_patch(rbllm_cx_t *cx, const cJSON *patch, const cJSON *cur, 
         } else cJSON_Delete(nt);
     }
     if (!check_more(cx, patch, norm, diff, warn)) { cJSON_Delete(norm); return NULL; }
-    if (!cJSON_GetArraySize(diff)) { cJSON_Delete(norm); return fail(cx, "invalid_args", "the patch changes nothing", "Read get_config first."); }
+    /* an empty diff is an answer, not an error: "is my price right?" -> the hub already has exactly these values */
     return norm;
 }
 
@@ -3156,7 +3244,43 @@ static cJSON *patch_between(const cJSON *cur, const cJSON *target)
         if (cJSON_GetArraySize(zo)) cJSON_AddItemToObject(o, "zones", zo); else cJSON_Delete(zo);
         if (cJSON_GetArraySize(o)) cJSON_AddItemToObject(p, "tariff", o); else cJSON_Delete(o);
     }
+    {   /* time zone and hub labels (versions recorded before they were versioned carry neither: nothing to restore) */
+        const char *x = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(target, "region"), "timezone"));
+        const char *y = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(cur, "region"), "timezone"));
+        if (x && x[0] && y && strcmp(x, y)) cJSON_AddStringToObject(cJSON_AddObjectToObject(p, "region"), "timezone", x);
+        cJSON *hp = NULL;
+        const char *hk[] = { "name", "location" };
+        for (int q = 0; q < 2; q++) {
+            x = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(target, "hub"), hk[q]));
+            y = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(cur, "hub"), hk[q]));
+            if (!x || !y || !strcmp(x, y) || (q == 0 && !x[0])) continue;
+            if (!hp) hp = cJSON_AddObjectToObject(p, "hub");
+            cJSON_AddStringToObject(hp, hk[q], x);
+        }
+    }
     return p;
+}
+
+/* The parts of a normalised patch that no version records (a rollback cannot undo them), comma-separated; "" if none. */
+static void unversioned_parts(const cJSON *patch, char *unv, size_t n)
+{
+    size_t uo = 0;
+    unv[0] = '\0';
+    const cJSON *k;
+    cJSON_ArrayForEach(k, patch) {
+        if (!strcmp(k->string, "channels") || !strcmp(k->string, "tariff") || !strcmp(k->string, "peaks_cycle_day")) continue;
+        if (!strcmp(k->string, "region") || !strcmp(k->string, "hub")) {
+            const cJSON *q;
+            cJSON_ArrayForEach(q, k) {
+                if (!strcmp(q->string, "timezone") || !strcmp(q->string, "name") || !strcmp(q->string, "location")) continue;
+                int w = snprintf(unv + uo, n - uo, "%s%s.%s", uo ? ", " : "", k->string, q->string);
+                if (w > 0 && (size_t)w < n - uo) uo += (size_t)w;
+            }
+            continue;
+        }
+        int w = snprintf(unv + uo, n - uo, "%s%s", uo ? ", " : "", k->string);
+        if (w > 0 && (size_t)w < n - uo) uo += (size_t)w;
+    }
 }
 
 static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
@@ -3218,6 +3342,24 @@ static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
     cJSON *norm = check_patch(cx, patch, cur, diff, warn);
     cJSON_Delete(own); cJSON_Delete(cur);
     if (!norm) { cJSON_Delete(diff); cJSON_Delete(warn); return NULL; }
+    if (!cJSON_GetArraySize(diff)) {
+        cJSON_Delete(norm);
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddItemToObject(r, "diff", diff);
+        cJSON_AddItemToObject(r, "warnings", warn);
+        cJSON_AddTrueToObject(r, "no_change");
+        cJSON_AddNullToObject(r, "confirm_token");
+        note(cx, rb ? "The settings already equal that version: nothing to roll back." : "The hub already has exactly these values: nothing to apply. Tell the user their values are already set.");
+        cx->as_of = now_s();
+        return r;
+    }
+    {
+        char unv[96]; unversioned_parts(norm, unv, sizeof(unv));
+        if (unv[0]) {
+            char wv[200]; snprintf(wv, sizeof(wv), "Not versioned: %s. A rollback will not undo it; undoing it means proposing the old value again.", unv);
+            cJSON_AddItemToArray(warn, cJSON_CreateString(wv));
+        }
+    }
     /* dedupe warnings */
     cJSON *w2 = cJSON_CreateArray(); const cJSON *w;
     cJSON_ArrayForEach(w, warn) { bool dup = false; const cJSON *x; cJSON_ArrayForEach(x, w2) if (!strcmp(x->valuestring, w->valuestring)) dup = true;
@@ -3356,7 +3498,8 @@ static cJSON *t_apply_config(const cJSON *a, rbllm_cx_t *cx)
     cJSON *cur = cfg_capture();
     char h[17]; cfg_hash(cur, h);
     if (strcmp(h, p.base)) { cJSON_Delete(cur); cJSON_Delete(p.patch); return fail(cx, "conflict", "the settings changed since the proposal", "Read get_config and propose again."); }
-    ver_sync("hub", NULL);   /* the state before, if not yet recorded */
+    int pv = ver_sync("hub", NULL);   /* the state before, if not yet recorded */
+    char unv[96]; unversioned_parts(p.patch, unv, sizeof(unv));   /* the parts of this patch a rollback cannot undo */
     bool modr = patch_restarts_module(p.patch), hubr = patch_restarts_hub(p.patch);
     bool ok = apply_patch(cx, p.patch, cur);
     cJSON_Delete(cur); cJSON_Delete(p.patch);
@@ -3365,16 +3508,27 @@ static cJSON *t_apply_config(const cJSON *a, rbllm_cx_t *cx)
     if (cx->internal && !strcmp(p.client, RBLLM_CLIENT_WEB)) strlcpy(src, "web", sizeof(src));   /* the user on the hub page */
     else snprintf(src, sizeof(src), "llm:%.40s", p.client[0] ? p.client : "client");
     int v = ver_sync(src, p.summary);
-    rbpower_diag_printf("llm: config version %d applied by '%s' (%s)", v, p.client, p.summary);
+    bool versioned = v != pv;
+    rbpower_diag_printf("llm: config %s applied by '%s' (%s)", versioned ? "version" : "change (not versioned)", p.client, p.summary);
+    if (versioned) rbpower_diag_printf("llm: config version %d", v);
+    else { char inf[40]; snprintf(inf, sizeof(inf), "0|%.37s", src); ev_add(EV_CONFIG, SEV_INFO, 0, inf); }   /* still a config change in get_events */
     s_cfg_changed = true;
     cJSON *r = cJSON_CreateObject();
-    cJSON_AddNumberToObject(r, "version", v);
+    if (versioned) cJSON_AddNumberToObject(r, "version", v); else cJSON_AddNullToObject(r, "version");
+    cJSON_AddBoolToObject(r, "versioned", versioned);
     cJSON_AddBoolToObject(r, "applied", true);
     cJSON_AddBoolToObject(r, "restart_required", hubr);
     cJSON_AddBoolToObject(r, "module_restart", modr);
     if (hubr) note(cx, "Part of this applies after a restart: ask the user, then restart_hub.");
     cJSON_AddStringToObject(r, "summary", p.summary);
-    note(cx, "Applied. list_config_versions shows it; propose_config {rollback_to} undoes it.");
+    if (versioned && !unv[0]) note(cx, "Applied. list_config_versions shows it; propose_config {rollback_to} undoes it.");
+    else if (versioned) {
+        char nb[260]; snprintf(nb, sizeof(nb), "Applied. list_config_versions shows it, but a rollback does not undo %s: to undo that part, propose its old value (the diff's from) again.", unv);
+        note(cx, nb);
+    } else {
+        char nb[260]; snprintf(nb, sizeof(nb), "Applied, but not versioned (%s): no rollback undoes it. To undo it, propose the old value (the diff's from) again.", unv[0] ? unv : "no versioned setting changed");
+        note(cx, nb);
+    }
     cx->as_of = now_s();
     return r;
 }
@@ -3401,7 +3555,7 @@ static cJSON *t_list_config_versions(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_Delete(v);
-    note(cx, "Versions cover channel names, roles, inside, clamp models, the tariff prices/VAT/fees and the peaks cycle day. Modules, module addresses, points made or moved and bus pins are not versioned: a rollback does not undo them.");
+    note(cx, "Versions cover channel names, roles, inside, clamp models, the tariff prices/VAT/fees, the peaks cycle day, the time zone and the hub's name and location. Price rules, telemetry, integrations, the dynamic price, the mains voltage/frequency and the grid system are not versioned either. Modules, module addresses, points made or moved and bus pins are not versioned: a rollback does not undo them.");
     cx->as_of = now_s();
     return r;
 }
@@ -3719,9 +3873,9 @@ static cJSON *t_identify_channel(const cJSON *a, rbllm_cx_t *cx)
     }
     cJSON_AddStringToObject(r, "verdict", verdict);
     if (!strcmp(verdict, "no_step") && s.running)
-        note(cx, "No step of 60 W or more yet. Ask the user whether the appliance is on, then call result again (the window is still open).");
+        note(cx, "No clear step yet (the hub needs a change of about 60 W; an appliance of 100 W or more gives a clear one). Ask the user whether the appliance is on, then call result again (the window is still open).");
     else if (!strcmp(verdict, "no_step"))
-        note(cx, "No step of 60 W or more in the window. Start again with a bigger appliance (kettle, heater).");
+        note(cx, "No clear step in the window (the hub needs a change of about 60 W). Start again with a bigger appliance (kettle, heater).");
     else if (!strcmp(verdict, "ambiguous") && !same_wire)   /* same cable: repeating won't separate them */
         note(cx, "Two channels moved by a similar amount: ask the user to switch the appliance off again and call start once more.");
     free(p);
@@ -3981,7 +4135,10 @@ static cJSON *t_list_module_inputs(const cJSON *a, rbllm_cx_t *cx)
             bool volt = lb && !strcmp(lb, "V");
             cJSON_AddStringToObject(io, "kind", volt ? "voltage" : lb && !strcmp(lb, "L1–L3") ? "three_phase" : "current");
             const char *uid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
-            if (uid) cJSON_AddStringToObject(io, "point", uid); else { cJSON_AddNullToObject(io, "point"); if (!volt) any_free = true; }
+            /* a voltage input feeds the hub's voltage reference (power = V x I for this module's channels), not a point of its
+             * own: list_channels does not list it, so no point id is shown for it */
+            if (volt) { cJSON_AddNullToObject(io, "point"); cJSON_AddBoolToObject(io, "voltage_reference", uid != NULL); }
+            else if (uid) cJSON_AddStringToObject(io, "point", uid); else { cJSON_AddNullToObject(io, "point"); any_free = true; }
             const char *cn = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ct_name"));
             if (cn && !volt) { char sh[24]; ct_short(cn, sh); cJSON_AddStringToObject(io, "ct_model", sh); }
             double ra = cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ct_rated_a"));
@@ -4194,7 +4351,8 @@ static cJSON *t_restart_hub(const cJSON *a, rbllm_cx_t *cx)
         cx->retry_ms = 60000;
         return fail(cx, "busy", "the hub is still confirming the firmware installed less than a minute ago", "Retry in about a minute.");
     }
-    if (xTaskCreate(llm_restart_task, "llm_restart", 3072, NULL, tskIDLE_PRIORITY + 6, NULL) != pdPASS)
+    /* 6144: the orderly reboot (open-hour flush, NVS persist, deinit, esp_restart) overflowed 3072 and ended in a panic reset */
+    if (xTaskCreate(llm_restart_task, "llm_restart", 6144, NULL, tskIDLE_PRIORITY + 6, NULL) != pdPASS)
         return fail(cx, "internal", "the restart could not be scheduled", "Restart the hub from its page.");
     rbpower_diag_printf("llm: restart requested by '%s'", cx->client ? cx->client : "?");
     cJSON *r = cJSON_CreateObject();
@@ -4504,7 +4662,7 @@ static const rbllm_tool_t TOOLS[] = {
     { "compare_periods", RBLLM_SCOPE_READ,
       "When to call: for 'more or less than before'. What it returns: per channel the energy of period a and period b, the difference in kWh "
       "and percent, and the cost difference. Give b, or a baseline relative to a.",
-      "{\"type\":\"object\",\"properties\":{\"a\":" S_PERIOD ",\"b\":" S_PERIOD ",\"baseline\":{\"type\":\"string\",\"enum\":[\"previous_period\",\"previous_month\",\"same_month_last_year\"]},"
+      "{\"type\":\"object\",\"properties\":{\"a\":" S_PERIOD ",\"b\":" S_PERIOD ",\"baseline\":{\"type\":\"string\",\"enum\":[\"previous_period\",\"previous_month\",\"same_month_last_year\"],\"description\":\"previous_period: as long as a, just before it; previous_month: the same calendar dates one month earlier; same_month_last_year: the same dates a year earlier\"},"
       "\"channels\":" S_CHANNELS "},\"required\":[\"a\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"delta_kwh\":{\"type\":\"number\"},\"delta_pct\":{\"type\":[\"number\",\"null\"]}}}}}}",
       t_compare_periods },
@@ -4527,7 +4685,7 @@ static const rbllm_tool_t TOOLS[] = {
       "When to call: after setup, or when numbers look wrong. What it returns: findings {type, severity, channel, evidence, fix_hint}: "
       "no_main_supply, channel_absent, channel_no_history, module_missing, module_without_points, module_uncalibrated, "
       "module_on_factory_address, no_voltage, ct_reversed, ct_rating_mismatch, sum_mismatch, generation_not_configured, clock_unsynced, "
-      "timezone_not_set, timezone_implausible, tariff_not_set, ap_password_default. Detects only; a reversed clamp is fixed at the clamp.",
+      "timezone_not_set, timezone_implausible, tariff_not_set, ap_password_default, unexpected_restart. Detects only; a reversed clamp is fixed at the clamp.",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"severity\":{\"type\":\"string\"},\"fix_hint\":{\"type\":\"string\"}}}}}}",
       t_check_installation },
@@ -4558,7 +4716,7 @@ static const rbllm_tool_t TOOLS[] = {
     { "propose_config", RBLLM_SCOPE_CONFIG,
       "When to call: for any settings change: channel names, roles, parents, clamp models and circuit data; the tariff (prices, VAT, fees, zones with "
       "windows and weekdays, default zone); price rules and notifications; the time zone and mains voltage/frequency; the hub's name and "
-      "supply type; the MQTT broker and telemetry format; the dynamic price provider; or to undo a change. What it returns: the diff, warnings, restart_required and a one-time confirm_token (10 min). Changes "
+      "supply type; the MQTT broker and telemetry format; the dynamic price provider; or to undo a change. What it returns: the diff, warnings, restart_required and a one-time confirm_token (10 min); no_change true and no token when the hub already has those values. Changes "
       "nothing; show the diff and ask the user.",
       "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,short_name?,role?,inside?,ct_model?,phase?,rated_power_w?,max_current_a?,charge_threshold_w?,idle_timeout_min?}}, "
       "tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,default_zone?,prices_from_bill?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?,window?,days?,priority?,enabled?}}}, "
@@ -4567,10 +4725,11 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"restart_required\":{\"type\":\"boolean\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"},\"base_version\":{\"type\":\"integer\"}}}",
       t_propose_config },
     { "apply_config", RBLLM_SCOPE_CONFIG,
-      "When to call: only after the user said yes to a propose_config diff. What it returns: the new version number. Fails with conflict "
+      "When to call: only after the user said yes to a propose_config diff. What it returns: the new version number, or version null with "
+      "versioned false when nothing versioned changed (then no rollback undoes it; the note names what). Fails with conflict "
       "if the settings changed since the proposal; nothing is half applied.",
       "{\"type\":\"object\",\"properties\":{\"confirm_token\":{\"type\":\"string\"}},\"required\":[\"confirm_token\"],\"additionalProperties\":false}",
-      "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":\"integer\"},\"applied\":{\"type\":\"boolean\"},\"restart_required\":{\"type\":\"boolean\"}}}",
+      "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":[\"integer\",\"null\"]},\"versioned\":{\"type\":\"boolean\"},\"applied\":{\"type\":\"boolean\"},\"restart_required\":{\"type\":\"boolean\"}}}",
       t_apply_config },
     { "list_config_versions", RBLLM_SCOPE_CONFIG,
       "When to call: when the user asks what changed, or before a rollback. What it returns: the last 5 versions, newest first, with time, "
@@ -4605,7 +4764,8 @@ static const rbllm_tool_t TOOLS[] = {
     { "list_module_inputs", RBLLM_SCOPE_READ,
       "When to call: after add_module, and before create_point or a clamp-model change. What it returns: per module its series, model, "
       "bus and address, the clamp kind (selectable = the user picks the clamp model; fixed = calibrated with the module, nothing to pick) "
-      "and every input as marked on the module (I0, I1 ..., V) with the point on it or null, plus the clamp models to choose from.",
+      "and every input as marked on the module (I0, I1 ..., V) with the point on it or null, plus the clamp models to choose from. A V input "
+      "is the voltage reference for the module's channels (voltage_reference true when in use), never a point.",
       "{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":7,\"description\":\"one module; omit for all\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"modules\":{\"type\":\"array\"},\"ct_models\":{\"type\":\"array\"}}}",
       t_list_module_inputs },
@@ -4783,8 +4943,7 @@ char *rbllm_manifest_json(void)
     cJSON *hub = cJSON_AddObjectToObject(r, "hub");
     char id[13]; rbllm_hub_id(id);
     cJSON_AddStringToObject(hub, "id", id);
-    rbgrid_json_context_t *jc = rbgrid_core_json_ctx();
-    cJSON_AddStringToObject(hub, "name", jc && jc->device_info.device_name[0] ? jc->device_info.device_name : "RBgrid");
+    { char hn[48]; hub_display_name(hn, sizeof(hn)); cJSON_AddStringToObject(hub, "name", hn); }
     const esp_app_desc_t *ad = esp_app_get_description();
     cJSON_AddStringToObject(hub, "fw", ad ? ad->version : "");
     { char eh[17] = ""; esp_app_get_elf_sha256(eh, sizeof(eh)); cJSON_AddStringToObject(hub, "build", eh); }
@@ -5221,8 +5380,7 @@ char *rbllm_admin_json(void)
     cJSON *cn = cJSON_AddObjectToObject(r, "connect");
     char id[13]; rbllm_hub_id(id);
     cJSON_AddStringToObject(cn, "hub_id", id);
-    rbgrid_json_context_t *jc = rbgrid_core_json_ctx();
-    char nm[48]; utf8_clean(jc && jc->device_info.device_name[0] ? jc->device_info.device_name : "RBgrid", nm, sizeof(nm));
+    char nm[48]; hub_display_name(nm, sizeof(nm));
     cJSON_AddStringToObject(cn, "name", nm);
     uint8_t mac[6] = {0}; esp_read_mac(mac, ESP_MAC_WIFI_STA);
     char host[32]; snprintf(host, sizeof(host), "rbgrid-%02x%02x.local", mac[4], mac[5]);   /* = rbgrid_app's mDNS host */
