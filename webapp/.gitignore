@@ -36,6 +36,7 @@ ds-bundle/
 /build-embedded
 /reports/
 /build-demo
+/build-demo-docs
 /build-site
 /build-demo-zip
 /build-webapp

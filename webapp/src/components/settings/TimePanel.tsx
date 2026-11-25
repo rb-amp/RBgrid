@@ -8,13 +8,17 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Box, Button, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { PanelCard, FormField, StatusChip, ToggleRow } from '@rbgrid/design-system';
 import { getApiClient } from '../../services/api';
-import { t } from '../../i18n';
-import { RebootNowButton } from '../common/RebootNowButton';
+import { useSectionForm } from '../../app/sectionForms';
+import { useMarkReboot } from '../../app/rebootPending';
+import { t, dateLocale } from '../../i18n';
 import { useCapabilities } from '../../core';
 import { endpointRebootFields } from '../../core/schema/capabilities';
 import { numberRules } from '../../core/schema/fieldRules';
 import { DecimalField } from '../common/DecimalField';
 import { REBOOT_FIELDS_FALLBACK } from '../../core/shadow/ConfigShadow';
+import { useTelemetryEntities } from '../../hooks/useTelemetryEntities';
+import { makeDeviceClock, formatDeviceTime } from '../../core/deviceTime';
+import { classifyTimeQuality } from '../../core/quality/quality';
 
 /** POSIX TZ presets (sign inverted vs UTC offset, as POSIX requires); label = phrase key. */
 const TZ_PRESETS: { tz: string; label: string }[] = [
@@ -101,6 +105,43 @@ export function syncStatusWord(status: unknown): { label: string; kind: 'live' |
 
 type Cfg = Record<string, unknown>;
 
+/** «42 с назад», «5 мин назад», «3 ч назад», «2 дн. назад». */
+export function ageText(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return t('time.ageS', { n: s });
+  if (s < 3600) return t('time.ageMin', { n: Math.floor(s / 60) });
+  if (s < 86400) return t('time.ageH', { n: Math.floor(s / 3600) });
+  return t('time.ageD', { n: Math.floor(s / 86400) });
+}
+
+/**
+ * The hub's own clock and how it keeps it (role audit F08: «nothing to check that the time is right»):
+ * the time of the last live frame in the hub's zone, the sync state from the frame (`tq`,
+ * `sync_age_s`), and a warning when it is minutes off this device's clock.
+ */
+const HubClockLine: React.FC<{ tz: string }> = ({ tz }) => {
+  const { data } = useTelemetryEntities();
+  const sys = data?.system;
+  if (!sys || !sys.ts) return <Typography variant="body2" color="text.secondary">{t('time.hubNowNoLink')}</Typography>;
+  const clock = makeDeviceClock(tz);
+  const when = formatDeviceTime(clock, sys.ts, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }, dateLocale());
+  const level = classifyTimeQuality(sys.tq);
+  const age = typeof sys.sync_age_s === 'number' ? ageText(sys.sync_age_s) : null;
+  const state = sys.tq == null ? null
+    : level === 'synced' ? (age ? t('time.syncedAgo', { age }) : t('time.statusSynced'))
+      : level === 'holdover' ? (age ? t('time.holdoverAgo', { age }) : null) : t('time.notSyncedNow');
+  const skewMin = Math.round(Math.abs(sys.ts - Date.now() / 1000) / 60);
+  return (
+    <Stack spacing={1}>
+      <Typography sx={{ fontSize: 15, fontVariantNumeric: 'tabular-nums' }}>
+        <Box component="span" sx={{ fontWeight: 600 }}>{t('time.hubNow', { time: when })}</Box>
+        {state && <Box component="span" sx={{ color: level === 'unsynced' ? 'warning.main' : 'text.secondary' }}>{` · ${state}`}</Box>}
+      </Typography>
+      {skewMin >= 2 && <Alert severity="warning">{t('time.skew', { min: skewMin })}</Alert>}
+    </Stack>
+  );
+};
+
 /**
  * The save_config body. fw ≤ 1.1.5 stored it as the WHOLE /time.json: the changed fields alone
  * wiped the NTP servers, and the next start had no time sync (root v116-release-artifacts, .139).
@@ -127,9 +168,13 @@ export const TimePanel: React.FC<{ compact?: boolean }> = ({ compact }) => {
   const [stats, setStats] = useState<Cfg>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ sev: 'success' | 'error' | 'warning'; text: string; reboot?: boolean } | null>(null);
+  // «Saved, after a restart» goes to the one «Waits for a restart» strip (SPEC §5.3), not a button here.
+  useMarkReboot(!!msg?.reboot, t('time.title'));
   const [tried, setTried] = useState(false);
   const [resyncErr, setResyncErr] = useState<string | null>(null);
   const caps = useCapabilities();
+  // The live frame says how the hub keeps its time (HubClockLine); the config's chip only without it.
+  const liveTq = useTelemetryEntities().data?.system.tq;
   // The hub asks for a restart when the body CONTAINS an on-start field, changed or not (root
   // 18.10) — so only the changed fields go out (fw 1.1.6; older hubs get the whole config, see
   // timeSaveBody), and the hint says which of them wait for a restart.
@@ -157,7 +202,7 @@ export const TimePanel: React.FC<{ compact?: boolean }> = ({ compact }) => {
   /** A full body names every on-start field: the restart is due only if one of them changed. */
   const rebootDue = (): boolean => mergesPartial || Object.keys(changed()).some((k) => rebootFields.includes(k));
 
-  const run = async (key: string, fn: () => Promise<Record<string, unknown>>, ok: string, rebootIf = true) => {
+  const run = async (key: string, fn: () => Promise<Record<string, unknown>>, ok: string, rebootIf = true): Promise<boolean> => {
     setBusy(key);
     setMsg(null);
     try {
@@ -167,13 +212,26 @@ export const TimePanel: React.FC<{ compact?: boolean }> = ({ compact }) => {
         ? { sev: 'warning', text: t('time.okNeedsReboot', { ok }), reboot: true }
         : { sev: 'success', text: ok });
       await load();
+      return true;
     } catch (e) {
       const err = e as { status?: number; message?: string };
       setMsg({ sev: 'error', text: err.status === 401 || err.status === 403 ? t('common.adminTokenRequired') : t('time.failed', { message: err.message ?? t('time.deviceError') }) });
+      return false;
     } finally {
       setBusy(null);
     }
   };
+
+  // One «Save» for the section (SPEC §5.3): the zone and NTP fields go with the section's bar; the
+  // sync buttons stay here (they act at once). Computed before the loading return (hook order).
+  const draftDirty = !!draft && JSON.stringify(draft) !== JSON.stringify(cfg);
+  const draftInvalid = !!draft && !compact && ((draft.sntp_server !== cfg?.sntp_server && !!ntpHostError(draft.sntp_server, true))
+    || (draft.sntp_server_backup !== cfg?.sntp_server_backup && !!ntpHostError(draft.sntp_server_backup, false)) || !!resyncErr);
+  const inSection = useSectionForm({
+    id: 'time', label: t('time.title'), dirty: draftDirty, invalid: draftInvalid,
+    save: () => run('save', () => getApiClient().saveTimeConfig(saveBody()), t('time.saved'), rebootDue()),
+    reset: () => { setDraft(cfg ?? null); setMsg(null); },
+  });
 
   if (!draft) {
     return (
@@ -198,8 +256,9 @@ export const TimePanel: React.FC<{ compact?: boolean }> = ({ compact }) => {
   return (
     <PanelCard title={t('time.title')}>
       <Stack spacing={1.5}>
+        <HubClockLine tz={String(cfg?.timezone ?? '')} />
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          {status && <StatusChip status={status.kind} label={t(status.label)} />}
+          {status && liveTq == null && <StatusChip status={status.kind} label={t(status.label)} />}
           {stats.active_source != null && (
             <Typography variant="body2" color="text.secondary">{t('time.source', { source: String(stats.active_source) })}</Typography>
           )}
@@ -218,7 +277,7 @@ export const TimePanel: React.FC<{ compact?: boolean }> = ({ compact }) => {
             {t('time.browserTzHint', { zone: suggest.iana || suggest.posix })}
           </Alert>
         )}
-        {dirty && <Typography variant="caption" sx={{ color: 'warning.main' }}>{t('time.unsavedHint')}</Typography>}
+        {dirty && !inSection && <Typography variant="caption" sx={{ color: 'warning.main' }}>{t('time.unsavedHint')}</Typography>}
         {dirty && Object.keys(changed()).some((k) => rebootFields.includes(k)) && (
           <Typography variant="caption" sx={{ color: 'warning.main' }}>{t('time.afterRebootHint')}</Typography>
         )}
@@ -238,13 +297,15 @@ export const TimePanel: React.FC<{ compact?: boolean }> = ({ compact }) => {
         />
         </>}
 
-        {msg && <Alert severity={msg.sev} action={msg.reboot ? <RebootNowButton /> : undefined}>{msg.text}</Alert>}
+        {msg && <Alert severity={msg.sev}>{msg.text}</Alert>}
 
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          <Button variant="contained" disabled={!dirty || !!busy || invalid}
-            onClick={() => run('save', () => getApiClient().saveTimeConfig(saveBody()), t('time.saved'), rebootDue())}>
-            {busy === 'save' ? t('common.saving') : t('common.save')}
-          </Button>
+          {!inSection && (
+            <Button variant="contained" disabled={!dirty || !!busy || invalid}
+              onClick={() => void run('save', () => getApiClient().saveTimeConfig(saveBody()), t('time.saved'), rebootDue())}>
+              {busy === 'save' ? t('common.saving') : t('common.save')}
+            </Button>
+          )}
           <Button variant="outlined" disabled={!!busy}
             onClick={() => run('ntp', () => getApiClient().triggerTimeSync(), t('time.ntpSynced'))}>
             {busy === 'ntp' ? t('time.syncing') : t('time.syncNtp')}

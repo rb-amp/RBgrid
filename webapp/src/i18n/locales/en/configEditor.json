@@ -46,7 +46,7 @@
   "off": "off",
   "zeroUnset": "0 — not set: the default is used.",
   "readOnly": "View only — the device does not accept writes to this section from here.",
-  "unsavedReboot": "Not saved. Fields under “after a restart” are saved with “Save and restart”, the rest with “Apply”.",
+  "unsavedReboot": "Not saved. Fields under “after a restart” are saved with “Save and restart”, the rest with “Save”.",
   "unsaved": "Unsaved changes.",
   "field_enable_home_network": "Home network",
   "opt_language_unset": "Not set — browser language",

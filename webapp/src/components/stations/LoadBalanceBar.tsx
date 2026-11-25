@@ -9,7 +9,6 @@
 import React from 'react';
 import { Box, Stack, Typography, Tooltip } from '@mui/material';
 import { useDsTokens } from '../../theme/useDsTokens';
-import { dsFonts } from '../../theme/dsTokens';
 import { t } from '../../i18n';
 import { nf } from '../common/ruFormat';
 
@@ -80,7 +79,7 @@ export const LoadBalanceBar: React.FC<LoadBalanceBarProps> = ({ segments, limitW
         </Typography>
       </Stack>
       <Stack direction="row" flexWrap="wrap" useFlexGap columnGap={2} rowGap={0.5} sx={{ mt: 0.75 }}>
-        <Typography sx={{ fontSize: 12, fontFamily: dsFonts.mono, fontVariantNumeric: 'tabular-nums', color: ds.ink, fontWeight: 600 }}>
+        <Typography sx={{ fontSize: 13, fontVariantNumeric: 'tabular-nums', color: ds.ink, fontWeight: 600 }}>
           {t('stations.usedOfLimit', { used: kw(used), limit: kw(limit) })}
         </Typography>
         {segments.filter((g) => g.valueW > 0).map((g) => (

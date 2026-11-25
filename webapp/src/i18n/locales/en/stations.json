@@ -41,5 +41,7 @@
   "marginPerHour": "margin {value}",
   "marginToday": "Margin today",
   "purchase": "purchase {money}",
-  "limitAbove": "↑ limit {power} — the day’s peak is {pct} % of it"
+  "limitAbove": "↑ limit {power} — the day’s peak is {pct} % of it",
+  "atCurrentPrice": "at the current price per kWh",
+  "allFreeHidden": "All {n} stations are free — free ones are hidden in the block settings."
 }

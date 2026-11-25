@@ -4,7 +4,7 @@
  */
 
 import { createTheme, Theme, alpha } from '@mui/material/styles';
-import { palettes as dsPalettes } from '@rbgrid/design-system';
+import { palettes as dsPalettes, type as dsType } from '@rbgrid/design-system';
 import { 
   THEME_CONFIG, 
   FONTS, 
@@ -19,64 +19,24 @@ import {
  * Common theme configuration shared between light and dark themes
  */
 const commonThemeConfig = {
+  // One type scale — the design system's (UI redesign S3, SPEC §6.1): big number 36–56 · number 22 ·
+  // block title 16 · text 14 · secondary 13 · caption 12. Readable text is never below 13.
   typography: {
     fontFamily: FONTS.FAMILY.SANS,
-    h1: {
-      fontSize: FONTS.SIZE['4XL'],
-      fontWeight: FONTS.WEIGHT.BOLD,
-      lineHeight: FONTS.LINE_HEIGHT.TIGHT,
-    },
-    h2: {
-      fontSize: FONTS.SIZE['3XL'],
-      fontWeight: FONTS.WEIGHT.SEMIBOLD,
-      lineHeight: FONTS.LINE_HEIGHT.TIGHT,
-    },
-    h3: {
-      fontSize: FONTS.SIZE['2XL'],
-      fontWeight: FONTS.WEIGHT.SEMIBOLD,
-      lineHeight: FONTS.LINE_HEIGHT.NORMAL,
-    },
-    h4: {
-      fontSize: FONTS.SIZE.XL,
-      fontWeight: FONTS.WEIGHT.MEDIUM,
-      lineHeight: FONTS.LINE_HEIGHT.NORMAL,
-    },
-    h5: {
-      fontSize: FONTS.SIZE.LG,
-      fontWeight: FONTS.WEIGHT.MEDIUM,
-      lineHeight: FONTS.LINE_HEIGHT.NORMAL,
-    },
-    h6: {
-      fontSize: FONTS.SIZE.BASE,
-      fontWeight: FONTS.WEIGHT.MEDIUM,
-      lineHeight: FONTS.LINE_HEIGHT.NORMAL,
-    },
-    body1: {
-      fontSize: FONTS.SIZE.BASE,
-      fontWeight: FONTS.WEIGHT.NORMAL,
-      lineHeight: FONTS.LINE_HEIGHT.NORMAL,
-    },
-    body2: {
-      fontSize: FONTS.SIZE.SM,
-      fontWeight: FONTS.WEIGHT.NORMAL,
-      lineHeight: FONTS.LINE_HEIGHT.NORMAL,
-    },
-    button: {
-      fontSize: FONTS.SIZE.SM,
-      fontWeight: FONTS.WEIGHT.MEDIUM,
-      textTransform: 'none' as const,
-    },
-    caption: {
-      fontSize: FONTS.SIZE.XS,
-      fontWeight: FONTS.WEIGHT.NORMAL,
-      lineHeight: FONTS.LINE_HEIGHT.NORMAL,
-    },
-    overline: {
-      fontSize: FONTS.SIZE.XS,
-      fontWeight: FONTS.WEIGHT.SEMIBOLD,
-      textTransform: 'uppercase' as const,
-      letterSpacing: '0.1em',
-    },
+    fontSize: 14,
+    h1: { ...dsType.scale.displayXl },
+    h2: { ...dsType.scale.display },
+    h3: { ...dsType.scale.metric },
+    h4: { ...dsType.scale.title },
+    h5: { ...dsType.scale.heading },
+    h6: { ...dsType.scale.heading },
+    subtitle1: { ...dsType.scale.heading },
+    subtitle2: { ...dsType.scale.body, fontWeight: 600 },
+    body1: { ...dsType.scale.body },
+    body2: { ...dsType.scale.bodySm },
+    button: { fontSize: 14, fontWeight: FONTS.WEIGHT.MEDIUM, textTransform: 'none' as const },
+    caption: { ...dsType.scale.label, fontWeight: 400, letterSpacing: 0 },
+    overline: { ...dsType.scale.label, fontWeight: FONTS.WEIGHT.SEMIBOLD, textTransform: 'uppercase' as const, letterSpacing: '0.08em' },
   },
   breakpoints: {
     values: {
@@ -209,6 +169,9 @@ export const lightTheme = createTheme({
         },
       },
     },
+    // Field labels at 12 px when raised, not 10.5 (UI/UX audit U08); the outline's notch follows.
+    MuiInputLabel: { styleOverrides: { shrink: { '&.MuiInputLabel-outlined': { transform: 'translate(14px, -9px) scale(0.86)' } } } },
+    MuiOutlinedInput: { styleOverrides: { notchedOutline: { '& legend': { fontSize: '0.86em' } } } },
     MuiButton: {
       styleOverrides: {
         root: {
@@ -294,6 +257,8 @@ export const lightTheme = createTheme({
         root: {
           '&.Mui-focusVisible': { outline: `2px solid ${dsPalettes.light.focus}`, outlineOffset: -2, zIndex: 1 },
           '@media (pointer: coarse)': { minHeight: 44 },
+          // Unselected segments readable (UI/UX audit U21: 4.49:1 on the page background).
+          color: 'inherit',
         },
       },
     },

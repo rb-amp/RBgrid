@@ -1,0 +1,114 @@
+{
+ "type": "price",
+ "now": 1794274306,
+ "active": true,
+ "price_state": "ok",
+ "source_now": "energy_charts",
+ "valid_until": 1794351600,
+ "currency": "EUR",
+ "prices": [
+  {
+   "from": 1794359700,
+   "until": 1794360600,
+   "buy": -0.05
+  }
+ ],
+ "resolved": [
+  {
+   "from": 1794270600,
+   "until": 1794271500,
+   "buy": 0.371496,
+   "sell": 0.08,
+   "raw": 0.22958,
+   "prov": "source"
+  },
+  {
+   "from": 1794271500,
+   "until": 1794272400,
+   "buy": 0.360624,
+   "sell": 0.08,
+   "raw": 0.22052,
+   "prov": "source"
+  },
+  {
+   "from": 1794272400,
+   "until": 1794273300,
+   "buy": 0.367416,
+   "sell": 0.08,
+   "raw": 0.22618,
+   "prov": "source"
+  },
+  {
+   "from": 1794273300,
+   "until": 1794274200,
+   "buy": 0.364068,
+   "sell": 0.08,
+   "raw": 0.22339,
+   "prov": "source"
+  },
+  {
+   "from": 1794274200,
+   "until": 1794275100,
+   "buy": 0.361152,
+   "sell": 0.08,
+   "raw": 0.22096,
+   "prov": "source"
+  },
+  {
+   "from": 1794275100,
+   "until": 1794276000,
+   "buy": 0.361932,
+   "sell": 0.08,
+   "raw": 0.22161,
+   "prov": "source"
+  },
+  {
+   "from": 1794276000,
+   "until": 1794276900,
+   "buy": 0.37296,
+   "sell": 0.08,
+   "raw": 0.2308,
+   "prov": "source"
+  },
+  {
+   "from": 1794276900,
+   "until": 1794277800,
+   "buy": 0.370944,
+   "sell": 0.08,
+   "raw": 0.22912,
+   "prov": "source"
+  },
+  {
+   "from": 1794277800,
+   "until": 1794278700,
+   "buy": 0.372732,
+   "sell": 0.08,
+   "raw": 0.23061,
+   "prov": "source"
+  },
+  {
+   "from": 1794278700,
+   "until": 1794279600,
+   "buy": 0.36306,
+   "sell": 0.08,
+   "raw": 0.22255,
+   "prov": "source"
+  },
+  {
+   "from": 1794279600,
+   "until": 1794280500,
+   "buy": 0.364188,
+   "sell": 0.08,
+   "raw": 0.22349,
+   "prov": "source"
+  },
+  {
+   "from": 1794280500,
+   "until": 1794281400,
+   "buy": 0.359916,
+   "sell": 0.08,
+   "raw": 0.21993,
+   "prov": "source"
+  }
+ ]
+}

@@ -1,0 +1,20 @@
+{
+  "title": "I2C buses",
+  "busN": "Bus {bus}",
+  "up": "running",
+  "down": "not running",
+  "off": "off",
+  "pins": "SDA GPIO{sda}, SCL GPIO{scl}",
+  "modules": "{n} modules",
+  "setup": "Set up bus 1",
+  "change": "Change bus 1 pins",
+  "switchOff": "Switch bus 1 off",
+  "offNeedsEmpty": "Bus 1 can be switched off once no module is on it (now {n}).",
+  "afterRestart": "The hub checks the pins against its board and uses them after a restart.",
+  "reserved": "Not available: {list}.",
+  "save": "Save",
+  "cancel": "Cancel",
+  "restartNeeded": "New bus pins are saved. They take effect after the hub restarts.",
+  "refused": "The hub refused: {why}",
+  "failed": "The request didn't go through: {why}"
+}

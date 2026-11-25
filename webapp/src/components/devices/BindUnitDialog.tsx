@@ -8,7 +8,7 @@ import {
 } from '@mui/material';
 import { useDeviceSession, useConfigShadow } from '../../core';
 import { useUnitsConfig } from '../../hooks/useUnitsConfig';
-import { HISTORY_SLOTS } from '../common/NoHistoryNote';
+import { useHistorySlots } from '../common/NoHistoryNote';
 import { useGridSystem } from '../../hooks/useGridSystem';
 import { PHASE_LABEL, phaseOptions } from './UnitParamsPanel';
 import { parseDecimal } from '../common/DecimalField';
@@ -42,6 +42,7 @@ export const BindUnitDialog: React.FC<{
   onClose: () => void;
   onBound: () => void;
 }> = ({ sensor, onClose, onBound }) => {
+  const slots = useHistorySlots();
   const [name, setName] = useState('');
   const [role, setRole] = useState<UnitRoleName>('DEVICE_LOAD');
   const [location, setLocation] = useState('');
@@ -126,7 +127,7 @@ export const BindUnitDialog: React.FC<{
           )}
           {sensor && isPhaseGroup(sensor) && <Alert severity="info">{t('bind.phaseGroupHint')}</Alert>}
           {/* v1.1.2: every history slot is taken — the new point will be live only (root 6e32d29). */}
-          {unitsJoin.historyCount != null && unitsJoin.historyCount >= HISTORY_SLOTS && <Alert severity="info">{t('bind.liveOnly', { n: HISTORY_SLOTS })}</Alert>}
+          {slots > 0 && unitsJoin.historyCount != null && unitsJoin.historyCount >= slots && <Alert severity="info">{t('bind.liveOnly', { n: slots })}</Alert>}
           {error && <Alert severity="error">{error}</Alert>}
           <FormField label={t('bind.name')} value={name} onChange={setName} required />
           <TextField

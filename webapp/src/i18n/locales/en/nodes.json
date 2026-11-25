@@ -9,7 +9,7 @@
   "radioAuto": "Starts by itself when a node is paired (factory setting).",
   "radioOff": "Off. Nodes can't send data.",
   "offTitle": "Turn the radio for nodes off?",
-  "offBody": "The nodes stop sending: their points get no live values and no history until the radio is on again. The hub remembers this after a restart.",
+  "offBody": "The nodes stop sending live values. They keep their 15-minute energy records and send them when the radio is on again (up to 2 hours on node firmware 1.4, about 5 days on 1.5). The hub remembers this after a restart.",
   "offConfirm": "Turn off",
   "pair": "Pair a node",
   "pairCancel": "Stop pairing",
@@ -75,5 +75,6 @@
   "errNotFound": "The hub doesn't know this node any more. Reload the page.",
   "errPeriod": "The hub takes only the 15-minute period.",
   "lossPending": "measuring (1 min)",
-  "channelOff": "off (Settings)"
+  "channelOff": "off (Settings)",
+  "injectStopped": "The hub isn't taking in the nodes' data: its node-data task isn't running, so their readings and records don't reach the hub. Restart the hub. If this comes back, tell RBgrid support."
 }

@@ -13,7 +13,6 @@ import React from 'react';
 import { Box, Stack, Typography, Tooltip } from '@mui/material';
 import { Card } from '@rbgrid/design-system';
 import { useDsTokens } from '../../theme/useDsTokens';
-import { dsFonts } from '../../theme/dsTokens';
 import { StationStatus, STATION_STATUS, stationStatusTooltip } from './evStatus';
 import { t } from '../../i18n';
 import { nf } from '../common/ruFormat';
@@ -59,10 +58,12 @@ export const StationCard: React.FC<StationCardProps> = ({ station, onClick, pric
     charging: ds.statusOnline,
     waiting: ds.sevWarning,
     free: ds.inkMuted,
-    nodata: ds.statusOffline,
+    // A station without link is a problem, not a resting state (round 2 ev N-06 / uiux: it looked like «Free»).
+    nodata: ds.sevWarning,
   };
   const color = statusColor[station.status];
-  const mono = { fontFamily: dsFonts.mono, fontVariantNumeric: 'tabular-nums' as const };
+// One typeface for figures (UI/UX audit U06): the UI sans with tabular figures; mono only for codes and logs.
+  const mono = { fontVariantNumeric: 'tabular-nums' as const };
 
   return (
     <Box
@@ -77,7 +78,7 @@ export const StationCard: React.FC<StationCardProps> = ({ station, onClick, pric
               <Box
                 component="span"
                 sx={{
-                  flexShrink: 0, px: 1, py: '2px', borderRadius: 999, fontSize: 11, lineHeight: 1.6,
+                  flexShrink: 0, px: 1, py: '2px', borderRadius: 999, fontSize: 12, lineHeight: 1.6,
                   color, border: `1px solid ${color}`, whiteSpace: 'nowrap',
                 }}
               >
@@ -89,7 +90,8 @@ export const StationCard: React.FC<StationCardProps> = ({ station, onClick, pric
           {money ? (
             <Box>
               <Typography sx={{ ...mono, fontSize: 30, fontWeight: 600, letterSpacing: '-0.01em', color: station.present ? ds.ink : ds.inkMuted, lineHeight: 1.1 }}>
-                {revenueH != null ? perH(revenueH) : t('common.dash')}
+                {/* Only a charging station earns: a free or silent one says its state, not «0,00 €/h» (EV-10). */}
+                {station.status !== 'charging' ? STATION_STATUS[station.status].label : revenueH != null ? perH(revenueH) : t('common.dash')}
               </Typography>
               <Typography sx={{ ...mono, fontSize: 12, color: ds.inkMuted, mt: 0.5 }} title={est ? t('cards.balanceEstimate') : undefined}>
                 {est}{fmtPower(station.powerW)}{marginH != null ? ` · ${t('stations.marginPerHour', { value: perH(marginH) })}` : ''}
@@ -103,14 +105,15 @@ export const StationCard: React.FC<StationCardProps> = ({ station, onClick, pric
 
           <Stack direction="row" spacing={3}>
             <Stack spacing={0.25}>
-              <Typography sx={{ fontSize: 11, letterSpacing: '0.02em' }} color="text.secondary">{t('stations.today')}</Typography>
+              <Typography sx={{ fontSize: 12, letterSpacing: '0.02em' }} color="text.secondary">{t('stations.today')}</Typography>
               <Typography sx={{ ...mono, fontSize: 14, fontWeight: 600, color: ds.ink }}>
-                {station.sessionKwh != null ? `${nf(station.sessionKwh, 1)} ${t('units.kWh')}` : t('common.dash')}
+                {/* Without link the day's energy is unknown, not 0 (round 3 ev: «0,0 kWh» here, «—» on its page). */}
+                {station.sessionKwh != null && station.status !== 'nodata' ? `${nf(station.sessionKwh, 1)} ${t('units.kWh')}` : t('common.dash')}
               </Typography>
             </Stack>
             {station.maxPowerW != null && (
               <Stack spacing={0.25}>
-                <Typography sx={{ fontSize: 11, letterSpacing: '0.02em' }} color="text.secondary">{t('stations.limitLabel')}</Typography>
+                <Typography sx={{ fontSize: 12, letterSpacing: '0.02em' }} color="text.secondary">{t('stations.limitLabel')}</Typography>
                 <Typography sx={{ ...mono, fontSize: 14, fontWeight: 600, color: ds.inkMuted }}>
                   {fmtPower(station.maxPowerW)}
                 </Typography>

@@ -98,9 +98,9 @@ export const TariffRibbon: React.FC<{ currentZone?: string | null; gross?: boole
               <Box sx={{ position: 'absolute', top: -2, bottom: -2, left: `${nowFrac * 100}%`, width: '2px', bgcolor: ds.ink }} />
             </Box>
             <Stack direction="row" justifyContent="space-between">
-              <Typography sx={{ fontSize: 11, color: ds.inkMuted, fontFamily: dsFonts.mono }}>0:00</Typography>
-              <Typography sx={{ fontSize: 11, color: ds.inkMuted, fontFamily: dsFonts.mono }}>12:00</Typography>
-              <Typography sx={{ fontSize: 11, color: ds.inkMuted, fontFamily: dsFonts.mono }}>24:00</Typography>
+              <Typography sx={{ fontSize: 12, color: ds.inkMuted, fontFamily: dsFonts.mono }}>0:00</Typography>
+              <Typography sx={{ fontSize: 12, color: ds.inkMuted, fontFamily: dsFonts.mono }}>12:00</Typography>
+              <Typography sx={{ fontSize: 12, color: ds.inkMuted, fontFamily: dsFonts.mono }}>24:00</Typography>
             </Stack>
             <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
               {dedupeZones(segs).map((s, i) => (

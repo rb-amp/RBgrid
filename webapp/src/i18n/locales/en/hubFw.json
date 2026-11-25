@@ -21,5 +21,8 @@
   "unconfirmed": "The hub is back, but its log doesn't show the new firmware confirmed yet. Check “Events → Hub log”.",
   "notBack": "the hub didn't come back within 3 minutes",
   "failed": "Failed: {reason}",
-  "notConfirmedYet": "The hub is still confirming the firmware installed less than a minute ago. Try again in about a minute."
+  "notConfirmedYet": "The hub is still confirming the firmware installed less than a minute ago. Try again in about a minute.",
+  "storage_internal": "History storage: the hub’s own memory",
+  "storage_external": "History storage: external memory chip",
+  "storage_none": "History storage: the external memory chip is not responding"
 }

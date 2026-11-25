@@ -1,0 +1,19 @@
+{
+ "type": "price_log",
+ "currency": "EUR",
+ "cols": [
+  "from",
+  "buy",
+  "sell",
+  "prov"
+ ],
+ "rows": [
+  [
+   1794273300,
+   0.364068,
+   0.08,
+   "source"
+  ]
+ ],
+ "more": false
+}

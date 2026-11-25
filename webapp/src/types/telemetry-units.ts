@@ -236,6 +236,9 @@ export interface TelemetrySystemTotals {
   present?: number;
   /** Live tariff state (E1, canon fc0f962b; full profile only). */
   tariff?: TelemetryTariff;
+  /** fw 1.3.0: assistants waiting for their pairing code (present only while the LLM API is on) —
+   *  drives the app-wide pairing banner. */
+  llm_pair_pending?: number;
 }
 
 /**
@@ -254,6 +257,15 @@ export interface TelemetryTariff {
   currency?: string;
   /** The factory example plan is in place, not the user's own (root 86f06270, W191-06). */
   placeholder?: boolean;
+  /** fw 1.2.0 dynamic prices: a dynamic price is configured; `buy_rate_all_in`/`sell_rate` follow it
+   *  when one covers now (and may be ≤ 0). */
+  dynamic?: boolean;
+  price_state?: string;
+  /** Provider id in use now, or `plan`. */
+  price_source?: string;
+  price_valid_until?: number;
+  /** Bumps on every change of stored prices or state. */
+  price_gen?: number;
 }
 
 export interface TelemetryFrame {

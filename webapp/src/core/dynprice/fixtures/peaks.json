@@ -1,0 +1,11 @@
+{
+ "type": "peaks",
+ "cycle_day": 1,
+ "cycle_start": 0,
+ "max_15min_w": 0,
+ "max_15min_end": 0,
+ "max_hour_w": 0,
+ "max_hour_start": 0,
+ "top_days": [],
+ "top3_days_mean_w": 0
+}

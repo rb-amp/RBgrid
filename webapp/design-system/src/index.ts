@@ -15,8 +15,13 @@ export { RBGridThemeProvider } from './components/ThemeProvider';
 export type { RBGridThemeProviderProps } from './components/ThemeProvider';
 
 // — Surfaces & primitives —
-export { Card } from './components/Card';
-export type { CardProps } from './components/Card';
+export { Card, toneSx } from './components/Card';
+export type { CardProps, CardTone } from './components/Card';
+
+export { BlockHeader } from './components/BlockHeader';
+export { PanelGroup, PanelGroupContext, useInPanelGroup } from './components/PanelGroup';
+export type { PanelGroupProps } from './components/PanelGroup';
+export type { BlockHeaderProps } from './components/BlockHeader';
 
 export { StatusChip } from './components/StatusChip';
 export type { StatusChipProps, StatusKind } from './components/StatusChip';

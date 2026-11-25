@@ -29,6 +29,13 @@ describe('contract v4 schema keys', () => {
     expect(isStorageMigrating(caps)).toBe(false);
   });
 
+  it('history_slots: the hub\'s own number, null when absent (root history-slots 23.11)', () => {
+    expect(deriveCapabilities(liveSchema).historySlots).toBeNull();
+    expect(deriveCapabilities({ ...liveSchema, history_slots: 49 }).historySlots).toBe(49);
+    expect(deriveCapabilities({ ...liveSchema, history_slots: 0 }).historySlots).toBe(0);
+    expect(deriveCapabilities({ ...liveSchema, history_slots: -1 }).historySlots).toBeNull();
+  });
+
   it('detects OSS build + migrating storage', () => {
     expect(isOssBuild(deriveCapabilities({ ...liveSchema, build: 'oss' }))).toBe(true);
     expect(isStorageMigrating(deriveCapabilities({ ...liveSchema, storage_state: 'migrating' }))).toBe(true);

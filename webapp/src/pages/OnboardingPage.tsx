@@ -7,7 +7,7 @@
  * that shows a summary + reboot-with-progress. Per-step work still reuses the existing panels
  * (Security, shadow config editors, Sensors/bind, Nodes).
  */
-import { SiteProfilePanel } from '../components/settings/SiteProfilePanel';
+import { PageSkeleton } from '../components/common/PageSkeleton';
 import { channelLabel } from '../entities/phaseGroup';
 import React, { useState } from 'react';
 import {
@@ -78,8 +78,6 @@ const WifiStep: React.FC = () => {
 const ObjectTimeStep: React.FC<{ timeSynced: boolean; onChanged: () => void }> = ({ onChanged }) => {
   return (
     <Stack spacing={2}>
-      {/* What kind of site this is — shapes the Overview (review 11 §7.1: scenario cards with art). */}
-      <SiteProfilePanel />
       {/* Two fields and the zone, each with its own «Save» — the generic system/time editors
           (~35 service fields, no save button, time read-only on the wire) saved nothing (W191-01/02). */}
       <SiteNamePanel onSaved={onChanged} />
@@ -247,7 +245,7 @@ export const OnboardingPage: React.FC = () => {
   const theme = useTheme();
   // < 820: an 8-step horizontal stepper doesn't fit → «Шаг N из 8 · …» + progress (review 03 P2-20).
   const narrow = useMediaQuery(theme.breakpoints.down('md'));
-  if (!ob.current) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}><CircularProgress aria-label={t('common.loading')} /></Box>;
+  if (!ob.current) return <PageSkeleton />;
 
   const { steps, index, current, isComplete, ctx } = ob;
   const required = !current.optional && !isComplete(current) && current.key !== 'done';

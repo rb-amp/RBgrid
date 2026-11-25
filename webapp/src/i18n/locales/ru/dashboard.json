@@ -4,7 +4,6 @@
   "overview": "Сводка",
   "analytics": "Подробно",
   "dataDelayed": "данные с задержкой",
-  "scenarioChip": "Тип объекта: {scenario} · изменить",
   "viewAria": "Вид",
   "staleBanner": "Нет связи с устройством — показаны данные от {time}.",
   "emptyTitle": "Пока нет точек учёта",

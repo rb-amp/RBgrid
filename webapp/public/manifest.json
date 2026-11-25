@@ -1,7 +1,7 @@
 {
-  "short_name": "RBGrid",
-  "name": "RBGrid",
-  "description": "RBGrid — ESP32 power monitoring",
+  "short_name": "RBgrid",
+  "name": "RBgrid",
+  "description": "RBgrid — ESP32 power monitoring",
   "icons": [
     {
       "src": "favicon.png",

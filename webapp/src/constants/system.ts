@@ -168,7 +168,7 @@ export const THRESHOLD_LIMITS = {
 export const SYSTEM_DEFAULTS = {
   // Device settings
   DEVICE: {
-    NAME: 'RBGrid Device',
+    NAME: 'RBgrid Device',
     LOCATION: 'Not Set',
     LANGUAGE: 'EN',
     TIMEZONE: 'UTC+0',
@@ -262,7 +262,7 @@ export const DATA_FORMATS = {
     CSV_SEPARATOR: ',',
     CSV_LINE_ENDING: '\n',
     JSON_INDENT: 2,
-    EXCEL_SHEET_NAME: 'RBGrid Data',
+    EXCEL_SHEET_NAME: 'RBgrid Data',
   }
 } as const;
 

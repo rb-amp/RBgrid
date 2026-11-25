@@ -1,0 +1,55 @@
+{
+ "type": "rules",
+ "signal": {
+  "buy_cheap_below": 0.3,
+  "sell_low_below": 0.05
+ },
+ "rules": [
+  {
+   "id": 1,
+   "name": "Boiler",
+   "kind": "cheapest",
+   "enabled": true,
+   "from_h": 0,
+   "to_h": 24,
+   "periods": 8,
+   "consecutive": true,
+   "state": {
+    "active": false,
+    "active_until": 0,
+    "next_start": 1794348000,
+    "window_from": 1794268800,
+    "window_until": 1794355200
+   }
+  },
+  {
+   "id": 2,
+   "name": "Cheap",
+   "kind": "threshold",
+   "enabled": true,
+   "on_below": 0.29,
+   "off_above": 0.31,
+   "state": {
+    "active": false,
+    "active_until": 0,
+    "next_start": 0
+   }
+  },
+  {
+   "id": 3,
+   "name": "EV",
+   "kind": "deadline",
+   "enabled": true,
+   "deadline_h": 7,
+   "periods": 12,
+   "consecutive": false,
+   "state": {
+    "active": false,
+    "active_until": 0,
+    "next_start": 0,
+    "window_from": 1794207600,
+    "window_until": 1794294000
+   }
+  }
+ ]
+}

@@ -7,13 +7,23 @@
 import React from 'react';
 import { Alert } from '@mui/material';
 import { t } from '../../i18n';
+import { useCapabilities } from '../../core';
 
-/** History slots of a v1.1.2 hub (operator 03.11 via root). */
+/** History slots of a hub that doesn't say (v1.1.2 … 1.3.0-dev, operator 03.11 via root). */
 export const HISTORY_SLOTS = 12;
 
+/** The hub's own number of history slots (`history_slots`, root history-slots 23.11: 12 in its flash,
+ *  49 on the S3 statistics chip, 0 when the chip is missing); 12 when the hub doesn't send it. */
+export function useHistorySlots(): number {
+  const n = useCapabilities().historySlots;
+  return n ?? HISTORY_SLOTS;
+}
+
 export const NoHistoryNote: React.FC<{ history?: boolean; historyCount: number | null; name?: string }> = ({ history, historyCount, name }) => {
+  const slots = useHistorySlots();
   if (history !== false) return null;
-  const why = historyCount != null && historyCount >= HISTORY_SLOTS ? t('point.historyFull', { n: HISTORY_SLOTS }) : t('point.historyRestart');
+  // 0 slots = the statistics chip is missing: StatsMediaAlert says so; no «full» reason here.
+  const why = slots === 0 ? '' : historyCount != null && historyCount >= slots ? t('point.historyFull', { n: slots }) : t('point.historyRestart');
   return (
     <Alert severity="info" sx={{ mb: 1.5 }}>
       {name ? t('point.liveOnlyNamed', { name }) : t('point.liveOnly')} {why}

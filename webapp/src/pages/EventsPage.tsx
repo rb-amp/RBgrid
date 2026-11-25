@@ -20,7 +20,11 @@ import { UnitEntityGroup, unitMetricValue, DEFAULT_SYSTEM_BASE } from '../entiti
 import { pwW } from '../components/common/ruFormat';
 import { intlLocale, t, dateLocale } from '../i18n';
 import { useUnitsConfig } from '../hooks/useUnitsConfig';
-import { offlinePoints, fullNameOf } from './overviewData';
+import { offlinePoints, fullNameOf, pointUnits, lineUnits, mainUnit } from './overviewData';
+import { fullPower } from '../entities/siteModel';
+import { APPROACH_PCT } from '../entities/limits';
+
+export { APPROACH_PCT };
 import { isDemo } from '../services/connection';
 import { useDeviceClock, formatDeviceTime } from '../core/deviceTime';
 import { channelLabel } from '../entities/phaseGroup';
@@ -55,7 +59,7 @@ const OfflineCard: React.FC<{ group: UnitEntityGroup; name: string; since?: numb
         <Box sx={{ color: sev.color, fontSize: 18, lineHeight: 1.2 }}>○</Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Stack direction="row" spacing={1} alignItems="baseline" flexWrap="wrap">
-            <Typography sx={{ fontWeight: 700, fontSize: 11, textTransform: 'uppercase', color: sev.color, letterSpacing: '0.04em' }}>
+            <Typography sx={{ fontWeight: 700, fontSize: 12, textTransform: 'uppercase', color: sev.color, letterSpacing: '0.04em' }}>
               {t(sev.word)}
             </Typography>
             <Typography sx={{ fontWeight: 600, fontSize: 14, color: ds.ink }} noWrap>{name}</Typography>
@@ -65,13 +69,13 @@ const OfflineCard: React.FC<{ group: UnitEntityGroup; name: string; since?: numb
           {/* The hub's log knows when polling the module failed (root 16.10); a module not found at
               start-up is never polled and has no such line — then what this browser saw. */}
           {hubFail ? (
-            <Typography sx={{ fontSize: 11, color: ds.inkMuted, fontFamily: dsFonts.mono, mt: 0.25, ...tnum }}>
+            <Typography sx={{ fontSize: 12, color: ds.inkMuted, fontFamily: dsFonts.mono, mt: 0.25, ...tnum }}>
               {t(hubFail.kind === 'boot' ? 'events.hubNotFoundSince' : 'events.hubFailSince', { time: Date.now() / 1000 - hubFail.ts > 20 * 3600
                 ? formatDeviceTime(clock, hubFail.ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }, dateLocale())
                 : hubHm(hubFail.ts * 1000) })}
             </Typography>
           ) : since ? (
-            <Typography sx={{ fontSize: 11, color: ds.inkMuted, fontFamily: dsFonts.mono, mt: 0.25, ...tnum }}>
+            <Typography sx={{ fontSize: 12, color: ds.inkMuted, fontFamily: dsFonts.mono, mt: 0.25, ...tnum }}>
               {t('events.seenSince', { time: hubHm(since) })}
             </Typography>
           ) : null}
@@ -153,7 +157,7 @@ const AlarmCard: React.FC<AlarmCardProps & { name: string }> = ({ group, name, s
 
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Stack direction="row" spacing={1} alignItems="baseline" flexWrap="wrap">
-            <Typography sx={{ fontWeight: 700, fontSize: 11, textTransform: 'uppercase', color: sev.color, letterSpacing: '0.04em' }}>
+            <Typography sx={{ fontWeight: 700, fontSize: 12, textTransform: 'uppercase', color: sev.color, letterSpacing: '0.04em' }}>
               {t(sev.word)}
             </Typography>
             <Typography sx={{ fontWeight: 600, fontSize: 14, color: ds.ink }} noWrap>
@@ -165,7 +169,7 @@ const AlarmCard: React.FC<AlarmCardProps & { name: string }> = ({ group, name, s
             {details.join(' · ')}
           </Typography>
 
-          <Typography sx={{ fontSize: 11, color: ds.inkMuted, fontFamily: dsFonts.mono, mt: 0.25, ...tnum }}>
+          <Typography sx={{ fontSize: 12, color: ds.inkMuted, fontFamily: dsFonts.mono, mt: 0.25, ...tnum }}>
             {t('events.since', { time: hhmm(since) })}
           </Typography>
 
@@ -181,7 +185,7 @@ const AlarmCard: React.FC<AlarmCardProps & { name: string }> = ({ group, name, s
             )}
           </Stack>
           {!ackedAt && (
-            <Typography sx={{ fontSize: 10.5, color: ds.inkMuted, mt: 0.5 }}>
+            <Typography sx={{ fontSize: 12, color: ds.inkMuted, mt: 0.5 }}>
               {t('events.ackLocalOnly')}
             </Typography>
           )}
@@ -238,7 +242,26 @@ export const EventsPage: React.FC = () => {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineKeys]);
-  const total = alarms.length + offline.length;
+  // «Approaching the limit» (role audit B7; root ui-round-data-asks: the hub has no warning level, the app
+  // keeps it): the input's live power against its configured limit, from APPROACH_PCT.
+  const approach = useMemo(() => {
+    const lim = unitsCfg.input.ratedPowerW;
+    const main = data ? mainUnit(data.units, unitsCfg) : undefined;
+    if (!lim || !main?.present) return null;
+    const w = Math.abs(fullPower(main, unitsCfg.forGroup(main)).w ?? 0);
+    const pct = (w / lim) * 100;
+    return pct >= APPROACH_PCT ? { pct, w, lim } : null;
+  }, [data, unitsCfg]);
+  // A line above its rating — the Overview's «Needs attention» rule (round 3 business R2: the compressor at
+  // 128 % showed on the Overview and nowhere here). A clipping CT is told apart there; not repeated.
+  const overLines = useMemo(() => (data ? lineUnits(data.units, unitsCfg) : []).flatMap((g) => {
+    const lim = unitsCfg.forGroup(g)?.ratedPowerW;
+    if (!g.present || !lim || g.attributes?.clip === true || g.attributes?.['alarm'] === true) return [];
+    const w = Math.abs(fullPower(g, unitsCfg.forGroup(g)).w ?? 0);
+    return w > lim ? [{ g, w, lim, pct: (w / lim) * 100 }] : [];
+  }), [data, unitsCfg]);
+  const warns = (approach ? 1 : 0) + overLines.length;
+  const total = alarms.length + offline.length + warns;
 
   // When polling each silent module failed, by the hub's log; re-read each minute while any is silent.
   const [failSince, setFailSince] = useState<Map<number, ModuleFail>>(new Map());
@@ -294,14 +317,47 @@ export const EventsPage: React.FC = () => {
     </Stack>
   );
 
+  // «Is everything all right?» answered (UI redesign U6): every sensor heard, the last restart, and
+  // which limits would raise an event — with the way to set them.
+  const metered = data ? pointUnits(data.units).filter((g) => !g.noChannel).length : 0;
+  const inputLimit = unitsCfg.input.ratedPowerW ?? null;
+  const inputBreaker = unitsCfg.input.maxCurrentA ?? null;
+  const ratedLines = data ? lineUnits(data.units, unitsCfg).filter((g) => (unitsCfg.forGroup(g)?.ratedPowerW ?? 0) > 0).length : 0;
+  const inputHex = unitsCfg.input.hex;
+  // Which limits would raise an event, with the way to set them — under the warnings too (round 3
+  // business R3: with «the input is close to its limit» on, the rules and «Set limits» disappeared).
+  const rules = (
+    <>
+      <Typography variant="body2" color="text.secondary">
+        {[
+          inputLimit ? t('events.limitInput', { w: pwW(inputLimit), pct: APPROACH_PCT }) : null,
+          inputBreaker ? t('events.limitBreaker', { a: inputBreaker }) : null,
+          ratedLines ? t('events.limitLines', { n: ratedLines }) : null,
+        ].filter(Boolean).join(' · ') || t('events.noLimits')}
+      </Typography>
+      <Box>
+        <Button size="small" variant="outlined" onClick={() => navigate(inputHex ? `/point/${inputHex}?setup` : '/devices')}>{t('events.setLimits')}</Button>
+      </Box>
+    </>
+  );
   const emptyState = (
     <Card>
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ py: 1.5 }}>
-        <Box sx={{ color: ds.statusOnline, fontSize: 20, lineHeight: 1 }}>✓</Box>
-        <Typography sx={{ color: ds.inkMuted }}>{t('events.noActiveAlarms')}</Typography>
+      <Stack spacing={1.25} sx={{ py: 0.5 }}>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Box sx={{ color: ds.statusOnline, fontSize: 20, lineHeight: 1 }}>✓</Box>
+          <Typography sx={{ fontWeight: 600 }}>{t('events.noActiveAlarms')}</Typography>
+        </Stack>
+        {metered > 0 && <Typography variant="body2" color="text.secondary">{t('events.allHeard', { n: metered })}</Typography>}
+        {boot?.ts && boot.ts > 1_600_000_000 && (
+          <Typography variant="body2" color="text.secondary">
+            {t('events.lastRestart', { time: formatDeviceTime(clock, boot.ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }, dateLocale()) })}
+          </Typography>
+        )}
+        {rules}
       </Stack>
     </Card>
   );
+  const rulesCard = <Card><Stack spacing={1.25} sx={{ py: 0.5 }}>{rules}</Stack></Card>;
 
   return (
     <Box>
@@ -338,14 +394,25 @@ export const EventsPage: React.FC = () => {
           {boot.downtime_s && boot.downtime_s > 60 ? ` ${t('events.bootDown', { dur: downText(boot.downtime_s) })}` : ''}
         </Alert>
       )}
-      {tab === 'active' && (total === 0 ? (lost ? null : emptyState) : renderAlarms())}
+      {tab === 'active' && approach && (
+        <Alert severity={approach.pct >= 100 ? 'error' : 'warning'} sx={{ mb: 2 }}>
+          {t('events.approach', { pct: Math.round(approach.pct), w: pwW(approach.w), lim: pwW(approach.lim) })}
+        </Alert>
+      )}
+      {tab === 'active' && overLines.map((o) => (
+        <Alert key={o.g.unitKey} severity="warning" sx={{ mb: 2 }}
+          action={<Button size="small" color="inherit" onClick={() => navigate(`/point/${unitsCfg.forGroup(o.g)?.hex ?? o.g.unitKey}`)}>{t('events.openPoint')}</Button>}>
+          {t('events.lineOver', { name: fullNameOf(o.g, unitsCfg), pct: Math.round(o.pct), w: pwW(o.w), lim: pwW(o.lim) })}
+        </Alert>
+      ))}
+      {tab === 'active' && (total - warns === 0 ? (lost ? null : warns ? rulesCard : emptyState) : renderAlarms())}
 
       {tab === 'log' && (
         <Stack spacing={1.25}>
           <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>
             {t('events.logNote')}
           </Typography>
-          {total === 0 ? (lost ? null : emptyState) : renderAlarms()}
+          {total - warns === 0 ? (lost ? null : warns ? rulesCard : emptyState) : renderAlarms()}
           <Box sx={{ pt: 1.5 }}><HubLog /></Box>
         </Stack>
       )}

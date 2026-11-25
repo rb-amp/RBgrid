@@ -3,15 +3,18 @@
  * port / TLS / login / password → mqtt-config {broker_uri}. Applies after a hub restart (the hub
  * says requires_reboot) → «Перезагрузить сейчас». The hub masks stored credentials, so a stored
  * login / password must be typed again to keep them (the masked URI is refused).
+ * Hub 1.1.8 reports `tls` in mqtt-config: TLS opens up, with the broker CA upload and the TLS state.
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, FormControlLabel, Stack, Switch, TextField, Typography } from '@mui/material';
 import { useConfigShadow, useDeviceSession } from '../../core';
+import { useSectionForm } from '../../app/sectionForms';
+import { useMarkReboot } from '../../app/rebootPending';
 import { t } from '../../i18n';
-import { RebootNowButton } from '../common/RebootNowButton';
 import { ApiRequestError } from '../../services/api';
 import { BrokerForm, parseBrokerUri, buildBrokerUri } from './mqttUri';
 import { RELEASE_HIDDEN } from '../../constants/release';
+import { MqttCaPanel, tlsStateLine } from './MqttCaPanel';
 
 export const MqttBrokerForm: React.FC = () => {
   const session = useDeviceSession();
@@ -24,29 +27,37 @@ export const MqttBrokerForm: React.FC = () => {
   const [f, setF] = useState<BrokerForm>(initial);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ sev: 'success' | 'warning' | 'error'; text: string; reboot?: boolean } | null>(null);
+  // «Saved, after a restart» goes to the one «Waits for a restart» strip (SPEC §5.3), not a button here.
+  useMarkReboot(!!msg?.reboot, t('mqttBroker.title'));
   useEffect(() => { setF(initial); }, [initial]);
 
   const canWrite = typeof session.transport.setMqttBroker === 'function';
   const uri = buildBrokerUri(f);
   const dirty = !!uri && uri !== stored;
-  // TLS hidden in release builds (the hub can't verify a broker certificate yet); a saved mqtts://
-  // URI is shown as is and kept — the switch reads it but can't be flipped.
-  const tlsLocked = RELEASE_HIDDEN.mqttTls;
+  // TLS hidden in release builds on hubs that can't take a broker CA; a saved mqtts:// URI is shown as
+  // is and kept — the switch reads it but can't be flipped. Hub 1.1.8 reports `tls` → TLS is open.
+  const tls = rep.tls && typeof rep.tls === 'object' ? (rep.tls as { state?: unknown; ca_uploaded?: unknown }) : null;
+  const tlsLocked = RELEASE_HIDDEN.mqttTls && !tls;
+  const tlsLine = tls ? tlsStateLine(tls.state) : null;
   const showTls = !tlsLocked || initial.tls;
   const set = (patch: Partial<BrokerForm>) => setF((x) => ({ ...x, ...patch }));
 
-  const save = async () => {
-    if (!uri || !session.transport.setMqttBroker) return;
+  const save = async (): Promise<boolean> => {
+    if (!uri || !session.transport.setMqttBroker) return false;
     setBusy(true); setMsg(null);
     try {
       const r = await session.transport.setMqttBroker(uri);
       await mqtt.load().catch(() => undefined);
       setMsg(r.requiresReboot ? { sev: 'warning', text: t('mqttBroker.savedReboot'), reboot: true } : { sev: 'success', text: t('mqttBroker.saved') });
+      return true;
     } catch (e) {
       const auth = e instanceof ApiRequestError && (e.status === 401 || e.status === 403);
       setMsg({ sev: 'error', text: auth ? t('common.adminTokenRequired') : t('mqttBroker.failed', { reason: e instanceof Error ? e.message : String(e) }) });
+      return false;
     } finally { setBusy(false); }
   };
+  // One «Save» for the section (SPEC §5.3).
+  const inSection = useSectionForm({ id: 'mqtt-broker', label: t('mqttBroker.title'), dirty: canWrite && dirty, invalid: !uri && !!f.host, save, reset: () => { setF(initial); setMsg(null); } });
 
   return (
     <Box>
@@ -65,6 +76,8 @@ export const MqttBrokerForm: React.FC = () => {
             {tlsLocked && <Typography variant="caption" color="text.secondary" component="div">{t('mqttBroker.tlsKept')}</Typography>}
           </Box>
         )}
+        {tlsLine && <Alert severity={tlsLine.sev}>{tlsLine.text}</Alert>}
+        {tls && (f.tls || initial.tls || tls.ca_uploaded === true) && <MqttCaPanel />}
         <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'minmax(0, 1fr) minmax(0, 1fr)' } }}>
           <TextField size="small" label={t('mqttBroker.user')} value={f.user} disabled={!canWrite} autoComplete="off"
             onChange={(e) => set({ user: e.target.value })} />
@@ -74,12 +87,14 @@ export const MqttBrokerForm: React.FC = () => {
         {f.maskedCreds && <Typography variant="caption" color="warning.main">{t('mqttBroker.maskedHint')}</Typography>}
         <Typography variant="caption" color="text.secondary">{t('mqttBroker.restartHint')}</Typography>
         <Stack direction="row" spacing={1} alignItems="center">
-          <Button size="small" variant="contained" disabled={!canWrite || !dirty || busy} onClick={save}>
-            {busy ? t('common.saving') : t('common.save')}
-          </Button>
+          {!inSection && (
+            <Button size="small" variant="contained" disabled={!canWrite || !dirty || busy} onClick={() => void save()}>
+              {busy ? t('common.saving') : t('common.save')}
+            </Button>
+          )}
           {!uri && f.host && <Typography variant="caption" color="error.main">{t(f.pass && !f.user ? 'mqttBroker.passNoUser' : 'mqttBroker.invalid')}</Typography>}
         </Stack>
-        {msg && <Alert severity={msg.sev} action={msg.reboot ? <RebootNowButton /> : undefined}>{msg.text}</Alert>}
+        {msg && <Alert severity={msg.sev}>{msg.text}</Alert>}
       </Stack>
     </Box>
   );

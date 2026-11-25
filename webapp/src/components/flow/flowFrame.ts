@@ -11,6 +11,7 @@
  *  - loads = non-main, non-generation points, PLUS a synthetic «Прочее» row
  *            (house − Σ loads) when it is > 5 % of house AND > 50 W.
  */
+import { nestedKeys, NestingConfig } from '../../entities/nesting';
 import { NormalizedTelemetry, UnitEntityGroup, unitMetricValue } from '../../entities/model';
 import { UnitRole } from '../../types/device';
 import {
@@ -130,6 +131,10 @@ export interface BuildFlowOptions {
   lost?: boolean;
   /** Display name for a unit (configured short_name/name); defaults to the point slug. */
   nameOf?: (g: UnitEntityGroup) => string;
+  /** A unit's hex and the point it is measured inside (units-config `inside`, fw 1.1.8). */
+  nestingOf?: (g: UnitEntityGroup) => NestingConfig | undefined;
+  /** The same by unit key, for an ancestor that isn't drawn (not a consumer here). */
+  nestingOfKey?: (unitKey: string) => NestingConfig | undefined;
 }
 
 /**
@@ -187,7 +192,11 @@ export function buildFlowFrame(data: NormalizedTelemetry, opts: BuildFlowOptions
   // consumers = non-main, non-generation (incl. storage: signed, negative while discharging).
   const consumers = nonMain.filter((u) => !isGeneration(u, roleOf(u)));
 
-  const loads: FlowLoad[] = consumers.map((u) => {
+  // A point measured inside another consumer (fw 1.1.8 `inside`) is part of its parent's flow, as a
+  // group's members are of its card: drawn on its own it would add to the house twice.
+  const byKey = new Map(consumers.map((u) => [u.unitKey, u]));
+  const nested = opts.nestingOf ? nestedKeys(consumers.map((u) => u.unitKey), (k) => { const g = byKey.get(k); return g ? opts.nestingOf!(g) : opts.nestingOfKey?.(k); }) : new Set<string>();
+  const loads: FlowLoad[] = consumers.filter((u) => !nested.has(u.unitKey)).map((u) => {
     const p = fullW(u);
     const name = nameOf(u);
     return {

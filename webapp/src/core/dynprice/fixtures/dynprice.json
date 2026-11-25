@@ -1,0 +1,446 @@
+{
+ "type": "dynprice",
+ "enabled": true,
+ "source": "energy_charts",
+ "backup_source": "ha",
+ "zone": "NL",
+ "country": "NL",
+ "ha_class": "spot",
+ "factor": 1,
+ "markup": 0,
+ "zones_stack": false,
+ "hourly_mean": false,
+ "floor_buy": null,
+ "floor_sell": null,
+ "sell_mode": "source",
+ "k_sell": 1,
+ "feedin_fee": 0,
+ "product": "AGILE-24-10-01",
+ "export_product": "AGILE-OUTGOING-19-05-13",
+ "token_set": false,
+ "backup_token_set": false,
+ "currency": "EUR",
+ "price_state": "ok",
+ "source_now": "energy_charts",
+ "backup_now": false,
+ "valid_until": 1794351600,
+ "last_fetch": 0,
+ "next_fetch": 0,
+ "last_error": "none",
+ "providers": [
+  {
+   "id": "energy_charts",
+   "name": "Energy-Charts (Fraunhofer ISE)",
+   "class": "spot",
+   "local": false,
+   "available": true,
+   "needs_token": false,
+   "resolution_s": 900,
+   "zones": [
+    {
+     "id": "AT",
+     "name": "Austria",
+     "country": "AT",
+     "currency": "EUR"
+    },
+    {
+     "id": "BE",
+     "name": "Belgium",
+     "country": "BE",
+     "currency": "EUR"
+    },
+    {
+     "id": "CH",
+     "name": "Switzerland",
+     "country": "CH",
+     "currency": "EUR"
+    },
+    {
+     "id": "CZ",
+     "name": "Czechia",
+     "country": "CZ",
+     "currency": "EUR"
+    },
+    {
+     "id": "DE-LU",
+     "name": "Germany / Luxembourg",
+     "country": "DE",
+     "currency": "EUR"
+    },
+    {
+     "id": "DK1",
+     "name": "Denmark West (DK1)",
+     "country": "DK",
+     "currency": "EUR"
+    },
+    {
+     "id": "DK2",
+     "name": "Denmark East (DK2)",
+     "country": "DK",
+     "currency": "EUR"
+    },
+    {
+     "id": "FR",
+     "name": "France",
+     "country": "FR",
+     "currency": "EUR"
+    },
+    {
+     "id": "HU",
+     "name": "Hungary",
+     "country": "HU",
+     "currency": "EUR"
+    },
+    {
+     "id": "IT-North",
+     "name": "Italy North",
+     "country": "IT",
+     "currency": "EUR"
+    },
+    {
+     "id": "NL",
+     "name": "Netherlands",
+     "country": "NL",
+     "currency": "EUR"
+    },
+    {
+     "id": "NO2",
+     "name": "Norway South-West (NO2)",
+     "country": "NO",
+     "currency": "EUR"
+    },
+    {
+     "id": "PL",
+     "name": "Poland",
+     "country": "PL",
+     "currency": "EUR"
+    },
+    {
+     "id": "SE4",
+     "name": "Sweden South (SE4)",
+     "country": "SE",
+     "currency": "EUR"
+    },
+    {
+     "id": "SI",
+     "name": "Slovenia",
+     "country": "SI",
+     "currency": "EUR"
+    }
+   ],
+   "terms_url": "https://api.energy-charts.info/",
+   "attribution": "Bundesnetzagentur | SMARD.de / Energy-Charts (CC BY 4.0)"
+  },
+  {
+   "id": "nordpool",
+   "name": "Nord Pool (unofficial data portal)",
+   "class": "spot",
+   "local": false,
+   "available": true,
+   "needs_token": false,
+   "resolution_s": 900,
+   "zones": [
+    {
+     "id": "SE1",
+     "name": "Sweden North (SE1)",
+     "country": "SE",
+     "currency": "SEK"
+    },
+    {
+     "id": "SE2",
+     "name": "Sweden North-Central (SE2)",
+     "country": "SE",
+     "currency": "SEK"
+    },
+    {
+     "id": "SE3",
+     "name": "Sweden South-Central (SE3)",
+     "country": "SE",
+     "currency": "SEK"
+    },
+    {
+     "id": "SE4",
+     "name": "Sweden South (SE4)",
+     "country": "SE",
+     "currency": "SEK"
+    },
+    {
+     "id": "NO1",
+     "name": "Norway South-East (NO1)",
+     "country": "NO",
+     "currency": "NOK"
+    },
+    {
+     "id": "NO2",
+     "name": "Norway South-West (NO2)",
+     "country": "NO",
+     "currency": "NOK"
+    },
+    {
+     "id": "NO3",
+     "name": "Norway Central (NO3)",
+     "country": "NO",
+     "currency": "NOK"
+    },
+    {
+     "id": "NO4",
+     "name": "Norway North (NO4)",
+     "country": "NO",
+     "currency": "NOK"
+    },
+    {
+     "id": "NO5",
+     "name": "Norway West (NO5)",
+     "country": "NO",
+     "currency": "NOK"
+    },
+    {
+     "id": "DK1",
+     "name": "Denmark West (DK1)",
+     "country": "DK",
+     "currency": "DKK"
+    },
+    {
+     "id": "DK2",
+     "name": "Denmark East (DK2)",
+     "country": "DK",
+     "currency": "DKK"
+    },
+    {
+     "id": "FI",
+     "name": "Finland",
+     "country": "FI",
+     "currency": "EUR"
+    },
+    {
+     "id": "EE",
+     "name": "Estonia",
+     "country": "EE",
+     "currency": "EUR"
+    },
+    {
+     "id": "LV",
+     "name": "Latvia",
+     "country": "LV",
+     "currency": "EUR"
+    },
+    {
+     "id": "LT",
+     "name": "Lithuania",
+     "country": "LT",
+     "currency": "EUR"
+    }
+   ],
+   "terms_url": "https://www.nordpoolgroup.com/",
+   "attribution": "Day-ahead prices: Nord Pool (unofficial endpoint)"
+  },
+  {
+   "id": "elprisetjustnu",
+   "name": "Elpriset just nu (SE)",
+   "class": "spot",
+   "local": false,
+   "available": true,
+   "needs_token": false,
+   "resolution_s": 900,
+   "zones": [
+    {
+     "id": "SE1",
+     "name": "Sweden North (SE1)",
+     "country": "SE",
+     "currency": "SEK"
+    },
+    {
+     "id": "SE2",
+     "name": "Sweden North-Central (SE2)",
+     "country": "SE",
+     "currency": "SEK"
+    },
+    {
+     "id": "SE3",
+     "name": "Sweden South-Central (SE3)",
+     "country": "SE",
+     "currency": "SEK"
+    },
+    {
+     "id": "SE4",
+     "name": "Sweden South (SE4)",
+     "country": "SE",
+     "currency": "SEK"
+    }
+   ],
+   "terms_url": "https://www.elprisetjustnu.se/elpris-api",
+   "attribution": "Elpriser tillhandah\u00e5lls av Elpriset just nu.se"
+  },
+  {
+   "id": "hvakosterstrommen",
+   "name": "Hva koster str\u00f8mmen (NO, hourly)",
+   "class": "spot",
+   "local": false,
+   "available": true,
+   "needs_token": false,
+   "resolution_s": 3600,
+   "zones": [
+    {
+     "id": "NO1",
+     "name": "Norway South-East (NO1)",
+     "country": "NO",
+     "currency": "NOK"
+    },
+    {
+     "id": "NO2",
+     "name": "Norway South-West (NO2)",
+     "country": "NO",
+     "currency": "NOK"
+    },
+    {
+     "id": "NO3",
+     "name": "Norway Central (NO3)",
+     "country": "NO",
+     "currency": "NOK"
+    },
+    {
+     "id": "NO4",
+     "name": "Norway North (NO4)",
+     "country": "NO",
+     "currency": "NOK"
+    },
+    {
+     "id": "NO5",
+     "name": "Norway West (NO5)",
+     "country": "NO",
+     "currency": "NOK"
+    }
+   ],
+   "terms_url": "https://www.hvakosterstrommen.no/strompris-api",
+   "attribution": "Str\u00f8mpriser levert av Hva koster str\u00f8mmen.no"
+  },
+  {
+   "id": "energyzero",
+   "name": "EnergyZero (NL, all-in)",
+   "class": "all_in",
+   "local": false,
+   "available": true,
+   "needs_token": false,
+   "resolution_s": 900,
+   "zones": [
+    {
+     "id": "NL",
+     "name": "Netherlands",
+     "country": "NL",
+     "currency": "EUR"
+    }
+   ],
+   "terms_url": "https://www.energyzero.nl/",
+   "attribution": "Prices: EnergyZero (all-in incl. VAT)"
+  },
+  {
+   "id": "octopus",
+   "name": "Octopus Agile (UK, all-in)",
+   "class": "all_in",
+   "local": false,
+   "available": true,
+   "needs_token": false,
+   "resolution_s": 1800,
+   "zones": [
+    {
+     "id": "A",
+     "name": "Eastern England",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "B",
+     "name": "East Midlands",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "C",
+     "name": "London",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "D",
+     "name": "Merseyside and North Wales",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "E",
+     "name": "West Midlands",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "F",
+     "name": "North East England",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "G",
+     "name": "North West England",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "H",
+     "name": "Southern England",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "J",
+     "name": "South East England",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "K",
+     "name": "South Wales",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "L",
+     "name": "South West England",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "M",
+     "name": "Yorkshire",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "N",
+     "name": "South Scotland",
+     "country": "GB",
+     "currency": "GBP"
+    },
+    {
+     "id": "P",
+     "name": "North Scotland",
+     "country": "GB",
+     "currency": "GBP"
+    }
+   ],
+   "terms_url": "https://octopus.energy/",
+   "attribution": "Prices: Octopus Energy Agile (incl. VAT)"
+  },
+  {
+   "id": "ha",
+   "name": "Home Assistant",
+   "class": "spot",
+   "local": true,
+   "available": true,
+   "needs_token": false,
+   "resolution_s": 0,
+   "zones": [],
+   "terms_url": "",
+   "attribution": ""
+  }
+ ]
+}

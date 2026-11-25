@@ -9,18 +9,21 @@ import { IconButton, Popover, Typography, Link, Box } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { t } from '../../i18n';
 
-/** Documentation page per help topic (content:rbgrid, 2026-10-16 — /webapp-* slugs are kept 1:1
+/** Documentation page per help topic (docs team, 2026-10-16 — /webapp-* slugs are kept 1:1
  *  through the site migration; 10/10 topics). */
 const TARIFF_DOC = 'https://www.rbgrid.io/webapp-tariff-configuration';
 const UNITS_DOC = 'https://www.rbgrid.io/webapp-units-configuration';
 export const DOC_PAGES: Partial<Record<HelpTopic, string>> = {
   netMetering: TARIFF_DOC, sellRatio: TARIFF_DOC, zoneRatio: TARIFF_DOC, defaultZone: TARIFF_DOC, zoneDays: TARIFF_DOC,
   role: UNITS_DOC, partial: UNITS_DOC, closedRecords: UNITS_DOC, phase: UNITS_DOC, notBought: TARIFF_DOC,
+  point: UNITS_DOC, input: UNITS_DOC, line: UNITS_DOC, zone: TARIFF_DOC,
 };
 
 export type HelpTopic =
   | 'netMetering' | 'sellRatio' | 'zoneRatio' | 'defaultZone' | 'zoneDays'
-  | 'role' | 'phase' | 'partial' | 'notBought' | 'closedRecords';
+  | 'role' | 'phase' | 'partial' | 'notBought' | 'closedRecords'
+  // The glossary (UI redesign U10): one definition per term, the same (i) everywhere.
+  | 'point' | 'input' | 'line' | 'zone' | 'unmetered' | 'standby';
 
 export const HelpTip: React.FC<{ topic: HelpTopic; label?: string }> = ({ topic, label }) => {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);

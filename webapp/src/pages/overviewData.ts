@@ -20,6 +20,7 @@ import { t, tCode } from '../i18n';
 import type { UnitRole } from '../types/device';
 import type { TelemetrySystemTotals } from '../types/telemetry-units';
 import { currentOnlyUnitKeys } from '../hooks/useHardware';
+import { nestedKeys } from '../entities/nesting';
 
 const W_PER_KW = 1000;
 
@@ -64,6 +65,18 @@ export function lineUnits(groups: UnitEntityGroup[], join: UnitsConfigJoin, curr
       && !currentOnly.has(g.unitKey.toUpperCase())
       && !isSupplyRole(join.forGroup(g)?.role ?? (g.role as UnitRole | undefined)),
   );
+}
+
+/**
+ * The lines whose sum stands for the input: without the ones measured inside another line
+ * (units-config `inside`, fw 1.1.8), which their parent's reading already holds.
+ */
+export function topLevelLines(groups: UnitEntityGroup[], join: UnitsConfigJoin): UnitEntityGroup[] {
+  const lines = lineUnits(groups, join);
+  const byKey = new Map(lines.map((g) => [g.unitKey, g]));
+  // An ancestor outside the lines (a current-only parent) is looked up by its key.
+  const nested = nestedKeys(lines.map((g) => g.unitKey), (k) => { const g = byKey.get(k); return g ? join.forGroup(g) : join.forKey?.(k); });
+  return lines.filter((g) => !nested.has(g.unitKey));
 }
 
 /** Generation line: configured RENEWABLE_SOURCE. */
@@ -161,6 +174,15 @@ function nodeFor(g: UnitEntityGroup, join: UnitsConfigJoin) {
  */
 export interface StationSet { lead: UnitEntityGroup; keys: string[]; units: UnitEntityGroup[]; groupId?: number }
 
+/**
+ * A car park, not a home's own charger: 2+ stations (a three-phase charger counts once) or a hub set to
+ * «ev». Only a car park has customers — fees and margin; a home shows energy and its cost (round 2 home
+ * N-01, round 3 home R3-01: the station page still showed fees and margin on a home).
+ */
+export function isCarPark(groups: UnitEntityGroup[], join: UnitsConfigJoin, siteProfile: unknown): boolean {
+  return siteProfile === 'ev' || stationSets(groups, join).length >= 2;
+}
+
 export function stationSets(groups: UnitEntityGroup[], join: UnitsConfigJoin): StationSet[] {
   const out: StationSet[] = [];
   const byGroup = new Map<number, StationSet>();
@@ -186,6 +208,43 @@ export function stationSets(groups: UnitEntityGroup[], join: UnitsConfigJoin): S
     const units = trunk ? [trunk] : parts;
     return [{ lead: units[0], keys: units.map((u) => u.unitKey), units, groupId: set.groupId }];
   });
+}
+
+/**
+ * One appliance measured per phase (UI redesign 22.11, SPEC §2.8): the points of a device group
+ * (G5 `group_id`) that are 2–3 conductors of one machine — each on its own phase L1/L2/L3, the same
+ * rated power (the rule `stationSets` uses for a three-phase charger). Such points make ONE tile on
+ * the Overview («Heat pump · 3 phases»); every other line stays its own set. A group's trunk point
+ * (it measures the whole machine) stands for the set. Order follows `lines`.
+ */
+export interface DeviceSet { lead: UnitEntityGroup; units: UnitEntityGroup[]; groupId?: number }
+
+export function deviceSets(lines: UnitEntityGroup[], join: UnitsConfigJoin): DeviceSet[] {
+  const byGroup = new Map<number, UnitEntityGroup[]>();
+  for (const g of lines) {
+    const gid = join.forGroup(g)?.groupId;
+    if (gid) byGroup.set(gid, [...(byGroup.get(gid) ?? []), g]);
+  }
+  const folded = new Map<number, DeviceSet>();
+  byGroup.forEach((members, gid) => {
+    const trunk = members.find((u) => join.forGroup(u)?.trunk);
+    const parts = members.filter((u) => u !== trunk);
+    const cfgs = parts.map((u) => join.forGroup(u));
+    const one = parts.length >= 2 && parts.length <= 3
+      && cfgs.every((c) => !!c?.phase && c.phase >= 1 && c.phase <= 3 && !c.phaseGroup)
+      && new Set(cfgs.map((c) => c?.phase)).size === parts.length
+      && new Set(cfgs.map((c) => c?.ratedPowerW ?? 0)).size === 1;
+    if (one) folded.set(gid, { lead: trunk ?? parts[0], units: trunk ? [trunk] : parts, groupId: gid });
+  });
+  const out: DeviceSet[] = [];
+  const seen = new Set<number>();
+  for (const g of lines) {
+    const gid = join.forGroup(g)?.groupId;
+    const set = gid ? folded.get(gid) : undefined;
+    if (set) { if (!seen.has(gid as number)) { seen.add(gid as number); out.push(set); } continue; }
+    out.push({ lead: g, units: [g] });
+  }
+  return out;
 }
 
 const sumOrNull = (vs: (number | null | undefined)[]): number | null =>
@@ -261,13 +320,13 @@ export function offlinePoints(groups: UnitEntityGroup[]): UnitEntityGroup[] {
 }
 
 /**
- * Unmetered load «Остаток» = input − Σ lines (signed, generation reduces the sum; full power,
+ * Unmetered load «Остаток» = input − Σ top-level lines (signed, generation reduces the sum; full power,
  * a single-CT multi-phase line ×N — W9). null when
  * the input isn't measured. ONE definition for the Предприятие hero and anything else.
  */
 export function unmeteredW(groups: UnitEntityGroup[], join: UnitsConfigJoin, inputPowerW: number | null): number | null {
   if (inputPowerW == null) return null;
-  const lines = lineUnits(groups, join);
+  const lines = topLevelLines(groups, join);
   // A line without data makes the remainder UNKNOWN, not «everything is unmetered» (rerun 16.10
   // INP-R05: .110 with four offline lines showed «Неучтённое 100 % ввода»).
   if (lines.some((g) => !g.present)) return null;
@@ -355,7 +414,7 @@ export function linesCoverage(groups: UnitEntityGroup[], join: UnitsConfigJoin):
   if (!main?.present) return null;
   const inputW = Math.abs(fullPowerW(main, join.forGroup(main)) ?? 0);
   if (inputW < 50) return null;
-  const linesW = lineUnits(groups, join).reduce((s, g) => s + Math.abs(fullPowerW(g, join.forGroup(g)) ?? 0), 0);
+  const linesW = topLevelLines(groups, join).reduce((s, g) => s + Math.abs(fullPowerW(g, join.forGroup(g)) ?? 0), 0);
   return linesW / inputW;
 }
 
@@ -391,7 +450,7 @@ export function phaseLoads(groups: UnitEntityGroup[], join: UnitsConfigJoin, gri
   const sys = grid ?? parseGrid(undefined, { phases: join.phases, inputPhase: join.input.phase });
   const agg = new Map<number, PhaseLoad>(sys.legs.map((l) => [l, { phase: l, powerW: 0, currentA: 0, lines: 0, hasData: false }]));
   let anyAssigned = false;
-  for (const g of lineUnits(groups, join)) {
+  for (const g of topLevelLines(groups, join)) {
     const ph = join.forGroup(g)?.phase;
     const targets = legsOfPhase(ph, sys);
     if (!targets.length) continue;

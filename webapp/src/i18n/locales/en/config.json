@@ -6,5 +6,17 @@
   "tariffElsewhere": "The tariff plan, zones and prices are set on the “Tariffs” page.",
   "openTariffs": "Open “Tariffs”",
   "unitsElsewhere": "Names, roles, phases, nominals and the input limit are on each point’s page under “Points”.",
-  "openPoints": "Open “Points”"
+  "openPoints": "Open “Points”",
+  "secSite": "Site",
+  "secUi": "Interface",
+  "secNetwork": "Network & time",
+  "secIntegrations": "Integrations",
+  "secSecurity": "Security",
+  "secDevice": "Device",
+  "sectionsAria": "Settings sections",
+  "aiElsewhere": "Pairing AI assistants and what they may do is on its own page.",
+  "openAi": "Open AI assistants",
+  "panelWizard": "Setup wizard",
+  "wizardText": "Walks through connection, site and time, sensors, tariff and integrations step by step.",
+  "openWizard": "Open the wizard"
 }

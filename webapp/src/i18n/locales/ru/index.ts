@@ -2,9 +2,12 @@
 import ns_access from './access.json';
 import ns_addmod from './addmod.json';
 import ns_admin from './admin.json';
+import ns_ai from './ai.json';
 import ns_ap from './ap.json';
+import ns_appliance from './appliance.json';
 import ns_backup from './backup.json';
 import ns_bind from './bind.json';
+import ns_board from './board.json';
 import ns_cards from './cards.json';
 import ns_common from './common.json';
 import ns_config from './config.json';
@@ -31,31 +34,39 @@ import ns_hubFw from './hubFw.json';
 import ns_hubLog from './hubLog.json';
 import ns_hubTime from './hubTime.json';
 import ns_hunt from './hunt.json';
+import ns_i2cBus from './i2cBus.json';
+import ns_kiosk from './kiosk.json';
+import ns_led from './led.json';
 import ns_legend from './legend.json';
 import ns_misc from './misc.json';
 import ns_modfw from './modfw.json';
 import ns_mqttBroker from './mqttBroker.json';
+import ns_mqttCa from './mqttCa.json';
 import ns_names from './names.json';
 import ns_network from './network.json';
 import ns_nodes from './nodes.json';
 import ns_onboarding from './onboarding.json';
 import ns_overview from './overview.json';
+import ns_peaks from './peaks.json';
 import ns_planType from './planType.json';
 import ns_point from './point.json';
 import ns_pointTile from './pointTile.json';
+import ns_priceLog from './priceLog.json';
+import ns_prices from './prices.json';
 import ns_qbit from './qbit.json';
 import ns_quickTariff from './quickTariff.json';
 import ns_reconcile from './reconcile.json';
 import ns_role from './role.json';
 import ns_roleHint from './roleHint.json';
+import ns_rules from './rules.json';
 import ns_scenario from './scenario.json';
 import ns_scene from './scene.json';
 import ns_sct from './sct.json';
+import ns_search from './search.json';
 import ns_security from './security.json';
-import ns_setupBanner from './setupBanner.json';
+import ns_setup from './setup.json';
 import ns_shell from './shell.json';
 import ns_siteName from './siteName.json';
-import ns_siteProfile from './siteProfile.json';
 import ns_statClass from './statClass.json';
 import ns_stations from './stations.json';
 import ns_tariffs from './tariffs.json';
@@ -73,9 +84,12 @@ const catalog: Record<string, string> = {
   ...prefix('access', ns_access),
   ...prefix('addmod', ns_addmod),
   ...prefix('admin', ns_admin),
+  ...prefix('ai', ns_ai),
   ...prefix('ap', ns_ap),
+  ...prefix('appliance', ns_appliance),
   ...prefix('backup', ns_backup),
   ...prefix('bind', ns_bind),
+  ...prefix('board', ns_board),
   ...prefix('cards', ns_cards),
   ...prefix('common', ns_common),
   ...prefix('config', ns_config),
@@ -102,31 +116,39 @@ const catalog: Record<string, string> = {
   ...prefix('hubLog', ns_hubLog),
   ...prefix('hubTime', ns_hubTime),
   ...prefix('hunt', ns_hunt),
+  ...prefix('i2cBus', ns_i2cBus),
+  ...prefix('kiosk', ns_kiosk),
+  ...prefix('led', ns_led),
   ...prefix('legend', ns_legend),
   ...prefix('misc', ns_misc),
   ...prefix('modfw', ns_modfw),
   ...prefix('mqttBroker', ns_mqttBroker),
+  ...prefix('mqttCa', ns_mqttCa),
   ...prefix('names', ns_names),
   ...prefix('network', ns_network),
   ...prefix('nodes', ns_nodes),
   ...prefix('onboarding', ns_onboarding),
   ...prefix('overview', ns_overview),
+  ...prefix('peaks', ns_peaks),
   ...prefix('planType', ns_planType),
   ...prefix('point', ns_point),
   ...prefix('pointTile', ns_pointTile),
+  ...prefix('priceLog', ns_priceLog),
+  ...prefix('prices', ns_prices),
   ...prefix('qbit', ns_qbit),
   ...prefix('quickTariff', ns_quickTariff),
   ...prefix('reconcile', ns_reconcile),
   ...prefix('role', ns_role),
   ...prefix('roleHint', ns_roleHint),
+  ...prefix('rules', ns_rules),
   ...prefix('scenario', ns_scenario),
   ...prefix('scene', ns_scene),
   ...prefix('sct', ns_sct),
+  ...prefix('search', ns_search),
   ...prefix('security', ns_security),
-  ...prefix('setupBanner', ns_setupBanner),
+  ...prefix('setup', ns_setup),
   ...prefix('shell', ns_shell),
   ...prefix('siteName', ns_siteName),
-  ...prefix('siteProfile', ns_siteProfile),
   ...prefix('statClass', ns_statClass),
   ...prefix('stations', ns_stations),
   ...prefix('tariffs', ns_tariffs),

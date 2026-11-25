@@ -15,9 +15,9 @@
   "unsavedCount": "Unsaved changes: {n}",
   "noUnsaved": "No unsaved changes",
   "needsReboot": "needs restart",
-  "reset": "Reset",
-  "applying": "Applying…",
-  "apply": "Apply",
+  "reset": "Cancel",
+  "applying": "Saving…",
+  "apply": "Save",
   "rebootingShort": "Restarting…",
   "rebootNow": "Restart now",
   "writtenPending": "Written, applies after a reboot: {n}",
@@ -30,8 +30,11 @@
   "saveAndReboot": "Save and restart",
   "afterReboot": "{domain} · after restart",
   "rebootSaveTitle": "Save and restart the hub?",
-  "rebootSaveBody": "The hub reads these settings only at start: {list}. It will write them and restart — the connection is back in 20–30 seconds. Energy metering isn't interrupted: the modules keep counting and the hub credits the gap. Other edits apply at once with “Apply”, no restart.",
+  "rebootSaveBody": "The hub reads these settings only at start: {list}. It will write them and restart — the connection is back in 20–30 seconds. Energy metering isn't interrupted: the modules keep counting and the hub credits the gap.",
   "rebootSent": "Restart sent",
   "appliedAfterReboot": "The hub is back: everything written before the restart is in force.",
-  "notAppliedAfterReboot": "The hub is back, but it didn't take: {list}. Check these settings and save them again."
+  "notAppliedAfterReboot": "The hub is back, but it didn't take: {list}. Check these settings and save them again.",
+  "formsFailed": "Not everything was saved: {list} — see those blocks for why.",
+  "waitsRestart": "Waiting for a hub restart — {n} change(s) ({list}). They take effect after the restart.",
+  "rebootSaveAlso": "The section's other edits are written with them: {list}."
 }

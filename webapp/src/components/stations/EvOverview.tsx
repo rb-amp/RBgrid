@@ -18,7 +18,7 @@ import { UnitEntityGroup } from '../../entities/model';
 import { UnitsConfigJoin } from '../../hooks/useUnitsConfig';
 import { KpiRow, KpiItem } from '../dashboard/KpiRow';
 import { EnergyFlowTree } from '../flow/EnergyFlowTree';
-import { StationCard } from './StationCard';
+import { StationCard, StationView } from './StationCard';
 import { ParkingHero } from './ParkingHero';
 import { ParkingPowerChart, useParkingHistory } from './ParkingPowerChart';
 import { EvThresholds } from './evStatus';
@@ -44,9 +44,8 @@ export interface EvOverviewProps {
   onOpenPoint: (key: string) => void;
 }
 
-export const EvOverview: React.FC<EvOverviewProps> = ({
-  units, join, ev, grid, gridHasDirection, pricePerKwh, formatMoney, lost, onOpenPoint,
-}) => {
+/** Everything the car-park blocks show, computed once (the parking history is fetched here). */
+export function useEvModel({ units, join, ev, grid, gridHasDirection, pricePerKwh, formatMoney, lost }: Omit<EvOverviewProps, 'onOpenPoint'>) {
   const { names: groupNames } = useDeviceGroups();
   const stations = buildStations(units, join, ev, groupNames);
   const counts = stationCounts(stations);
@@ -70,27 +69,71 @@ export const EvOverview: React.FC<EvOverviewProps> = ({
   const lens = useLensFormat();
   const evWh = evEnergyTodayKwh * 1000;
   const revenue = pricePerKwh != null ? evEnergyTodayKwh * pricePerKwh : null;
-  const purchase = lens.energyMoney(evWh); // ≈ energy × live buy rate
   const kpis: KpiItem[] = [];
   if (lens.moneyMode && revenue != null) {
     // Money lens: what the parking earned and what is left after the energy bought for it.
-    const buyCost = lens.rate.buy != null ? (evWh / 1000) * lens.rate.buy : null;
-    kpis.push({ label: t('stations.revenueToday'), value: formatMoney(revenue), sub: enWh(evWh) });
+    const buyRate = lens.dayRate?.buy ?? lens.rate.buy;
+    const buyCost = buyRate != null ? (evWh / 1000) * buyRate : null;
+    kpis.push({ label: t('stations.revenueToday'), value: `${t('common.approx')} ${formatMoney(revenue)}`, sub: `${enWh(evWh)} · ${t('stations.atCurrentPrice')}` });
     if (buyCost != null) {
-      kpis.push({ label: t('stations.marginToday'), value: `${t('common.approx')} ${formatMoney(revenue - buyCost)}`, sub: t('stations.purchase', { money: purchase }) });
+      // One buying figure for both (round 2 ev N-02: the margin used the plain rate, «purchase» the rate with VAT and fees).
+      kpis.push({ label: t('stations.marginToday'), value: `${t('common.approx')} ${formatMoney(revenue - buyCost)}`, sub: t('stations.purchase', { money: `${t('common.approx')} ${formatMoney(buyCost)}` }) });
     }
   } else {
     const e = lens.energy(evWh);
     kpis.push({ label: t('stations.energyToday'), value: e.main, sub: e.money ? e.sub ?? undefined : t('stations.allStations') });
     // §14 W4: no price → the revenue KPI is not drawn (not «0 ₽», not «—»).
     if (revenue != null) {
-      kpis.push({ label: t('stations.revenueToday'), value: formatMoney(revenue), sub: t('stations.atSalePrice') });
+      kpis.push({ label: t('stations.revenueToday'), value: `${t('common.approx')} ${formatMoney(revenue)}`, sub: t('stations.atCurrentPrice') });
     }
   }
   kpis.push(history.sessions != null
     ? { label: t('stations.sessionsToday'), value: `${history.sessions}`, sub: t('stations.sessionsEstimate') }
     : { label: t('stations.chargingNow'), value: `${counts.charging}`, sub: t('stations.sessionsUnavailable') });
 
+  return { stations, counts, offline, segments, limitW, history, kpis, tree, lost, pricePerKwh };
+}
+
+export type EvModel = ReturnType<typeof useEvModel>;
+
+export const EvHeroBlock: React.FC<{ m: EvModel }> = ({ m }) => (
+  <ParkingHero charging={m.counts.charging} total={m.counts.total} free={m.counts.free} offline={m.offline}
+    segments={m.segments} limitW={m.limitW} lost={m.lost} />
+);
+
+export const EvKpiBlock: React.FC<{ m: EvModel }> = ({ m }) => <KpiRow items={m.kpis} />;
+
+/** How the stations block lists them (its Customise settings — role audit EV rec. 5). */
+export interface StationsListOpts { sort?: 'config' | 'name' | 'state'; free?: 'show' | 'hide' }
+const STATE_RANK: Record<string, number> = { charging: 0, waiting: 1, nodata: 2, free: 3 };
+export const orderStations = (list: StationView[], o: StationsListOpts = {}): StationView[] => {
+  let out = o.free === 'hide' ? list.filter((s) => s.status !== 'free') : list.slice();
+  if (o.sort === 'name') out = out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  else if (o.sort === 'state') out = out.sort((a, b) => (STATE_RANK[a.status] ?? 9) - (STATE_RANK[b.status] ?? 9));
+  return out;
+};
+
+export const EvStationsBlock: React.FC<{ m: EvModel; onOpenPoint: (key: string) => void; opts?: StationsListOpts }> = ({ m, onOpenPoint, opts }) => (
+  m.stations.length > 0 ? (
+    <Grid container spacing={2}>
+      {orderStations(m.stations, opts).length === 0 && (
+        <Grid item xs={12}><Alert severity="info">{t('stations.allFreeHidden', { n: m.stations.length })}</Alert></Grid>
+      )}
+      {orderStations(m.stations, opts).map((st) => (
+        <Grid item xs={12} sm={6} lg={4} key={st.id}>
+          <StationCard station={st} pricePerKwh={m.pricePerKwh} onClick={() => onOpenPoint(st.id)} />
+        </Grid>
+      ))}
+    </Grid>
+  ) : <Alert severity="info">{t('stations.noStations')}</Alert>
+);
+
+export const EvPowerBlock: React.FC<{ m: EvModel }> = ({ m }) => <ParkingPowerChart history={m.history} limitW={m.limitW} />;
+
+export const EvOverview: React.FC<EvOverviewProps> = ({ onOpenPoint, ...props }) => {
+  const m = useEvModel(props);
+  const { stations, counts, offline, segments, limitW, history, tree, lost, pricePerKwh } = m;
+  const kpis = m.kpis;
   return (
     <>
       <Box sx={{ mb: 2 }}>

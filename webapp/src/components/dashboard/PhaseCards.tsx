@@ -76,30 +76,30 @@ export const PhaseCards: React.FC<PhaseCardsProps> = ({ groups, join, lost, grid
       <Stack spacing={1.25} sx={{ py: 0.5, opacity: lost ? 0.6 : 1 }}>
         <Stack direction="row" alignItems="baseline" justifyContent="space-between" flexWrap="wrap" useFlexGap columnGap={2}>
           <Typography sx={{ fontWeight: 700, fontSize: 15 }}>{split ? t('cards.legsTitle') : t('cards.phasesTitle')}</Typography>
-          <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>
+          <Typography sx={{ fontSize: 13, color: ds.inkMuted }}>
             {split && grid ? `${nf(grid.nominalV)}/${nf(grid.lineV)} ${t('units.V')} · ` : ''}{measured ? t('cards.phasesMeasured') : t('cards.phasesEstimate')}{breakerA ? ` · ${phases.length > 1 ? t('cards.breakerPoles', { n: phases.length, breaker: nf(breakerA) }) : t('cards.breaker', { breaker: nf(breakerA) })}` : join.loaded ? ` · ${t('cards.breakerNotSet')}` : ''}
           </Typography>
         </Stack>
         {/* An estimate from lines covers only what the lines measure (INP-07: 19 % of the input in
             the demo, «27 % автомата» read as fact) — say how much. */}
         {!measured && coverage != null && coverage < 0.8 && (
-          <Typography sx={{ fontSize: 12, color: ds.sevWarning }}>
+          <Typography sx={{ fontSize: 13, color: ds.sevWarning }}>
             {t('cards.phasesCoverage', { pct: nf(Math.max(0, coverage) * 100) })}
           </Typography>
         )}
         {imbalance != null && (
-          <Typography sx={{ ...num, fontSize: 12, color: imbalanceHigh ? ds.sevAlarm : ds.inkMuted, fontWeight: imbalanceHigh ? 600 : 400 }}>
+          <Typography sx={{ ...num, fontSize: 13, color: imbalanceHigh ? ds.sevAlarm : ds.inkMuted, fontWeight: imbalanceHigh ? 600 : 400 }}>
             {t('cards.phaseImbalance', { pct: nf(imbalance) })}{imbalanceHigh ? ` · ${t('cards.phaseHigh')}` : ''}
           </Typography>
         )}
         {/* The rule said where it hides (3φ audit L3P-17): under 1 A a phase's % swings with a lamp. */}
         {imbalance == null && measured && phases.filter((p) => p.hasData).length > 1 && (
-          <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>{t('cards.phaseImbalanceLow')}</Typography>
+          <Typography sx={{ fontSize: 13, color: ds.inkMuted }}>{t('cards.phaseImbalanceLow')}</Typography>
         )}
         {/* Voltage at a glance for a shift check (I3P-02): all phases within ±10 % of nominal and the
             voltage unbalance (max − min over the mean). */}
         {voltLine && (
-          <Typography sx={{ ...num, whiteSpace: 'normal', fontSize: 12, color: voltLine.out ? ds.sevAlarm : ds.inkMuted, fontWeight: voltLine.out ? 600 : 400 }}>
+          <Typography sx={{ ...num, whiteSpace: 'normal', fontSize: 13, color: voltLine.out ? ds.sevAlarm : ds.inkMuted, fontWeight: voltLine.out ? 600 : 400 }}>
             {voltLine.out
               ? t('cards.voltOut', { phases: voltLine.out, lo: nf(voltLine.lo), hi: nf(voltLine.hi) })
               : t('cards.voltIn', { lo: nf(voltLine.lo), hi: nf(voltLine.hi) })}
@@ -107,7 +107,7 @@ export const PhaseCards: React.FC<PhaseCardsProps> = ({ groups, join, lost, grid
           </Typography>
         )}
         {seq && (
-          <Typography sx={{ fontSize: 12, color: seq === 'forward' ? ds.inkMuted : ds.sevAlarm, fontWeight: seq === 'forward' ? 400 : 600 }}>
+          <Typography sx={{ fontSize: 13, color: seq === 'forward' ? ds.inkMuted : ds.sevAlarm, fontWeight: seq === 'forward' ? 400 : 600 }}>
             {t(`cards.phaseSeq_${seq}`)}
           </Typography>
         )}
@@ -136,7 +136,7 @@ export const PhaseCards: React.FC<PhaseCardsProps> = ({ groups, join, lost, grid
               {measured && (() => {
                 const vb = nominalV ? voltageBand(a.voltageV, nominalV) : null;
                 return (
-                  <Typography sx={{ ...num, gridColumn: { xs: '1 / -1', md: 'auto' }, fontSize: 12, color: ds.inkMuted }}>
+                  <Typography sx={{ ...num, gridColumn: { xs: '1 / -1', md: 'auto' }, fontSize: 13, color: ds.inkMuted }}>
                     {a.voltageV != null && (
                       <Box component="span" sx={vb ? { color: ds.sevAlarm, fontWeight: 600 } : undefined}>
                         {volt(a.voltageV)}{vb ? ` ${t(vb === 'low' ? 'cards.voltLow' : 'cards.voltHigh')}` : ''}
@@ -154,7 +154,7 @@ export const PhaseCards: React.FC<PhaseCardsProps> = ({ groups, join, lost, grid
                   <Box sx={{ height: '100%', width: `${Math.min(100, loadPct)}%`, bgcolor: barColor, borderRadius: 4 }} />
                 )}
               </Box>
-              <Typography sx={{ ...num, gridColumn: { xs: '1 / -1', md: 'auto' }, fontSize: 12, textAlign: { md: 'right' }, color: word ? sev : ds.inkMuted, fontWeight: word ? 600 : 400 }}>
+              <Typography sx={{ ...num, gridColumn: { xs: '1 / -1', md: 'auto' }, fontSize: 13, textAlign: { md: 'right' }, color: word ? sev : ds.inkMuted, fontWeight: word ? 600 : 400 }}>
                 {loadPct != null ? `${t('cards.phaseBreakerPct', { pct: loadPct > 0 && loadPct < 0.5 ? '<1' : nf(loadPct) })}${word ? ` · ${word}` : ''}` : a.hasData ? (join.loaded ? t('cards.phaseBreakerNotSet') : '…') : a.measured ? t('cards.phaseNoReading') : t('cards.phaseNoData', { lines: a.lines })}
               </Typography>
             </Box>

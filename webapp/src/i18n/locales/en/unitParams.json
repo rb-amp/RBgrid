@@ -53,7 +53,7 @@
   "evWInvalid": "Station threshold: whole watts from 0 to 100,000.",
   "evMinInvalid": "Idle time: whole minutes from 0 to 1440.",
   "ct": "Current sensor",
-  "ctHelper": "Choose the sensor actually on the channel (the factory wrote the one it calibrated with — usually SCT-013-030). Its nominal current should cover the line's maximum; a much bigger sensor has a higher noise floor. Applies at once, written into the module.",
+  "ctHelper": "Choose the sensor actually on the channel (the factory wrote the one it calibrated with — usually SCT-013-030). Its nominal current should cover the line's maximum; a much bigger sensor has a higher noise floor. Written into the module with the rest of the form — by «Save».",
   "ctFixed": "The module's own sensor (CT- series), calibrated with the channel at the factory — the model is fixed.",
   "ctFixedConflict": "CT- series module: the sensor is factory-paired and calibrated, its model can't change.",
   "ctRejected": "The hub didn't take the sensor model: {message}",
@@ -63,5 +63,10 @@
   "ctUncalibratedHelper": "The sensor model can't be chosen: the module wasn't calibrated.",
   "ctOverLimit": "The line breaker {a} A is above the sensor's limit ({hi} A): current above it is clipped and metering silently under-counts. Fit a sensor with a higher rating.",
   "ctOverLimitInput": "The input breaker {a} A is above the sensor's limit ({hi} A): current above it is clipped and metering silently under-counts. Fit a sensor with a higher rating.",
-  "ctWriteWarn": "The model is written to the module together with its type calibration. If the channel was factory-calibrated with your sensor, that calibration is lost and cannot be restored. Change the model only if a different sensor is really fitted on the channel."
+  "ctWriteWarn": "The model is written to the module together with its type calibration. If the channel was factory-calibrated with your sensor, that calibration is lost and cannot be restored. Change the model only if a different sensor is really fitted on the channel.",
+  "inside": "Measured inside",
+  "insideNone": "None: a line of its own",
+  "insideHelper": "If this load sits behind another point's meter (a sub-panel with its own meter, say), pick that point. Its power then counts once, in that point, and not again in the rest of the input.",
+  "insideRejected": "The hub refused that choice: the point is gone, is an input, or is already inside this one. Pick another.",
+  "unsavedList": "Not saved: {list} — written by this form's «Save»"
 }

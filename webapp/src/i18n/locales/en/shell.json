@@ -39,5 +39,16 @@
   "switchDeviceLong": "Switch device",
   "tokenNeededTitle": "{addr} asks for a token",
   "tokenNeededText": "The hub is on the network, but it shares its readings only with a read or admin token. Enter one in Settings → Security.",
-  "tokenNeededAction": "Enter the token"
+  "tokenNeededAction": "Enter the token",
+  "navPrices": "Prices",
+  "navAi": "AI assistants",
+  "groupLook": "Look",
+  "groupWatch": "Watch",
+  "groupSetupNew": "Set up",
+  "navTariffsPrices": "Tariffs & prices",
+  "deviceMenu": "Device menu: theme, switch device",
+  "eventsBell": "Events: {n} active",
+  "collapse": "Collapse the menu",
+  "expand": "Expand the menu",
+  "demoSite": "Preview"
 }

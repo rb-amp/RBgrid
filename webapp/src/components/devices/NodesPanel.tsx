@@ -29,7 +29,7 @@ import { espnowAvailable } from '../../core/espnow/available';
 import { t } from '../../i18n';
 import { RebootNowButton } from '../common/RebootNowButton';
 import { useConfirm } from '../common/ConfirmDialog';
-import { HISTORY_SLOTS } from '../common/NoHistoryNote';
+import { useHistorySlots } from '../common/NoHistoryNote';
 import { PanelBoundary } from '../common/PanelBoundary';
 import { NodeConfigDialog } from './NodeConfigDialog';
 
@@ -71,6 +71,7 @@ const NodesPanelBody: React.FC = () => {
   const { data, loading, reloadNow } = useEspnow();
   const session = useDeviceSession();
   const units = useUnitsConfig();
+  const slots = useHistorySlots();
   const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg | null>(null);
@@ -225,6 +226,7 @@ const NodesPanelBody: React.FC = () => {
         </Stack>
 
         {msg && <Alert severity={msg.sev} sx={{ mb: 2 }} onClose={() => setMsg(null)} action={msg.reboot ? <RebootNowButton /> : undefined}>{msg.text}</Alert>}
+        {data.running && data.inject_age_ms === -1 && <Alert severity="warning" sx={{ mb: 2 }} action={<RebootNowButton />}>{t('nodes.injectStopped')}</Alert>}
         {data.paired_count > 0 && <Alert severity="success" sx={{ mb: 2 }}>{t('nodes.paired', { n: data.paired_count })}</Alert>}
 
         {/* Pairing */}
@@ -250,9 +252,9 @@ const NodesPanelBody: React.FC = () => {
               : !radioOn ? t('nodes.pairNeedsRadio')
                 : pairingOpen ? t('nodes.pairingHow') : t('nodes.pairIntro', { n: perNode })}
           </Typography>
-          {!full && histUsed != null && (
+          {!full && histUsed != null && slots > 0 && (
             <Typography variant="body2" color="text.secondary" mt={0.5}>
-              {histUsed >= HISTORY_SLOTS ? t('nodes.historyFull', { n: HISTORY_SLOTS }) : t('nodes.historyLeft', { used: histUsed, n: HISTORY_SLOTS })}
+              {histUsed >= slots ? t('nodes.historyFull', { n: slots }) : t('nodes.historyLeft', { used: histUsed, n: slots })}
             </Typography>
           )}
         </Box>

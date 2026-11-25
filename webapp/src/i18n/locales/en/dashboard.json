@@ -4,7 +4,6 @@
   "overview": "Summary",
   "analytics": "Details",
   "dataDelayed": "data delayed",
-  "scenarioChip": "Scenario: {scenario} · change",
   "viewAria": "View",
   "staleBanner": "No connection to the device — showing data from {time}.",
   "emptyTitle": "No metering points yet",

@@ -1,6 +1,6 @@
 # NOTICE — third-party software in the RBgrid web UI kit
 
-The web UI kit `rbgrid-ui_v1.1.2.zip` bundles these npm packages (the ones that end up in the built JavaScript, read from the release build's source maps; build tools are not shipped). Licence as declared in each package's `package.json`.
+The web UI kit `rbgrid-ui_v1.3.0.zip` bundles these npm packages (the ones that end up in the built JavaScript, read from the release build's source maps; build tools are not shipped). Licence as declared in each package's `package.json`.
 
 | Package | Version | Licence |
 |---|---|---|

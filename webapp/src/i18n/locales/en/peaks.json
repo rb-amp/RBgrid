@@ -1,0 +1,21 @@
+{
+  "title": "Import peaks",
+  "hint": "The highest import at the grid input in the billing cycle, all phases together. Capacity tariffs bill on these. Metering only: it changes no money in the app.",
+  "cycleSince": "Cycle since {date}",
+  "cycleNotStarted": "The cycle starts when the hub knows the time.",
+  "max15": "Highest 15-min average",
+  "maxHour": "Highest hour average",
+  "top3": "Mean of the 3 highest days",
+  "endingAt": "ending {at}",
+  "from": "from {at}",
+  "thisHour": "This hour (from {at}): {kwh} kWh so far",
+  "prev": "Previous cycle (from {date})",
+  "cycleDay": "Cycle starts on",
+  "dayN": "day {n} of the month",
+  "reset": "Reset",
+  "resetTitle": "Reset the peaks?",
+  "resetBody": "The figures of this cycle are cleared and counting starts again now.",
+  "cycleDayTitle": "Start the cycle on day {n}?",
+  "cycleDayBody": "A new cycle starts now; the current peaks move to «previous cycle».",
+  "cycleDayConfirm": "Start a new cycle"
+}

@@ -47,7 +47,8 @@ export const EnergyFlowTree: React.FC<EnergyFlowTreeProps> = ({ data }) => {
       tabIndex={0} role="region" aria-label={t('flow.treeRegion')}>
       <Box
         ref={hostRef}
-        sx={{ ...flowCssVars(ds), width: '100%', minWidth: TREE_MIN_W, maxWidth: 760, mx: 'auto', opacity: data.lost ? 0.5 : 1, '& svg': { display: 'block' } }}
+        // From a tablet up the diagram scales to the card (UI/UX audit U17: at 820 it overflowed); a phone scrolls it.
+        sx={{ ...flowCssVars(ds), width: '100%', minWidth: { xs: TREE_MIN_W, sm: 0 }, maxWidth: 760, mx: 'auto', opacity: data.lost ? 0.5 : 1, '& svg': { display: 'block', width: '100%', height: 'auto' } }}
         aria-hidden={false}
       />
     </Box>

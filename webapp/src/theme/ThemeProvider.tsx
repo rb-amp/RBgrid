@@ -9,14 +9,21 @@
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { ThemeProvider as MuiThemeProvider } from '@mui/material/styles';
-import { CssBaseline } from '@mui/material';
+import { ThemeProvider as MuiThemeProvider, createTheme } from '@mui/material/styles';
+import { CssBaseline, GlobalStyles } from '@mui/material';
+import { palettes as dsPalettes } from '@rbgrid/design-system';
 import { lightTheme, darkTheme } from './index';
 
 /** localStorage key of the theme preference ('system' | 'dark' | 'light'). */
 export const THEME_STORAGE_KEY = 'rbgrid.theme';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
+
+/** Density (UI redesign S10): roomy (default) or compact — card padding 16 → 10, table rows 33 → 26;
+ *  the type size stays. Per browser (a wall tablet vs an engineer's screen). */
+export type Density = 'comfortable' | 'compact';
+const DENSITY_KEY = 'rbgrid.density';
+const readDensity = (): Density => { try { return window.localStorage.getItem(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable'; } catch { return 'comfortable'; } };
 
 const isPreference = (v: unknown): v is ThemePreference => v === 'system' || v === 'dark' || v === 'light';
 
@@ -39,6 +46,16 @@ function writePreference(p: ThemePreference): void {
 }
 
 const DARK_QUERY = '(prefers-color-scheme: dark)';
+
+/** The design system's flow colours as CSS variables (the same names the flow diagrams use). */
+function flowVars(dark: boolean): Record<string, string> {
+  const p = dsPalettes[dark ? 'dark' : 'light'];
+  return {
+    '--flow-export': p.flowExport, '--flow-import': p.flowImport, '--solar': p.solar, '--solar-ink': p.solarInk,
+    '--primary': p.primary, '--ink': p.ink, '--ink-muted': p.inkMuted, '--surface': p.surface, '--surface-raised': p.surfaceRaised,
+    '--border': p.border, '--border-strong': p.borderStrong, '--status-offline': p.statusOffline, '--sev-alarm': p.sevAlarm,
+  };
+}
 
 function systemPrefersDark(fallback: boolean): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return fallback;
@@ -63,6 +80,8 @@ interface ThemeContextType {
   forced: boolean;
   /** Current theme object */
   theme: typeof lightTheme;
+  density: Density;
+  setDensity: (d: Density) => void;
 }
 
 /**
@@ -104,6 +123,11 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({
   forcedTheme = null,
 }) => {
   const [preference, setPreferenceState] = useState<ThemePreference>(readPreference);
+  const [density, setDensityState] = useState<Density>(readDensity);
+  const setDensity = useCallback((d: Density) => {
+    setDensityState(d);
+    try { if (d === 'compact') window.localStorage.setItem(DENSITY_KEY, d); else window.localStorage.removeItem(DENSITY_KEY); } catch { /* per session */ }
+  }, []);
   const [systemDark, setSystemDark] = useState<boolean>(() => systemPrefersDark(defaultDarkMode));
 
   // Follow the OS setting live (only matters while preference === 'system').
@@ -139,11 +163,22 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({
   const setTheme = useCallback((isDark: boolean) => setPreference(isDark ? 'dark' : 'light'), [setPreference]);
   const toggleTheme = useCallback(() => setPreference(isDarkMode ? 'light' : 'dark'), [setPreference, isDarkMode]);
 
-  const theme = useMemo(() => (isDarkMode ? darkTheme : lightTheme), [isDarkMode]);
+  const theme = useMemo(() => {
+    const base = isDarkMode ? darkTheme : lightTheme;
+    if (density !== 'compact') return base;
+    return createTheme(base, {
+      components: {
+        // Measured against roomy (UI/UX audit U03: 16 px cards and 33 px rows in both): 16 → 10, rows → 26.
+        MuiCardContent: { styleOverrides: { root: { padding: 10, '&:last-child': { paddingBottom: 10 } } } },
+        MuiTableCell: { styleOverrides: { root: { paddingTop: 2, paddingBottom: 2 } } },
+        MuiTableRow: { styleOverrides: { root: { height: 26 } } },
+      },
+    }) as typeof base;
+  }, [isDarkMode, density]);
 
   const contextValue = useMemo<ThemeContextType>(
-    () => ({ isDarkMode, toggleTheme, setTheme, preference, setPreference, forced: !!forcedTheme, theme }),
-    [isDarkMode, toggleTheme, setTheme, preference, setPreference, forcedTheme, theme],
+    () => ({ isDarkMode, toggleTheme, setTheme, preference, setPreference, forced: !!forcedTheme, theme, density, setDensity }),
+    [isDarkMode, toggleTheme, setTheme, preference, setPreference, forcedTheme, theme, density, setDensity],
   );
 
   // Update document meta theme-color + the UA color-scheme (native scrollbars/controls).
@@ -159,6 +194,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({
     <ThemeContext.Provider value={contextValue}>
       <MuiThemeProvider theme={theme}>
         <CssBaseline />
+        {/* The flow colours once, for every component (UI redesign 6.6) — they were set inside the flow
+            diagrams only, so «Exported» in the key figures fell back to the text colour. */}
+        <GlobalStyles styles={{ ':root': flowVars(isDarkMode) }} />
         {children}
       </MuiThemeProvider>
     </ThemeContext.Provider>

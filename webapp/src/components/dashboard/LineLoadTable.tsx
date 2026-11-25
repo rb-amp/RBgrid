@@ -9,16 +9,16 @@
  * (input − Σ lines) is optional: the Предприятие hero owns that number (one number — one
  * place), so the Overview passes `showRemainder={false}`. Row → the point.
  */
-import React from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Table, TableBody, TableCell, TableHead, TableRow, Typography, Chip,
 } from '@mui/material';
 import { useDsTokens } from '../../theme/useDsTokens';
-import { dsFonts } from '../../theme/dsTokens';
 import { UnitEntityGroup, unitMetricValue } from '../../entities/model';
 import { UnitsConfigJoin, phaseLabel } from '../../hooks/useUnitsConfig';
-import { fullPower } from '../../entities/siteModel';
+import { fullPower, apiUnitId } from '../../entities/siteModel';
+import { usePeriodTotals } from '../../hooks/usePeriodTotals';
 import { lineUnits, fullNameOf, isGenerationUnit } from '../../pages/overviewData';
 import { useMoneyLens, useLensFormat } from '../../economics/MoneyLens';
 import { moneyPerHour } from '../../economics/costRate';
@@ -43,6 +43,8 @@ function fmtEnergy(wh: number | null): string {
 
 interface Row {
   key: string;
+  /** The point's id for the history API. */
+  hex: string;
   name: string;
   phase?: number;
   power: number | null;
@@ -60,6 +62,17 @@ interface Row {
 }
 
 interface Status { label: string; color: string; }
+
+/** One line's month-to-date energy (closed days + today's live counter) — reported up, one hook per row. */
+const MonthProbe: React.FC<{ rowKey: string; id: string; todayWh: number | null; generation: boolean; onWh: (k: string, wh: number | null) => void }> = ({ rowKey, id, todayWh, generation, onWh }) => {
+  // Memoised by the rounded value — a new object per frame would re-run the period sum.
+  const r = todayWh == null ? null : Math.round(todayWh);
+  const today = useMemo(() => (r == null ? null : { inWh: generation ? 0 : r, outWh: generation ? r : 0, cost: 0, revenue: 0, n: 1 }), [r, generation]);
+  const v = usePeriodTotals(id, 'month', { money: false, today });
+  const wh = v && !v.loading && v.n > 0 ? (generation ? v.outWh : v.inWh) : null;
+  useEffect(() => { onWh(rowKey, wh); }, [rowKey, wh, onWh]);
+  return null;
+};
 
 export interface LineLoadTableProps {
   groups: UnitEntityGroup[];
@@ -95,6 +108,7 @@ export const LineLoadTable: React.FC<LineLoadTableProps> = ({ groups, join, inpu
       const full = fullPower(g, cfg);
       return {
         key: g.unitKey,
+        hex: cfg?.hex ?? apiUnitId(g.unitKey),
         name: fullNameOf(g, join),
         phase: cfg?.phase,
         power: full.w,
@@ -112,10 +126,12 @@ export const LineLoadTable: React.FC<LineLoadTableProps> = ({ groups, join, inpu
         ct: g.present ? (g.attributes?.clip === true ? 'clip' as const : g.attributes?.ct_warn === true ? 'warn' as const : undefined) : undefined,
       };
     })
-    .sort((a, b) => {
-      if (a.present !== b.present) return a.present ? -1 : 1;
-      return Math.abs(b.power ?? 0) - Math.abs(a.power ?? 0);
-    });
+    // A stable order — the configured one, offline lines last (sorting by live power reshuffled the
+    // rows every second, the «rotating» the operator objected to on the tiles).
+    .sort((a, b) => (a.present === b.present ? 0 : a.present ? -1 : 1));
+  // Month to date per line (role audit B3: a plant owner had no month figure per line).
+  const [monthWh, setMonthWh] = useState<Record<string, number | null>>({});
+  const onMonth = useCallback((k: string, wh: number | null) => setMonthWh((m) => (m[k] === wh ? m : { ...m, [k]: wh })), []);
 
   const sumLines = rows.reduce((s, r) => s + (r.power ?? 0), 0);
   const remainder = inputPowerW != null ? inputPowerW - sumLines : null;
@@ -134,7 +150,7 @@ export const LineLoadTable: React.FC<LineLoadTableProps> = ({ groups, join, inpu
     if (r.ct === 'warn') return { label: t('cards.ctWarnShort'), color: ds.sevWarning };
     if (r.isGeneration) return null;
     const pct = loadPct(r.power, r.ratedPowerW);
-    if (pct != null && pct > 100) return { label: t('cards.limitAbove'), color: ds.sevCritical };
+    if (pct != null && pct > 100) return { label: t('cards.aboveRated'), color: ds.sevCritical }; // one word with Needs attention and Events (round 3 business R5)
     if (pct != null && pct > 80) return { label: t('cards.phaseHigh'), color: ds.sevAlarm };
     return null;
   };
@@ -147,7 +163,8 @@ export const LineLoadTable: React.FC<LineLoadTableProps> = ({ groups, join, inpu
     return ds.primary;
   };
 
-  const mono = { fontFamily: dsFonts.mono, fontVariantNumeric: 'tabular-nums' as const, whiteSpace: 'nowrap' as const };
+// One typeface for figures (UI/UX audit U06): the UI sans with tabular figures; mono only for codes and logs.
+  const mono = { fontVariantNumeric: 'tabular-nums' as const, whiteSpace: 'nowrap' as const };
   const headCell = { color: ds.inkMuted, fontWeight: 600, fontSize: 12, letterSpacing: '0.02em', borderColor: ds.border };
 
   const LoadBar: React.FC<{ pct: number | null; generation: boolean }> = ({ pct, generation }) => (
@@ -168,7 +185,8 @@ export const LineLoadTable: React.FC<LineLoadTableProps> = ({ groups, join, inpu
   const sticky = { position: 'sticky' as const, left: 0, zIndex: 1, bgcolor: ds.surface };
   return (
     <Box sx={{ overflowX: 'auto', mx: -0.5 }} tabIndex={0} role="region" aria-label={t('cards.linesAria')}>
-    <Table size="small" aria-label={t('cards.linesAria')} sx={{ minWidth: 640 }}>
+    {rows.map((r) => <MonthProbe key={r.key} rowKey={r.key} id={r.hex} todayWh={r.energyDay} generation={r.isGeneration} onWh={onMonth} />)}
+    <Table size="small" aria-label={t('cards.linesAria')} sx={{ minWidth: 720 }}>
       <TableHead>
         <TableRow>
           <TableCell sx={{ ...headCell, ...sticky }}>{t('cards.colLine')}</TableCell>
@@ -179,6 +197,7 @@ export const LineLoadTable: React.FC<LineLoadTableProps> = ({ groups, join, inpu
           {showMoney && !moneyFirst && <TableCell sx={headCell} align="right">{t('cards.colPerHour')}</TableCell>}
           <TableCell sx={headCell} align="right">I</TableCell>
           <TableCell sx={headCell} align="right">{t('cards.colToday')}</TableCell>
+          <TableCell sx={headCell} align="right">{t('cards.colMonth')}</TableCell>
           <TableCell sx={headCell}>{t('cards.colLoad')}</TableCell>
           <TableCell sx={headCell}>{t('cards.colStatus')}</TableCell>
         </TableRow>
@@ -211,6 +230,11 @@ export const LineLoadTable: React.FC<LineLoadTableProps> = ({ groups, join, inpu
                 const v = fmtLens.energy(r.energyDay, r.isGeneration, r.isGeneration ? fmtLens.genMoney(r.energyDay) : undefined, r.isGeneration);
                 return <TableCell align="right" title={v.sub ?? undefined} sx={{ ...mono, color: v.money ? ds.ink : ds.inkMuted }}>{v.money ? v.main : fmtEnergy(r.energyDay)}</TableCell>;
               })()}
+              {(() => {
+                const wh = monthWh[r.key] ?? null;
+                const v = fmtLens.energy(wh, r.isGeneration, r.isGeneration ? fmtLens.genMoney(wh) : undefined, r.isGeneration);
+                return <TableCell align="right" title={v.sub ?? undefined} sx={{ ...mono, color: ds.inkMuted }}>{wh == null ? '—' : v.money ? v.main : fmtEnergy(wh)}</TableCell>;
+              })()}
               <TableCell><LoadBar pct={pct} generation={r.isGeneration} /></TableCell>
               <TableCell>
                 {st && (
@@ -220,6 +244,8 @@ export const LineLoadTable: React.FC<LineLoadTableProps> = ({ groups, join, inpu
                     sx={{ bgcolor: 'transparent', color: st.color, border: `1px solid ${st.color}`, fontSize: 12, height: 24 }}
                   />
                 )}
+                {/* A quiet word when all is well (role audit B4: an empty column read as missing data). */}
+                {!st && <Typography component="span" sx={{ fontSize: 13, color: ds.inkMuted }}>{t('cards.statusOk')}</Typography>}
               </TableCell>
             </TableRow>
           );
@@ -231,7 +257,7 @@ export const LineLoadTable: React.FC<LineLoadTableProps> = ({ groups, join, inpu
             <TableCell align="center" sx={{ color: ds.inkMuted }}>—</TableCell>
             <TableCell align="right" sx={{ ...mono, color: ds.inkMuted }}>{fmtPower(remainder)}</TableCell>
             {showMoney && <TableCell />}
-            <TableCell /><TableCell /><TableCell /><TableCell />
+            <TableCell /><TableCell /><TableCell /><TableCell /><TableCell />
           </TableRow>
         )}
 

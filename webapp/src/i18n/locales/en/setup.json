@@ -1,0 +1,20 @@
+{
+  "title": "Left to set up",
+  "progress": "{done} of {of} done",
+  "wizard": "Step-by-step wizard",
+  "optional": "optional",
+  "notNeeded": "Not needed",
+  "notNeededFor": "«{what}» not needed",
+  "site": "Site name",
+  "siteHint": "What this site is called in the app and in Home Assistant.",
+  "time": "Hub time",
+  "timeHint": "Time zone and sync — days, tariff zones and history depend on them.",
+  "points": "Metering points",
+  "pointsHint": "Bind the modules' channels to lines: what each one measures.",
+  "tariff": "Tariff",
+  "tariffHint": "Your own prices instead of the factory sample — then money is counted right.",
+  "security": "Access token",
+  "securityHint": "A password for changing the hub's settings over the network.",
+  "integrations": "Integrations",
+  "integrationsHint": "Home Assistant, MQTT, AI assistants — if you need them."
+}

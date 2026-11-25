@@ -9,6 +9,10 @@
 import React, { useState } from 'react';
 import { Alert, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { PanelCard } from '@rbgrid/design-system';
+import { Box } from '@mui/material';
+import { ThemeSwitch } from '../../theme/ThemeSwitch';
+import { useTheme as useAppTheme } from '../../theme/ThemeProvider';
+import { ToggleButton, ToggleButtonGroup } from '@mui/material';
 import { FORMATS, setFormat, setLang, langIntl, t, langFromDevice, browserLang } from '../../i18n';
 import { useFormat, useLang, useLanguages } from '../../i18n/I18nProvider';
 import { useCapabilities, useConfigShadow, useDeviceSession } from '../../core';
@@ -52,6 +56,7 @@ export const InterfacePanel: React.FC = () => {
     } finally { setBusy(false); }
   };
 
+  const themeCtx = useAppTheme();
   return (
     <PanelCard title={t('ui.title')}>
       <Stack spacing={2}>
@@ -79,6 +84,16 @@ export const InterfacePanel: React.FC = () => {
         </TextField>
         <Typography variant="body2" color="text.secondary">{t('ui.note')}</Typography>
       </Stack>
+      {/* The theme (moved off the rail, UI redesign N3): per browser. */}
+      <Box sx={{ mx: -2, mt: 1 }}><ThemeSwitch /></Box>
+      {/* Density (UI redesign S10): per browser. */}
+      <Box sx={{ mt: 1 }}>
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.75 }}>{t('ui.density')}</Typography>
+        <ToggleButtonGroup size="small" exclusive value={themeCtx.density} onChange={(_, v) => v && themeCtx.setDensity(v)} aria-label={t('ui.density')}>
+          <ToggleButton value="comfortable" sx={{ textTransform: 'none' }}>{t('ui.densityComfortable')}</ToggleButton>
+          <ToggleButton value="compact" sx={{ textTransform: 'none' }}>{t('ui.densityCompact')}</ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
     </PanelCard>
   );
 };

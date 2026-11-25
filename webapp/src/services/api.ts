@@ -55,6 +55,7 @@ import { mockConfig } from '../core/mocks';
 import { HubEvent, HubEventsPage, HubVersion } from '../types/hubEvents';
 import { I2cState, I2cScanResult, I2cWriteResult } from '../types/i2c';
 import { getBaseUrl, isDemo, deviceSameOrigin } from './connection';
+import { LedState, LedPatch, parseLed } from '../types/led';
 import { API_ENDPOINTS, HTTP_CONFIG, ENVIRONMENT, ERROR_CODES } from '../constants';
 import { formatApiResponse } from './utils';
 
@@ -987,6 +988,18 @@ export class RBGridApiClient {
     return response.data;
   }
 
+  /** The hub's status LEDs (GET /api/v1/led, fw 1.3.0): mode and what green / red / a process show now. */
+  async getLed(options?: APIRequestOptions): Promise<LedState> {
+    const response = await this.client.get<unknown>('/api/v1/led', { ...options });
+    return parseLed(response.data);
+  }
+
+  /** POST /api/v1/led {mode?, identify?, ack?} (admin token): applies at once; answers the new state. */
+  async setLed(patch: LedPatch): Promise<LedState> {
+    const response = await this.client.post<unknown>('/api/v1/led', patch);
+    return parseLed(response.data);
+  }
+
   /** The hub's rbAmp fleet on I2C (GET /api/v1/i2c): buses, configured modules, the module limit. */
   async getI2c(options?: APIRequestOptions): Promise<I2cState> {
     const response = await this.client.get<I2cState>(API_ENDPOINTS.I2C, { ...options });
@@ -1023,6 +1036,14 @@ export class RBGridApiClient {
   async setI2cModuleAddr(module: number, addr: number): Promise<I2cWriteResult> {
     try {
       const response = await this.client.post<I2cState>(`${API_ENDPOINTS.I2C}/modules/${module}/address`, { addr }, { timeout: 15_000 });
+      return { ...response.data, status: 'ok' };
+    } catch (err) { return this.i2cError(err); }
+  }
+
+  /** A bus's pins (POST /api/v1/i2c/buses/<b> {sda,scl} | {off:true}): checked against the board profile, applied after a restart (`reboot_pending`). */
+  async setI2cBusPins(bus: number, pins: { sda: number; scl: number } | 'off'): Promise<I2cWriteResult> {
+    try {
+      const response = await this.client.post<I2cState>(`${API_ENDPOINTS.I2C}/buses/${bus}`, pins === 'off' ? { off: true } : pins, { timeout: 15_000 });
       return { ...response.data, status: 'ok' };
     } catch (err) { return this.i2cError(err); }
   }
@@ -1307,6 +1328,31 @@ export class RBGridApiClient {
       since = page.next;
     }
     return { events: out, page };
+  }
+
+  /**
+   * The dashboard layout stored on the hub (fw 1.3.0, root ui-state-store): `GET` → the JSON as
+   * stored, its revision in `X-UI-State-Rev`; 404 = nothing stored (rev 0).
+   */
+  async getUiState(): Promise<{ doc: unknown; rev: number } | null> {
+    const r = await this.client.get('/api/system/ui-state', { validateStatus: (s) => s === 200 || s === 404 });
+    if (r.status === 404) return null;
+    const rev = Number(r.headers?.['x-ui-state-rev']);
+    return { doc: r.data, rev: Number.isFinite(rev) ? rev : 0 };
+  }
+
+  /** `PUT ?rev=<n>` (admin): 200 {rev: n+1}; 409 {rev: stored} when another device saved first (nothing written). */
+  async putUiState(doc: unknown, rev: number): Promise<{ ok: true; rev: number } | { ok: false; rev: number }> {
+    const r = await this.client.put(`/api/system/ui-state?rev=${rev}`, doc, {
+      headers: { 'Content-Type': 'application/json' }, validateStatus: (s) => s === 200 || s === 409,
+    });
+    const next = Number((r.data as { rev?: unknown })?.rev);
+    return r.status === 200 ? { ok: true, rev: Number.isFinite(next) ? next : rev + 1 } : { ok: false, rev: Number.isFinite(next) ? next : rev };
+  }
+
+  /** `DELETE` (admin): the standard view again. */
+  async deleteUiState(): Promise<void> {
+    await this.client.delete('/api/system/ui-state');
   }
 
   /** `GET /api/system/version` — firmware version, partition and `image_md5` (canon id). */

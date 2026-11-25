@@ -16,6 +16,7 @@ import {
 import { PanelCard, FormField, StatusChip } from '@rbgrid/design-system';
 import { useCapabilities, useDeviceSession } from '../../core';
 import type { SecurityConfig } from '../../core';
+import { useSectionForm } from '../../app/sectionForms';
 import { t } from '../../i18n';
 import { getBaseUrl } from '../../services/connection';
 
@@ -37,6 +38,22 @@ export const CorsPanel: React.FC = () => {
     session.transport.getSecurity().then((c) => { if (on) { setCfg(c); setDraft(c); } }).catch(() => undefined);
     return () => { on = false; };
   }, [session]);
+
+  // Every hook before the loading return (the section form registered after it crashed the Security
+  // section once the config arrived — React #310, role audit 22.11).
+  const dirtyEarly = !!draft && (draft.dev_cors !== cfg?.dev_cors || JSON.stringify(draft.origins) !== JSON.stringify(cfg?.origins));
+  const lockoutEarly = (() => {
+    if (!draft) return false;
+    const b = getBaseUrl();
+    let same = !b;
+    try { same = same || new URL(b).origin === here; } catch { /* keep */ }
+    return !draft.dev_cors && !(same || draft.origins.includes(here) || (draft.builtin_origins ?? []).includes(here));
+  })();
+  // One «Save» for the section (SPEC §5.3); a draft that would lock this browser out can't be saved.
+  const inSection = useSectionForm({
+    id: 'cors', label: t('cors.title'), dirty: dirtyEarly, invalid: lockoutEarly,
+    save: () => (draft ? save(draft) : Promise.resolve(false)), reset: () => { if (cfg) setDraft(cfg); setMsg(null); },
+  });
 
   if (!draft) {
     return (
@@ -60,7 +77,7 @@ export const CorsPanel: React.FC = () => {
   const lockout = !draft.dev_cors && !allowedHere;
   const canAdd = ORIGIN_RE.test(input.trim()) && !draft.origins.includes(input.trim()) && !builtin.includes(input.trim()) && draft.origins.length < MAX_ORIGINS;
 
-  const save = async (next: SecurityConfig) => {
+  async function save(next: SecurityConfig): Promise<boolean> {
     setBusy(true);
     setMsg(null);
     try {
@@ -68,14 +85,16 @@ export const CorsPanel: React.FC = () => {
       setCfg(next);
       setDraft(next);
       setMsg({ sev: 'success', text: t('cors.saved') });
+      return true;
     } catch (e) {
       const err = e as { status?: number; response?: { status?: number } };
       const status = err?.status ?? err?.response?.status;
       setMsg({ sev: 'error', text: status === 401 || status === 403 ? t('common.adminTokenRequired') : t('cors.saveFailed') });
+      return false;
     } finally {
       setBusy(false);
     }
-  };
+  }
 
   return (
     <PanelCard title={t('cors.title')}>
@@ -145,9 +164,11 @@ export const CorsPanel: React.FC = () => {
               {t('cors.openAll')}
             </Button>
           )}
-          <Button variant="contained" disabled={!dirty || busy || lockout} onClick={() => save(draft)}>
-            {busy ? t('common.saving') : t('common.save')}
-          </Button>
+          {!inSection && (
+            <Button variant="contained" disabled={!dirty || busy || lockout} onClick={() => void save(draft)}>
+              {busy ? t('common.saving') : t('common.save')}
+            </Button>
+          )}
         </Stack>
       </Stack>
 

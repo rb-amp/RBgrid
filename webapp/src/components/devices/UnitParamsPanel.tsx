@@ -47,7 +47,24 @@ export const phaseOptions = (grid: GridSystem, current: number): number[] => {
 const gridText = (g: GridSystem): string => t(`grid.${g.kind}`, { v: g.nominalV, ll: g.lineV });
 const SUPPLY_ROLES = new Set(['MAIN_SUPPLY', 'ALTERNATIVE_SUPPLY']); // topology: not patchable, not assignable
 
-interface Draft { name: string; short_name: string; role: string; phase: number; ratedKw: string; maxA: string; group: number; trunk: boolean; evW: string; evMin: string; ct: number }
+interface Draft { name: string; short_name: string; role: string; phase: number; ratedKw: string; maxA: string; group: number; trunk: boolean; evW: string; evMin: string; ct: number; inside: string }
+
+/**
+ * Points a point can be measured inside (fw 1.1.8 `inside`): any other line — not an input, an
+ * alternative supply or the voltage bus, and not one already inside this point (a loop; the hub
+ * refuses it, 400 field inside). The current choice stays listed.
+ */
+export function nestOptionsOf(list: JsonObject[], self: string, current: string): JsonObject[] {
+  const parentOf = new Map(list.map((u) => [hexKey(u.unit_id), hexKey(u.inside)]));
+  const isUnder = (hex: string | undefined): boolean => {
+    for (let h = hex, n = 0; h && h !== '0000' && n <= list.length; h = parentOf.get(h), n++) if (h === self) return true;
+    return false;
+  };
+  return list.filter((u) => {
+    const hex = hexKey(u.unit_id);
+    return !!hex && (hex === current || (hex !== self && !SUPPLY_ROLES.has(String(u.role)) && u.type !== 'VOLTAGE_BUS' && !isUnder(hex)));
+  });
+}
 
 /** Roles that export (BASIC can't: consumption only). */
 const EXPORT_ROLES = new Set(['RENEWABLE_SOURCE', 'STORAGE_SYSTEM']);
@@ -87,6 +104,7 @@ export const UnitParamsPanel: React.FC<{ apiId: string | null }> = ({ apiId }) =
     evW: typeof u.charge_threshold_w === 'number' && u.charge_threshold_w > 0 ? String(u.charge_threshold_w) : '',
     evMin: typeof u.idle_timeout_min === 'number' && u.idle_timeout_min > 0 ? String(u.idle_timeout_min) : '',
     ct: hwCt ?? 0,
+    inside: hexKey(u.inside) && hexKey(u.inside) !== '0000' ? hexKey(u.inside)! : '',
   });
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
@@ -117,6 +135,10 @@ export const UnitParamsPanel: React.FC<{ apiId: string | null }> = ({ apiId }) =
       && !(basicPoint && EXPORT_ROLES.has(r)));
   // Supply / bus units are the topology root, not a group member.
   const canGroup = !isInput && !isBus && !roleLocked;
+  // Point nesting (fw 1.1.8, `capabilities.pointNesting`): the line point this one is measured inside
+  // — any other line except one already inside this point (the hub refuses a loop, 400 field inside).
+  const canNest = canGroup && caps.flags.pointNesting;
+  const nestOptions = canNest ? nestOptionsOf(list, apiId!, draft.inside) : [];
   const groupOptions = [...deviceGroups.groups];
   if (draft.group > 0 && !groupOptions.some((g) => g.id === draft.group)) groupOptions.push({ id: draft.group, name: '' });
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft({ ...draft, [k]: v });
@@ -190,6 +212,7 @@ export const UnitParamsPanel: React.FC<{ apiId: string | null }> = ({ apiId }) =
     // G5 membership (root e139ab5e: per-unit patch accepts both, live + persisted).
     ...(canGroup ? { group_id: draft.group, role_trunk: draft.group > 0 && draft.trunk ? 1 : 0 } : {}),
     ...(isStation && hasEvFields ? { charge_threshold_w: evW ?? 0, idle_timeout_min: evMin ?? 0 } : {}),
+    ...(canNest ? { inside: draft.inside ? parseInt(draft.inside, 16) : 0 } : {}),
   };
   // The CT rating is a LIMIT (operator 18.10): a breaker above the sensor's accurate range clips.
   const ctRangeOf = (code: number) => {
@@ -205,13 +228,24 @@ export const UnitParamsPanel: React.FC<{ apiId: string | null }> = ({ apiId }) =
   const patch: JsonObject = {};
   const ctChanged = hwCt != null && draft.ct > 0 && draft.ct !== hwCt;
   if (ctChanged) patch.ct_code = draft.ct;
-  for (const k of ['name', 'short_name', 'phase', 'rated_power_w', 'max_current_a', 'role', 'group_id', 'role_trunk', 'charge_threshold_w', 'idle_timeout_min']) {
-    // group_id / role_trunk absent on the hub's copy = 0 (an untouched form sends nothing).
-    const was = raw[k] ?? (k === 'group_id' || k === 'role_trunk' ? 0 : undefined);
+  for (const k of ['name', 'short_name', 'phase', 'rated_power_w', 'max_current_a', 'role', 'group_id', 'role_trunk', 'charge_threshold_w', 'idle_timeout_min', 'inside']) {
+    // group_id / role_trunk / inside absent on the hub's copy = 0 (an untouched form sends nothing).
+    const was = k === 'inside' ? (toDraft(raw).inside ? parseInt(toDraft(raw).inside, 16) : 0)
+      : raw[k] ?? (k === 'group_id' || k === 'role_trunk' ? 0 : undefined);
     if (next[k] !== undefined && next[k] !== (k === 'role_trunk' && was === true ? 1 : was)) patch[k] = next[k];
   }
   const dirty = Object.keys(patch).length > 0;
   const roleChanged = 'role' in patch;
+  // What the bar will write, by the fields' own labels (role audit F11: «Save» here vs the CT that
+  // «applies at once» — the CT goes with this Save like the rest).
+  const FIELD_LABEL: Record<string, string> = {
+    name: t('unitParams.name'), short_name: t('unitParams.shortName'), role: t('unitParams.role'), phase: t('unitParams.phase'),
+    rated_power_w: isInput ? t('unitParams.inputLimit', { unit: t('units.kW') }) : t('unitParams.lineRating', { unit: t('units.kW') }),
+    max_current_a: isInput ? t('unitParams.inputBreaker', { unit: t('units.A') }) : t('unitParams.lineBreaker', { unit: t('units.A') }),
+    ct_code: t('unitParams.ct'), group_id: t('unitParams.group'), role_trunk: t('unitParams.trunk'),
+    charge_threshold_w: t('unitParams.evW'), idle_timeout_min: t('unitParams.evMin'), inside: t('unitParams.inside'),
+  };
+  const changedList = Array.from(new Set(Object.keys(patch).map((k) => FIELD_LABEL[k] ?? k))).join(' · ');
 
   const save = async () => {
     setBusy(true);
@@ -241,6 +275,7 @@ export const UnitParamsPanel: React.FC<{ apiId: string | null }> = ({ apiId }) =
           : err.status === 409 && 'ct_code' in patch ? t('unitParams.ctFixedConflict')
           : err.status === 409 ? t('unitParams.roleLockedConflict')
           : err.status === 400 && 'ct_code' in patch ? t('unitParams.ctRejected', { message: err.data?.message ?? err.data?.error ?? '' })
+          : err.status === 400 && 'inside' in patch && (err.data as { field?: string } | undefined)?.field === 'inside' ? t('unitParams.insideRejected')
           : err.local ? t('unitParams.notSaved', { message: err.message })
           : err.data?.message || err.data?.error
             ? t('common.deviceRejectedWith', { message: err.data?.message ?? err.data?.error })
@@ -357,6 +392,20 @@ export const UnitParamsPanel: React.FC<{ apiId: string | null }> = ({ apiId }) =
               {groupOptions.map((g) => <MenuItem key={g.id} value={g.id}>{g.name || t('flow.groupN', { n: g.id })}</MenuItem>)}
             </TextField>
           )}
+          {canNest && (
+            <TextField
+              select size="small" label={t('unitParams.inside')} value={draft.inside}
+              onChange={(e) => set('inside', String(e.target.value))}
+              SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
+              helperText={t('unitParams.insideHelper')}
+            >
+              <MenuItem value="">{t('unitParams.insideNone')}</MenuItem>
+              {nestOptions.map((u) => {
+                const hex = hexKey(u.unit_id)!;
+                return <MenuItem key={hex} value={hex}>{String(u.name || u.short_name || u.point || hex)}</MenuItem>;
+              })}
+            </TextField>
+          )}
           {canGroup && draft.group > 0 && (
             <FormControlLabel
               control={<Checkbox size="small" checked={draft.trunk} onChange={(e) => set('trunk', e.target.checked)} />}
@@ -379,7 +428,7 @@ export const UnitParamsPanel: React.FC<{ apiId: string | null }> = ({ apiId }) =
             {busy ? t('common.saving') : t('common.save')}
           </Button>
           <Button disabled={!dirty || busy} onClick={() => { setDraft(toDraft(raw)); setMsg(null); }}>{t('common.cancel')}</Button>
-          {dirty && <Typography sx={{ fontSize: 13 }} color={errors.length ? 'error' : 'text.secondary'}>{errors.length ? t('form.fixErrors') : t('unitParams.unsaved')}</Typography>}
+          {dirty && <Typography sx={{ fontSize: 13 }} color={errors.length ? 'error' : 'text.secondary'}>{errors.length ? t('form.fixErrors') : t('unitParams.unsavedList', { list: changedList })}</Typography>}
         </Stack>
       </Stack>
     </Card>

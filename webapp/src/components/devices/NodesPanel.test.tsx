@@ -102,6 +102,16 @@ describe('NodesPanel (fw 1.1.7, root espnow-nodes-ui)', () => {
     expect(screen.queryByRole('button', { name: 'Restart now' })).toBeNull();
   });
 
+  it('inject_age_ms -1 → the hub isn\'t taking in node data, restart offered; any other age → nothing', () => {
+    mockData = hub({ inject_age_ms: -1 });
+    const { unmount } = view();
+    expect(screen.getByText(/isn't taking in the nodes' data|не принимает данные узлов/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Restart now' })).toBeTruthy();
+    unmount();
+    mockData = hub({ inject_age_ms: 420 });
+    view();
+    expect(screen.queryByText(/isn't taking in the nodes' data|не принимает данные узлов/)).toBeNull();
+  });
   it('6 of 6 → pairing is off and says why', () => {
     const n = hub().nodes[0];
     mockData = hub({ nodes: Array.from({ length: 6 }, (_, i) => ({ ...n, mac: `00:00:00:00:00:0${i}` })) });

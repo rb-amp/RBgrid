@@ -250,7 +250,7 @@ export function normalizeTelemetryFrame(
     return {
       unitKey,
       deviceId,
-      name: u.point ?? `RBGrid Unit ${unitKey}`,
+      name: u.point ?? `RBgrid Unit ${unitKey}`,
       present,
       src: u.src,
       point: u.point,

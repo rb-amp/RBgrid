@@ -1,0 +1,15 @@
+{
+  "title": "Applied prices",
+  "hint": "The price the hub booked each closed 15-minute period at, kept 40 days. Use it to check a bill line by line.",
+  "day": "Day",
+  "csv": "Download CSV",
+  "empty": "No closed periods logged for this day.",
+  "failed": "Couldn't read the log: {why}",
+  "more": "More periods than shown: the hub sends up to 400 at a time.",
+  "colPeriod": "Period",
+  "colStart": "Start (hub time)",
+  "colBuy": "Buy, {cur}/kWh, all-in",
+  "colSell": "Sell, {cur}/kWh",
+  "colProv": "Source",
+  "file": "prices"
+}

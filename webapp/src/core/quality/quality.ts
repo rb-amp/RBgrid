@@ -25,11 +25,12 @@ export const QUALITY_BIT_NAMES: Record<number, string> = {
   9: 'SRC_RESTART',
   10: 'SRC_FW',
   11: 'REVERSE_LOST',
+  12: 'OUTAGE',
 };
 
 // Severity partition (contract §1): bits that push a value to BAD win over UNCERTAIN.
 const BAD_BITS = [1, 7]; // TIME_UNSYNC (unresolved), OVERRANGE
-const UNCERTAIN_BITS = [0, 2, 3, 4, 5, 6, 8, 9, 10, 11];
+const UNCERTAIN_BITS = [0, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12];
 
 /** True if bit `n` is set in the quality mask. */
 export function hasQualityBit(q: number | undefined, bit: number): boolean {

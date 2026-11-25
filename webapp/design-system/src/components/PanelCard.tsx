@@ -1,5 +1,8 @@
 import React from 'react';
-import { Card as MuiCard, CardContent, Typography, Button, Stack, Alert } from '@mui/material';
+import { Box, Card as MuiCard, CardContent, Button, Alert } from '@mui/material';
+import { useInPanelGroup } from './PanelGroup';
+import { BlockHeader } from './BlockHeader';
+import { toneSx, CardTone } from './Card';
 
 export interface PanelCardProps {
   /** Panel heading (e.g. "Status", "Time / NTP", "Telemetry"). */
@@ -18,6 +21,10 @@ export interface PanelCardProps {
   alertSeverity?: 'success' | 'info' | 'warning' | 'error';
   /** Panel body. */
   children?: React.ReactNode;
+  /** A quiet caption under the title. */
+  caption?: React.ReactNode;
+  /** Card weight (see Card). */
+  tone?: CardTone;
 }
 
 /**
@@ -35,25 +42,28 @@ export const PanelCard: React.FC<PanelCardProps> = ({
   alert,
   alertSeverity = 'info',
   children,
-}) => (
-  <MuiCard sx={{ borderRadius: 3 }}>
-    <CardContent>
-      <Stack direction="row" alignItems="center" mb={1.5}>
-        <Typography variant="h6" fontWeight={700}>
-          {title}
-        </Typography>
-        {actionLabel && (
-          <Button startIcon={actionIcon} onClick={onAction} disabled={actionDisabled} sx={{ ml: 'auto' }}>
-            {actionLabel}
-          </Button>
-        )}
-      </Stack>
+  caption,
+  tone = 'default',
+}) => {
+  const inGroup = useInPanelGroup();
+  const inner = (
+    <>
+      <BlockHeader title={title} caption={caption} component="h2" actions={actionLabel ? (
+        <Button startIcon={actionIcon} onClick={onAction} disabled={actionDisabled}>{actionLabel}</Button>
+      ) : undefined} />
       {alert && (
         <Alert severity={alertSeverity} sx={{ mb: 2 }}>
           {alert}
         </Alert>
       )}
       {children}
-    </CardContent>
-  </MuiCard>
-);
+    </>
+  );
+  // A section of a PanelGroup's card, or a card of its own.
+  if (inGroup) return <Box component="section">{inner}</Box>;
+  return (
+    <MuiCard sx={{ borderRadius: 3, ...toneSx(tone) }}>
+      <CardContent>{inner}</CardContent>
+    </MuiCard>
+  );
+};

@@ -41,4 +41,6 @@ export interface HubVersion {
   build_date?: string;
   partition?: string;
   image_md5?: string;
+  /** fw 1.3.x (root stats-media-missing-chip): where the statistics live; "none" = an adopted external chip is missing. */
+  stats_media?: 'internal' | 'external' | 'none' | string;
 }

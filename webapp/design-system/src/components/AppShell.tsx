@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, ButtonBase, Drawer, Stack, SvgIcon, Typography, useMediaQuery } from '@mui/material';
+import { Badge, Box, ButtonBase, Drawer, IconButton, Stack, SvgIcon, Tooltip, Typography, useMediaQuery } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import { palettes } from '../tokens';
 
@@ -23,6 +23,8 @@ export interface NavItem {
   tab?: boolean;
   /** Optional position of a `tab` item in the bottom bar (ascending; default = nav order). */
   tabOrder?: number;
+  /** A count beside the label (e.g. active events); 0 / undefined = none. */
+  badge?: number;
 }
 
 export interface AppShellProps {
@@ -52,9 +54,19 @@ export interface AppShellProps {
   moreNavLabel?: string;
   /** Main content. */
   children?: React.ReactNode;
+  /** The rail shows icons only (64 px) — more room for charts on a laptop. */
+  collapsed?: boolean;
+  /** Toggles `collapsed`; the toggle button is shown only when this is given. */
+  onToggleCollapsed?: () => void;
+  /** Labels of the toggle (translated). */
+  collapseLabel?: string;
+  expandLabel?: string;
+  /** The footer while collapsed (default: none). */
+  footerCollapsed?: React.ReactNode;
 }
 
 const RAIL_WIDTH = 220;
+const RAIL_COLLAPSED = 64;
 const TABBAR_HEIGHT = 56;
 const MAX_TABS = 4;
 
@@ -77,15 +89,16 @@ const MoreIcon: React.FC = () => (
 );
 
 /** The grouped vertical nav list (desktop rail + mobile «Ещё» drawer). */
-const NavList: React.FC<{ items: NavItem[]; onNavigate?: () => void }> = ({ items, onNavigate }) => {
+const NavList: React.FC<{ items: NavItem[]; onNavigate?: () => void; collapsed?: boolean }> = ({ items, onNavigate, collapsed = false }) => {
   const mode = useTheme().palette.mode;
   return (
-  <Stack component="ul" spacing={0.5} sx={{ listStyle: 'none', m: 0, px: 1.5, py: 0 }}>
+  <Stack component="ul" spacing={0.5} sx={{ listStyle: 'none', m: 0, px: collapsed ? 1 : 1.5, py: 0 }}>
     {items.map((item, i) => {
       const showGroupHeader = !!item.group && item.group !== items[i - 1]?.group;
       return (
         <React.Fragment key={item.label}>
-          {showGroupHeader && (
+          {showGroupHeader && collapsed && i > 0 && <Box component="li" aria-hidden sx={{ borderTop: 1, borderColor: 'divider', mx: 1, my: 1 }} />}
+          {showGroupHeader && !collapsed && (
             <Typography
               component="li"
               variant="overline"
@@ -95,15 +108,17 @@ const NavList: React.FC<{ items: NavItem[]; onNavigate?: () => void }> = ({ item
             </Typography>
           )}
           <li>
+            <Tooltip title={collapsed ? item.label : ''} placement="right" disableInteractive>
             <ButtonBase
               onClick={() => {
                 item.onClick?.();
                 onNavigate?.();
               }}
               aria-current={item.active ? 'page' : undefined}
+              aria-label={collapsed ? (item.badge ? `${item.label} (${item.badge})` : item.label) : undefined}
               sx={{
                 width: '100%',
-                justifyContent: 'flex-start',
+                justifyContent: collapsed ? 'center' : 'flex-start',
                 gap: 1.5,
                 px: 1.5,
                 py: 1,
@@ -118,11 +133,21 @@ const NavList: React.FC<{ items: NavItem[]; onNavigate?: () => void }> = ({ item
                 ...focusRing(mode),
               }}
             >
-              {item.icon}
-              <Typography component="span" variant="body2" fontWeight="inherit" noWrap>
-                {item.label}
-              </Typography>
+              {collapsed
+                ? <Badge color="error" variant="dot" invisible={!item.badge}>{item.icon}</Badge>
+                : item.icon}
+              {!collapsed && (
+                <Typography component="span" variant="body2" fontWeight="inherit" noWrap sx={{ flex: 1, minWidth: 0 }}>
+                  {item.label}
+                </Typography>
+              )}
+              {!collapsed && !!item.badge && (
+                <Box component="span" sx={{ minWidth: 20, height: 20, px: 0.75, borderRadius: 10, bgcolor: 'error.main', color: 'error.contrastText', fontSize: 12, fontWeight: 700, lineHeight: '20px', textAlign: 'center' }}>
+                  {item.badge}
+                </Box>
+              )}
             </ButtonBase>
+            </Tooltip>
           </li>
         </React.Fragment>
       );
@@ -153,7 +178,7 @@ const Brand: React.FC<{ brand: string; brandIcon?: React.ReactNode; compact?: bo
  * @category Layout
  */
 export const AppShell: React.FC<AppShellProps> = ({
-  brand = 'RBGrid',
+  brand = 'RBgrid',
   brandIcon,
   nav,
   headerRight,
@@ -163,6 +188,11 @@ export const AppShell: React.FC<AppShellProps> = ({
   navLabel = 'Разделы',
   moreNavLabel = 'Другие разделы',
   children,
+  collapsed = false,
+  onToggleCollapsed,
+  collapseLabel = 'Свернуть меню',
+  expandLabel = 'Развернуть меню',
+  footerCollapsed,
 }) => {
   const theme = useTheme();
   const mobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -261,11 +291,11 @@ export const AppShell: React.FC<AppShellProps> = ({
                   ...focusRing(theme.palette.mode),
                 }}
               >
-                {t.icon}
+                <Badge color="error" variant="dot" invisible={!t.badge}>{t.icon}</Badge>
                 <Typography
                   component="span"
                   noWrap
-                  sx={{ fontSize: 11, lineHeight: 1.2, fontWeight: t.active ? 700 : 500, maxWidth: '100%' }}
+                  sx={{ fontSize: 12, lineHeight: 1.2, fontWeight: t.active ? 700 : 500, maxWidth: '100%' }}
                 >
                   {t.shortLabel ?? t.label}
                 </Typography>
@@ -308,7 +338,8 @@ export const AppShell: React.FC<AppShellProps> = ({
       <Box
         component="aside"
         sx={{
-          width: RAIL_WIDTH,
+          width: collapsed ? RAIL_COLLAPSED : RAIL_WIDTH,
+          transition: 'width .15s',
           flexShrink: 0,
           position: 'sticky',
           top: 0,
@@ -324,12 +355,23 @@ export const AppShell: React.FC<AppShellProps> = ({
           flexDirection: 'column',
         }}
       >
-        <Brand brand={brand} brandIcon={brandIcon} />
-        {railTop && <Box sx={{ flexShrink: 0, px: 2, pb: 1.5 }}>{railTop}</Box>}
-        <Box component="nav" aria-label={navLabel} sx={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
-          <NavList items={nav} />
+        {collapsed
+          ? <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>{brandIcon}</Box>
+          : <Brand brand={brand} brandIcon={brandIcon} />}
+        {railTop && !collapsed && <Box sx={{ flexShrink: 0, px: 2, pb: 1.5 }}>{railTop}</Box>}
+        <Box component="nav" aria-label={navLabel} sx={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+          <NavList items={nav} collapsed={collapsed} />
         </Box>
-        {footer && <Box sx={{ flexShrink: 0, pt: 1, borderTop: 1, borderColor: 'divider' }}>{footer}</Box>}
+        {(collapsed ? footerCollapsed : footer) && <Box sx={{ flexShrink: 0, pt: 1, borderTop: 1, borderColor: 'divider' }}>{collapsed ? footerCollapsed : footer}</Box>}
+        {onToggleCollapsed && (
+          <Box sx={{ flexShrink: 0, display: 'flex', justifyContent: collapsed ? 'center' : 'flex-end', px: 1, py: 0.5, borderTop: 1, borderColor: 'divider' }}>
+            <Tooltip title={collapsed ? expandLabel : collapseLabel} placement="right">
+              <IconButton size="small" onClick={onToggleCollapsed} aria-label={collapsed ? expandLabel : collapseLabel} aria-expanded={!collapsed}>
+                <SvgIcon fontSize="small">{collapsed ? <path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /> : <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />}</SvgIcon>
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
       <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {headerRight && (

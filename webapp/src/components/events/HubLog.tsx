@@ -120,14 +120,14 @@ export const HubLog: React.FC = () => {
             return (
               <React.Fragment key={e.seq}>
                 {bootHead && (
-                  <Typography sx={{ px: 1.25, py: 0.5, fontSize: 11, fontWeight: 700, color: ds.inkMuted, bgcolor: ds.surfaceRaised, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  <Typography sx={{ px: 1.25, py: 0.5, fontSize: 12, fontWeight: 700, color: ds.inkMuted, bgcolor: ds.surfaceRaised, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                     {t(e.b === meta?.boot ? 'hubLog.bootCurrent' : 'hubLog.boot', { n: e.b })}
                   </Typography>
                 )}
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={{ xs: 0, sm: 1.25 }}
                   sx={{ px: 1.25, py: 0.4, borderTop: `1px solid ${ds.border}`, bgcolor: fail ? ds.sevAlarmSoft : 'transparent' }}>
                   <Typography sx={{ fontSize: 12, color: ds.inkMuted, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', minWidth: 150 }}>{when(e)}</Typography>
-                  <Typography sx={{ fontSize: 11, fontWeight: 700, color: fail ? ds.sevAlarm : ds.inkMuted, textTransform: 'uppercase', minWidth: 64, pt: '1px' }}>{lvlWord(e.lvl)}</Typography>
+                  <Typography sx={{ fontSize: 12, fontWeight: 700, color: fail ? ds.sevAlarm : ds.inkMuted, textTransform: 'uppercase', minWidth: 64, pt: '1px' }}>{lvlWord(e.lvl)}</Typography>
                   <Typography sx={{ fontSize: 12, color: ds.ink, fontFamily: dsFonts.mono, wordBreak: 'break-word', minWidth: 0 }}>{e.msg}</Typography>
                 </Stack>
               </React.Fragment>

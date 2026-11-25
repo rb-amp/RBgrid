@@ -10,7 +10,7 @@
  */
 import React, { Suspense, lazy, useMemo, useState } from 'react';
 import { Box, Stack, Tab, Tabs, ToggleButton, ToggleButtonGroup } from '@mui/material';
-import { Card } from '@rbgrid/design-system';
+import { Card, BlockHeader } from '@rbgrid/design-system';
 import { EnergyFlowHome } from './EnergyFlowHome';
 import { EnergyFlowPhases, EnergyFlowPhasesProps } from './EnergyFlowPhases';
 import { FlowLegend } from './FlowLegend';
@@ -51,6 +51,8 @@ export const HomeFlowCard: React.FC<{ frame: FlowFrame; phases?: EnergyFlowPhase
   if (schemaEmpty && !canPhases) return null;
   return (
     <Card>
+      {/* A real block title, as every block (UI/UX audit U07). */}
+      <BlockHeader title={t('dashboard.energyFlow')} />
       {(canScene || (canPhases && !schemaEmpty) || showTabs) && (
         // Phones: the view toggle on top (right), the group tabs on their own full-width row.
         <Stack direction={{ xs: 'column-reverse', sm: 'row' }} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between" gap={1} sx={{ mb: 1, minWidth: 0 }}>

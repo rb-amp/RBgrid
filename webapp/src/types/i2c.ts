@@ -1,7 +1,8 @@
 /**
- * I2C fleet API (`main/rbi2c_api.c`, in the firmware since v1.1.0). Only bus 0 and the add /
- * readdress path are used by the app (operator 02.11 via root: «up to 3 modules» in v1.1.2);
- * the second bus, pins and per-module DRDY stay out of the UI.
+ * I2C fleet API (`main/rbi2c_api.c`, in the firmware since v1.1.0, frozen). The app uses add /
+ * readdress on bus 0, and — on hub 1.3.0 (root i2c-bus1-support 22.11) — bus 1 too, with its pins
+ * (POST /api/v1/i2c/buses/1, applied after a restart). Per-module DRDY and moving a module between
+ * buses stay out of the UI.
  */
 
 /** GET /api/v1/i2c → modules[]: one configured rbAmp module. */
@@ -21,14 +22,21 @@ export interface I2cModule {
   placeholder?: boolean;
 }
 
-export interface I2cBus { bus: number; up: boolean; configured?: boolean; sda?: number; scl?: number }
+export interface I2cBus { bus: number; up: boolean; configured?: boolean; sda?: number; scl?: number; port?: number }
+
+/** A GPIO the board profile keeps for something else (`use`: «boot strap», «I2C bus 0», «USB D-»…). */
+export interface I2cReservedPin { gpio: number; use: string }
 
 /** GET /api/v1/i2c (and the body of a successful write, with `status:"ok"`). */
 export interface I2cState {
   buses: I2cBus[];
   modules: I2cModule[];
   max_modules?: number;
+  /** New bus pins saved, applied at the next restart. */
   reboot_pending?: boolean;
+  /** The board profile: GPIOs a bus may use, and the ones kept for something else. */
+  pins_ok?: number[];
+  pins_reserved?: I2cReservedPin[];
   status?: string;
 }
 

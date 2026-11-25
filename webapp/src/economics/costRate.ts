@@ -18,6 +18,8 @@ export interface LiveRate {
   netPerHour: number | null;
   /** The buy rate includes the plan's levies and VAT (the basis of the hub's `cost_day`). */
   gross?: boolean;
+  /** The rate is the hub's dynamic price (fw 1.2.0), not the plan zone's — `zone` still names the plan's zone the clock is in. */
+  dynamic?: boolean;
 }
 
 /** (rate + per-kWh levies) × (1 + VAT) — the basis the hub's day cost and hour records use
@@ -32,6 +34,19 @@ export function grossOf(plan: Partial<TariffPlan> | null | undefined): ((rate: n
 }
 
 export function liveRate(t: TelemetryTariff | undefined, plan?: Partial<TariffPlan> | null): LiveRate {
+  // A dynamic price in force (fw 1.2.0): the hub's all-in rate is the price now, and it may be zero
+  // or negative — a real price, not «no plan».
+  if (t?.dynamic && typeof t.buy_rate_all_in === 'number' && t.price_state && t.price_state !== 'disabled') {
+    return {
+      buy: t.buy_rate_all_in,
+      sell: typeof t.sell_rate === 'number' ? t.sell_rate : null,
+      zone: t.zone ?? null,
+      currency: t.currency ?? null,
+      netPerHour: typeof t.cost_rate_h === 'number' ? t.cost_rate_h : null,
+      gross: true,
+      dynamic: true,
+    };
+  }
   const net = t?.buy_rate && t.buy_rate > 0 ? t.buy_rate : null;
   // The hub's own all-in rate wins (root 16.10: cost_rate_h is then on it too); else the plan's
   // levies and VAT on top of the zone rate.

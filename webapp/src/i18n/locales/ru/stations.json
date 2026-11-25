@@ -41,5 +41,7 @@
   "marginPerHour": "маржа {value}",
   "marginToday": "Маржа сегодня",
   "purchase": "закупка {money}",
-  "limitAbove": "↑ лимит {power} — пик дня {pct} % от него"
+  "limitAbove": "↑ лимит {power} — пик дня {pct} % от него",
+  "atCurrentPrice": "по текущей цене за кВт·ч",
+  "allFreeHidden": "Все {n} станций свободны — свободные скрыты в настройках блока."
 }

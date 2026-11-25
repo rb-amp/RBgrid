@@ -1,0 +1,39 @@
+{
+ "v": 1,
+ "ts": 1794274306,
+ "period_from": 1794274200,
+ "period_until": 1794275100,
+ "currency": "EUR",
+ "buy": 0.36115,
+ "sell": 0.08,
+ "price_state": "ok",
+ "provenance": "source",
+ "rank_buy": 12,
+ "rank_sell": 1,
+ "periods_today": 96,
+ "windows": [
+  {
+   "rule_id": 1,
+   "name": "Boiler",
+   "active": false,
+   "active_until": 0,
+   "next_start": 1794348000
+  },
+  {
+   "rule_id": 2,
+   "name": "Cheap",
+   "active": false,
+   "active_until": 0,
+   "next_start": 0
+  },
+  {
+   "rule_id": 3,
+   "name": "EV",
+   "active": false,
+   "active_until": 0,
+   "next_start": 0
+  }
+ ],
+ "sell_low": false,
+ "buy_cheap": false
+}

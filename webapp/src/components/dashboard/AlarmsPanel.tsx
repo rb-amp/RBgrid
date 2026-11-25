@@ -8,6 +8,7 @@
  * to ONE line («✓ Тревог нет · N точек на связи») instead of a half-screen empty card.
  * Severity is always a word, never colour alone (§9).
  */
+import { APPROACH_PCT, limitPct } from '../../entities/limits';
 import React from 'react';
 import { Box, Stack, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
@@ -25,6 +26,8 @@ export interface AlarmsPanelProps {
   nameOf?: (g: UnitEntityGroup) => string;
   /** Line nominal (W) by point — a line above it needs attention too (INP-R10: 148 % was not listed). */
   ratedOf?: (g: UnitEntityGroup) => number | undefined;
+  /** The input's live power and limit — «close to the limit» from APPROACH_PCT, as in Events. */
+  input?: { powerW: number | null; limitW?: number | null };
 }
 
 function isAlarm(g: UnitEntityGroup): boolean {
@@ -34,7 +37,7 @@ function isAlarm(g: UnitEntityGroup): boolean {
 /** «N точек на связи» — plural forms live in the phrase file (cards.pointsOnline_*). */
 const pointsOnline = (n: number): string => t('cards.pointsOnline', { count: n });
 
-export const AlarmsPanel: React.FC<AlarmsPanelProps> = ({ groups, title: titleProp, nameOf, ratedOf }) => {
+export const AlarmsPanel: React.FC<AlarmsPanelProps> = ({ groups, title: titleProp, nameOf, ratedOf, input }) => {
   const title = titleProp ?? t('cards.alarmsTitle');
   const ds = useDsTokens();
   // A point on a channel the module lacks isn't watched: nothing measures it (UI3 in place of UI7).
@@ -56,7 +59,9 @@ export const AlarmsPanel: React.FC<AlarmsPanelProps> = ({ groups, title: titlePr
   // metering under-counts silently — listed per point, so several channels read at a glance.
   const clip = points.filter((g) => g.present && !isAlarm(g) && g.attributes?.clip === true);
   const ctWarn = points.filter((g) => g.present && !isAlarm(g) && g.attributes?.clip !== true && g.attributes?.ct_warn === true);
-  const count = alarms.length + offline.length + over.length + stale.length + clip.length + ctWarn.length;
+  const inPct = limitPct(input?.powerW, input?.limitW);
+  const near = inPct != null && inPct >= APPROACH_PCT ? inPct : null;
+  const count = alarms.length + offline.length + over.length + stale.length + clip.length + ctWarn.length + (near != null ? 1 : 0);
 
   if (count === 0) {
     return (
@@ -110,9 +115,18 @@ export const AlarmsPanel: React.FC<AlarmsPanelProps> = ({ groups, title: titlePr
       <Stack spacing={1.25} sx={{ py: 0.5 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between">
           <Typography sx={{ fontWeight: 700, fontSize: 15 }}>{title}</Typography>
-          <Typography sx={{ fontSize: 12, fontWeight: 600, color: alarms.length ? ds.sevAlarm : ds.inkMuted }}>{count}</Typography>
+          <Typography sx={{ fontSize: 12, fontWeight: 600, color: alarms.length || near != null ? ds.sevAlarm : ds.inkMuted }}>{count}</Typography>
         </Stack>
         <Stack spacing={1}>
+          {near != null && (
+            <Box component={RouterLink} to="/events" sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1, borderRadius: 1, textDecoration: 'none',
+              border: `1px solid ${near >= 100 ? ds.sevCritical : ds.sevWarning}`, bgcolor: near >= 100 ? ds.sevAlarmSoft : ds.sevWarningSoft }}>
+              <Box sx={{ color: near >= 100 ? ds.sevCritical : ds.sevWarning, fontSize: 16, lineHeight: 1 }} aria-hidden>⚠</Box>
+              <Typography sx={{ flex: 1, fontWeight: 600, fontSize: 14, color: ds.ink }}>
+                {t('events.approach', { pct: Math.round(near), w: pwW(input?.powerW ?? 0), lim: pwW(input?.limitW ?? 0) })}
+              </Typography>
+            </Box>
+          )}
           {alarms.map((g) => <Row key={g.unitKey} g={g} kind="alarm" />)}
           {clip.map((g) => <Row key={`c-${g.unitKey}`} g={g} kind="clip" />)}
           {over.map((g) => <Row key={`o-${g.unitKey}`} g={g} kind="over" />)}

@@ -37,6 +37,7 @@ export function flowCssVars(ds: DsPalette): React.CSSProperties {
     '--ink-muted': ds.inkMuted,
     '--surface': ds.surface,
     '--surface-raised': ds.surfaceRaised,
+    // --flow-* / --solar*: set once for the app (ThemeProvider); kept here so the diagram also renders standalone.
     '--flow-export': ds.flowExport,
     '--flow-import': ds.flowImport,
     '--solar': ds.solar,

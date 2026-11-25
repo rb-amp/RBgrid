@@ -1,20 +1,16 @@
 /**
  * useDisplayMode — the «Мощность ⇄ Деньги» lens (operator 2026-10-13, review 10).
  *
- * A per-user VIEW preference (localStorage, per connected device), NEVER a device setting —
- * the opposite of site_profile. Defaults per scenario: дом / станции → деньги, предприятие →
- * мощность. Money mode is only offered when the device has an active tariff (live
+ * A per-user VIEW preference (localStorage, per connected device), NEVER a device setting.
+ * Default: money wherever money can be shown (UI redesign 22.11: no site scenario). Money mode is only offered when the device has an active tariff (live
  * `system.tariff.buy_rate > 0`) and is not an OSS build; otherwise it is forced to power.
  * Operator 2026-10-13: the lens switches every Overview card except the flow schemas; limits,
  * phase currents and power quality keep their physical unit inside those cards.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { SiteProfile } from '../types/config';
 import { getBaseUrl, isDemo } from '../services/connection';
 
 export type DisplayMode = 'power' | 'money';
-
-const DEFAULT_BY_SCENARIO: Record<SiteProfile, DisplayMode> = { home: 'money', industrial: 'power', ev: 'money' };
 
 const keyFor = (): string => `rbgrid.displayMode.${isDemo() ? 'demo' : getBaseUrl() || 'local'}`;
 
@@ -35,7 +31,7 @@ export interface DisplayModeState {
   setMode: (m: DisplayMode) => void;
 }
 
-export function useDisplayMode(scenario: SiteProfile, moneyAvailable: boolean): DisplayModeState {
+export function useDisplayMode(moneyAvailable: boolean): DisplayModeState {
   const [stored, setStored] = useState<DisplayMode | null>(read);
 
   // Re-read when the connected device changes (different key).
@@ -46,6 +42,6 @@ export function useDisplayMode(scenario: SiteProfile, moneyAvailable: boolean): 
     try { localStorage.setItem(keyFor(), m); } catch { /* storage unavailable → session only */ }
   }, []);
 
-  const preferred = stored ?? DEFAULT_BY_SCENARIO[scenario];
+  const preferred = stored ?? 'money';
   return { mode: moneyAvailable ? preferred : 'power', moneyAvailable, setMode };
 }

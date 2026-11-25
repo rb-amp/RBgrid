@@ -64,7 +64,7 @@ export const ConnectScreen: React.FC = () => {
         <Card>
           <Stack direction="row" alignItems="center" spacing={1.5} mb={1}>
             <BoltIcon color="primary" sx={{ fontSize: 32 }} />
-            <Typography variant="h5" fontWeight={800}>RBGrid</Typography>
+            <Typography variant="h5" fontWeight={800}>RBgrid</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" mb={2}>
             {t(BROKER ? 'connect.intro' : 'connect.introHub')}

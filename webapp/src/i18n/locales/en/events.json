@@ -34,5 +34,14 @@
   "durM": "{m} min",
   "durH": "{h} h",
   "hubFailSince": "the hub has logged poll failures since {time}",
-  "hubNotFoundSince": "the hub didn’t find the module at start-up ({time}) and keeps looking"
+  "hubNotFoundSince": "the hub didn’t find the module at start-up ({time}) and keeps looking",
+  "allHeard": "All sensors are heard: {n}.",
+  "lastRestart": "Last hub restart: {time}.",
+  "limitInput": "input limit {w} (a warning from {pct} %)",
+  "limitBreaker": "input breaker {a} A",
+  "limitLines": "line ratings: {n}",
+  "noLimits": "No limits set: «over the rating» events can't arise.",
+  "setLimits": "Set the limits",
+  "approach": "The input is close to its limit: {pct} % ({w} of {lim}).",
+  "lineOver": "“{name}” above its rating: {pct} % ({w} of {lim})."
 }

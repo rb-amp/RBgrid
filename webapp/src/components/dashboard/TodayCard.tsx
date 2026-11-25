@@ -26,12 +26,16 @@ export interface TodayCardProps {
   zoneName?: string | null;
   /** Current buy rate, already formatted. */
   rateText?: string | null;
+  /** The words before `zoneName` (default «Zone:»; a dynamic price says «Price now:»). */
+  zoneCaption?: string;
   /** The hub counts by its factory example plan — say so and offer to set one's own (W191-06). */
   placeholderTariff?: boolean;
   /** OSS build — no tariff engine. */
   oss?: boolean;
   /** Month to date (closed days + today), the same figure as Economics «месяц» (HOME-21). */
   month?: { wh: number; cost: number | null } | null;
+  /** Yesterday's input (role audit 22.11: «yesterday» was nowhere on the Overview). */
+  yesterday?: { wh: number; cost: number | null } | null;
 }
 
 const Figure: React.FC<{ label: string; v: LensText; color?: string }> = ({ label, v, color }) => {
@@ -50,7 +54,7 @@ const Figure: React.FC<{ label: string; v: LensText; color?: string }> = ({ labe
 };
 
 export const TodayCard: React.FC<TodayCardProps> = ({
-  energyInWh, energyOutWh, timeSynced, costDay, revDay, zoneName, rateText, oss, month, placeholderTariff }) => {
+  energyInWh, energyOutWh, timeSynced, costDay, revDay, zoneName, rateText, zoneCaption, oss, month, yesterday, placeholderTariff }) => {
   const ds = useDsTokens();
   const lens = useLensFormat();
   // < 10 Wh is noise, not «Отдано +0,00 € · 0,0 кВт·ч».
@@ -69,7 +73,7 @@ export const TodayCard: React.FC<TodayCardProps> = ({
   return (
     <Card>
       <Stack spacing={1.5} sx={{ py: 0.5 }}>
-        <Typography sx={{ fontSize: 12, letterSpacing: '0.02em' }} color="text.secondary">{t('cards.todayTitle')}</Typography>
+        <Typography component="h3" sx={{ fontSize: 16, fontWeight: 700, m: 0 }}>{t('cards.todayTitle')}</Typography>
         {/* One rule for «today» with the hub clock unset (3φ rerun R01: «—» here, figures on six other
             screens): the hub's day counter everywhere, said honestly where its day starts. */}
         <Stack direction="row" columnGap={4} rowGap={1.5} flexWrap="wrap" useFlexGap>
@@ -78,28 +82,36 @@ export const TodayCard: React.FC<TodayCardProps> = ({
           {net && <Figure label={t('cards.todayNet')} v={net} />}
         </Stack>
         {!timeSynced && (
-          <Typography sx={{ fontSize: 12, color: ds.sevWarning }}>{t('cards.todayClockNotSet')}</Typography>
+          <Typography sx={{ fontSize: 13, color: ds.sevWarning }}>{t('cards.todayClockNotSet')}</Typography>
+        )}
+        {yesterday && yesterday.wh > 0 && (
+          <Stack direction="row" spacing={1} alignItems="baseline" sx={{ pt: 0.5, borderTop: 1, borderColor: 'divider' }}>
+            <Typography sx={{ fontSize: 13 }} color="text.secondary">{t('cards.yesterday')}</Typography>
+            <Typography sx={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+              {(() => { const v = lens.energy(yesterday.wh, false, yesterday.cost); return v.sub ? `${v.main} · ${v.sub}` : v.main; })()}
+            </Typography>
+          </Stack>
         )}
         {month && month.wh > 0 && (
-          <Stack direction="row" spacing={1} alignItems="baseline" sx={{ pt: 0.5, borderTop: 1, borderColor: 'divider' }}>
-            <Typography sx={{ fontSize: 12 }} color="text.secondary">{t('cards.monthToDate')}</Typography>
+          <Stack direction="row" spacing={1} alignItems="baseline" sx={{ pt: 0.5, borderTop: yesterday && yesterday.wh > 0 ? 0 : 1, borderColor: 'divider' }}>
+            <Typography sx={{ fontSize: 13 }} color="text.secondary">{t('cards.monthToDate')}</Typography>
             <Typography sx={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
               {(() => { const v = lens.energy(month.wh, false, month.cost); return v.sub ? `${v.main} · ${v.sub}` : v.main; })()}
             </Typography>
           </Stack>
         )}
         {oss ? (
-          <Typography sx={{ fontSize: 12 }} color="text.secondary">{t('cards.costNoTariff')}</Typography>
+          <Typography sx={{ fontSize: 13 }} color="text.secondary">{t('cards.costNoTariff')}</Typography>
         ) : zoneName ? (
-          <Typography sx={{ fontSize: 12 }} color="text.secondary">
-            {t('cards.costZone')} <span style={{ color: ds.ink }}>{zoneName}</span>
+          <Typography sx={{ fontSize: 13 }} color="text.secondary">
+            {zoneCaption ?? t('cards.costZone')} <span style={{ color: ds.ink }}>{zoneName}</span>
             {rateText ? ` · ${rateText}` : ''}
           </Typography>
         ) : null}
         {!oss && placeholderTariff && (
-          <Typography sx={{ fontSize: 12, color: ds.sevWarning }}>
+          <Typography sx={{ fontSize: 13, color: ds.sevWarning }}>
             {t('cards.placeholderTariff')}{' '}
-            <Link href="#/onboarding" underline="hover" sx={{ fontSize: 12 }}>{t('cards.setOwnTariff')}</Link>
+            <Link href="#/onboarding" underline="hover" sx={{ fontSize: 13 }}>{t('cards.setOwnTariff')}</Link>
           </Typography>
         )}
       </Stack>

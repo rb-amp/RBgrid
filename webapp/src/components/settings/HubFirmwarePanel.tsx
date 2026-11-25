@@ -109,6 +109,9 @@ export const HubFirmwarePanel: React.FC = () => {
             {t('hubFw.current', { version: hub.version ?? '—', built: hub.build_date ?? '—', image: (hub.image_md5 ?? '').slice(0, 8) || '—' })}
           </Typography>
         )}
+        {hub && ['internal', 'external', 'none'].includes(hub.stats_media ?? '') && (
+          <Typography variant="body2" color={hub.stats_media === 'none' ? 'warning.main' : 'text.secondary'}>{t(`hubFw.storage_${hub.stats_media}`)}</Typography>
+        )}
         <input ref={input} type="file" accept=".bin" hidden onChange={(e) => { void pick(e.target.files?.[0]); e.target.value = ''; }} />
         <Box>
           <Button variant="outlined" startIcon={<SystemUpdateAltIcon />} disabled={running} onClick={() => input.current?.click()}>

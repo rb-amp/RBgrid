@@ -22,7 +22,7 @@ import React, { useMemo } from 'react';
 import { Typography, Box, Link } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import { historyHref } from '../../pages/historyLink';
-import { Card } from '@rbgrid/design-system';
+import { Card, BlockHeader } from '@rbgrid/design-system';
 import { useDsTokens } from '../../theme/useDsTokens';
 import { useHistory } from '../../hooks/useHistory';
 import { HistoryEnergyRecord, HistoryEconomicsRecord } from '../../types/history';
@@ -57,7 +57,7 @@ export interface OverviewEnergyChartProps {
   liveGenOut?: number | null;
 }
 
-const H = 200;
+const H = 240; // ≥ 220 (UI redesign S5): the hours readable, not a strip
 /** Hour-label strides; the smallest keeping labels ≥ 28 px apart wins. */
 const HOUR_STRIDES = [1, 2, 3, 4, 6, 12];
 const PAD_L = 8;
@@ -183,7 +183,10 @@ export const OverviewEnergyChart: React.FC<OverviewEnergyChartProps> = ({ unitId
   const closedBars = bars.filter((b) => b.hour !== clock.parts(Math.floor(Date.now() / 1000)).h);
   // Bar height = the house's hour (import + own solar); without generation that is the import.
   const houseOf = (b: { imp: number; gen: number; exp: number }): number => b.imp + selfOf(b);
-  const maxImp = Math.max(0.001, ...(closedBars.some((b) => houseOf(b) > 0) ? closedBars : bars).map(houseOf), ...yday.map((v) => v ?? 0));
+  // The scale is TODAY's (UI redesign S5, SPEC §6.5): yesterday's evening peak no longer squeezes today's
+  // bars to the floor — a yesterday cap above the scale sits at the top edge with ▲ (its value on hover).
+  const todayMax = Math.max(0, ...(closedBars.some((b) => houseOf(b) > 0) ? closedBars : bars).map(houseOf));
+  const maxImp = todayMax > 0 ? todayMax * 1.15 : Math.max(0.001, ...yday.map((v) => v ?? 0));
   const anySolar = solar && bars.some((b) => selfOf(b) > 0);
   const maxExp = Math.max(0, ...bars.map((b) => b.exp));
   const topBand = H * 0.62 - PAD_T;         // space above baseline (import)
@@ -199,23 +202,21 @@ export const OverviewEnergyChart: React.FC<OverviewEnergyChartProps> = ({ unitId
 
   return (
     <Card>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', columnGap: 2, rowGap: 0.5, mb: 1 }}>
-        <Typography sx={{ fontSize: 12, letterSpacing: '0.02em' }} color="text.secondary">
-          <span>{t('cards.chartTitle')}</span>{lens.moneyMode ? ` · ${t('cards.chartTitleMoney')}` : ''}
-          {/* the same hours as numbers (charts audit §6: a table view for every chart) */}
-          {' · '}<Link component={RouterLink} to={historyHref({ point: unitId, win: 'today', metric: lens.moneyMode ? 'money' : 'energy', view: 'table' })} underline="hover" sx={{ fontSize: 12 }}>{t('common.asTable')}</Link>
-        </Typography>
+      {/* A real title (UI redesign S2/S5); the same hours as numbers — «As a table» (charts audit §6). */}
+      <BlockHeader title={t('cards.chartTitle')} caption={lens.moneyMode ? t('cards.chartTitleMoney') : undefined}
+        actions={<Link component={RouterLink} to={historyHref({ point: unitId, win: 'today', metric: lens.moneyMode ? 'money' : 'energy', view: 'table' })} underline="hover" sx={{ fontSize: 13 }}>{t('common.asTable')}</Link>} />
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', columnGap: 2, rowGap: 0.5, mb: 1 }}>
         {bars.length > 0 && (
           <ChartLegend items={[
             ...(anySolar
-              ? [{ label: t('legend.fromGrid'), color: ds.primary }, { label: t('legend.fromSolar'), color: ds.solar }]
-              : [{ label: t('legend.imported'), color: ds.primary }]),
+              ? [{ label: t('legend.fromGrid'), color: ds.flowImport }, { label: t('legend.fromSolar'), color: ds.solar }]
+              : [{ label: t('legend.imported'), color: ds.flowImport }]),
             // Legend follows the data: export bars exist without generation too (a reversed CT,
             // a battery) — UX audit HOME-10/GEN-07.
             ...(maxExp > 0 ? [{ label: t('legend.exported'), color: ds.flowExport }] : []),
-            ...(bars.some((b) => b.has && b.hour === clock.parts(Math.floor(Date.now() / 1000)).h) ? [{ label: t('legend.currentHour'), color: ds.primary, mark: 'hatch' as const }] : []),
+            ...(bars.some((b) => b.has && b.hour === clock.parts(Math.floor(Date.now() / 1000)).h) ? [{ label: t('legend.currentHour'), color: ds.flowImport, mark: 'hatch' as const }] : []),
             ...(hasYday ? [{ label: t('legend.yesterday'), color: ds.ink, mark: 'line' as const }] : []),
-            ...(anyPartial ? [{ label: t('legend.partialHour'), color: ds.primary, mark: 'outline' as const }] : []),
+            ...(anyPartial ? [{ label: t('legend.partialHour'), color: ds.flowImport, mark: 'outline' as const }] : []),
           ]} />
         )}
       </Box>
@@ -232,8 +233,8 @@ export const OverviewEnergyChart: React.FC<OverviewEnergyChartProps> = ({ unitId
           <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img" aria-label={t('cards.chartAria')}>
             <defs>
               <pattern id="oec-hatch" width="5" height="5" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-                <rect width="5" height="5" fill={ds.primary} opacity="0.25" />
-                <line x1="0" y1="0" x2="0" y2="5" stroke={ds.primary} strokeWidth="2" />
+                <rect width="5" height="5" fill={ds.flowImport} opacity="0.25" />
+                <line x1="0" y1="0" x2="0" y2="5" stroke={ds.flowImport} strokeWidth="2" />
               </pattern>
               <pattern id="oec-hatch-sun" width="5" height="5" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
                 <rect width="5" height="5" fill={ds.solar} opacity="0.25" />
@@ -260,12 +261,12 @@ export const OverviewEnergyChart: React.FC<OverviewEnergyChartProps> = ({ unitId
               // Hatch = the running hour only; a PAST partial hour (outage, restart) is faded and says
               // so in its tooltip (INP-R04/HOME-R07: both were «Этот час (ещё идёт)»).
               const pastPartial = b.partial && !current;
-              const impFill = current ? 'url(#oec-hatch)' : ds.primary;
+              const impFill = current ? 'url(#oec-hatch)' : ds.flowImport;
               return (
                 <g key={i}>
                   {b.imp > 0 && (
                     <rect x={cx - bw / 2} y={baseY - impH} width={bw} height={Math.max(1, impH)} rx="2"
-                      fill={pastPartial ? 'transparent' : impFill} stroke={pastPartial ? ds.primary : 'none'} strokeWidth={pastPartial ? 1.5 : 0} opacity={current ? 1 : 0.9}>
+                      fill={pastPartial ? 'transparent' : impFill} stroke={pastPartial ? ds.flowImport : 'none'} strokeWidth={pastPartial ? 1.5 : 0} opacity={current ? 1 : 0.9}>
                       <title>{t('cards.chartImportTip', { hour: b.hour, value: fmtVal(b.imp) })}{pastPartial ? ` · ${t('legend.partialHour')}` : ''}</title>
                     </rect>
                   )}
@@ -296,8 +297,14 @@ export const OverviewEnergyChart: React.FC<OverviewEnergyChartProps> = ({ unitId
               const i = bars.findIndex((b) => b.hour === h);
               if (i < 0) return null;
               const cx = PAD_L + slot * i + slot / 2;
+              const over = v * perKwh > topBand;
               const yv = baseY - Math.min(v * perKwh, topBand);
-              return <line key={`y${h}`} x1={cx - bw / 2 - 4} x2={cx + bw / 2 + 4} y1={yv} y2={yv} stroke={ds.ink} strokeWidth={2} strokeLinecap="round" opacity={0.7} />;
+              return (
+                <g key={`y${h}`} opacity={0.7}>
+                  <line x1={cx - bw / 2 - 4} x2={cx + bw / 2 + 4} y1={yv} y2={yv} stroke={ds.ink} strokeWidth={2} strokeLinecap="round" />
+                  {over && <path d={`M ${cx - 4} ${yv - 3} L ${cx} ${yv - 9} L ${cx + 4} ${yv - 3} Z`} fill={ds.ink} />}
+                </g>
+              );
             })}
             <HoverLayer
               ts={bars.map((b) => b.hour)}
@@ -309,7 +316,7 @@ export const OverviewEnergyChart: React.FC<OverviewEnergyChartProps> = ({ unitId
                 const self = b ? selfOf(b) : 0;
                 return [
                   ...(b && b.has && solar ? [{ label: t('legend.house'), value: fmtVal(b.imp + self), color: ds.ink }] : []),
-                  ...(b && b.has ? [{ label: t(solar ? 'legend.fromGrid' : 'legend.imported'), value: fmtVal(b.imp), color: ds.primary }] : []),
+                  ...(b && b.has ? [{ label: t(solar ? 'legend.fromGrid' : 'legend.imported'), value: fmtVal(b.imp), color: ds.flowImport }] : []),
                   ...(b && b.has && solar ? [{ label: t('legend.fromSolar'), value: fmtVal(self), color: ds.solar }] : []),
                   ...(b && b.has && solar && b.gen > 0 ? [{ label: t('legend.solarProduced'), value: fmtVal(b.gen), color: ds.solar, muted: true }] : []),
                   ...(b && b.exp > 0 ? [{ label: t('legend.exported'), value: fmtVal(b.exp), color: ds.flowExport }] : []),

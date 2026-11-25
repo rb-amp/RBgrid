@@ -7,7 +7,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { DeviceProvider } from '../../core';
 import { connectDemo, disconnect } from '../../services/connection';
-import { UnitParamsPanel } from './UnitParamsPanel';
+import { UnitParamsPanel, nestOptionsOf } from './UnitParamsPanel';
 
 // The solar home (its water heater 9010, a 13.8 kW input); the default demo site has neither.
 beforeAll(() => { localStorage.setItem('rbgrid.demo.variant', 'home'); connectDemo(); });
@@ -45,4 +45,26 @@ it('blocks over-long short names and locks the input role', async () => {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled());
   expect(screen.getByText('роль ввода задаёт хаб, она не меняется')).toBeInTheDocument();
   expect(screen.getByLabelText('Лимит ввода, кВт')).toBeInTheDocument();
+});
+
+it('offers no «Measured inside» on a hub without point nesting (fw before 1.1.8)', async () => {
+  renderPanel('9010');
+  await screen.findByLabelText('Номинал линии, кВт');
+  expect(screen.queryByLabelText('Внутри точки')).toBeNull();
+});
+
+describe('nestOptionsOf (fw 1.1.8 `inside`)', () => {
+  const list = [
+    { unit_id: 0x0006, role: 'MAIN_SUPPLY' }, { unit_id: 0x0007, type: 'VOLTAGE_BUS' },
+    { unit_id: 0x6B08, role: 'DEVICE_LOAD' }, { unit_id: 0x6B09, role: 'EV_CHARGING', inside: 0x6B08 },
+    { unit_id: 0x9020, role: 'DEVICE_LOAD', inside: 0x6B09 }, { unit_id: 0x9021, role: 'DEVICE_LOAD' },
+  ];
+  const ids = (self: string, cur = '') => nestOptionsOf(list, self, cur).map((u) => (u.unit_id as number).toString(16).toUpperCase());
+  it('other lines only: not the input, the bus or itself', () => {
+    expect(ids('9021')).toEqual(['6B08', '6B09', '9020']);
+  });
+  it('not a point already inside this one, at any depth (a loop)', () => {
+    expect(ids('6B08')).toEqual(['9021']);
+    expect(ids('6B09', '6B08')).toEqual(['6B08', '9021']);
+  });
 });

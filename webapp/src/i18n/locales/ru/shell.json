@@ -39,5 +39,16 @@
   "switchDeviceLong": "Сменить устройство",
   "tokenNeededTitle": "{addr} просит токен",
   "tokenNeededText": "Хаб на связи, но отдаёт данные только по токену чтения или администратора. Введите его в «Настройки → Безопасность».",
-  "tokenNeededAction": "Ввести токен"
+  "tokenNeededAction": "Ввести токен",
+  "navPrices": "Цены",
+  "navAi": "ИИ-ассистенты",
+  "groupLook": "Смотреть",
+  "groupWatch": "Следить",
+  "groupSetupNew": "Настроить",
+  "navTariffsPrices": "Тарифы и цены",
+  "deviceMenu": "Меню прибора: тема, сменить прибор",
+  "eventsBell": "События: активных {n}",
+  "collapse": "Свернуть меню",
+  "expand": "Развернуть меню",
+  "demoSite": "Просмотр"
 }

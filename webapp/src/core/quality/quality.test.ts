@@ -27,6 +27,11 @@ describe('quality bitmask (contract v4 §1)', () => {
     expect(classifyQuality(1 << 3)).toBe('uncertain');
   });
 
+  it('hub 1.1.8 bits 9–12 are named and uncertain (OUTAGE = a break counted in this hour)', () => {
+    expect(decodeQualityBits((1 << 9) | (1 << 10) | (1 << 11) | (1 << 12))).toEqual(['SRC_RESTART', 'SRC_FW', 'REVERSE_LOST', 'OUTAGE']);
+    expect(classifyQuality(1 << 12)).toBe('uncertain');
+  });
+
   it('hasQualityBit reads individual bits', () => {
     expect(hasQualityBit((1 << 3) | (1 << 5), 3)).toBe(true);
     expect(hasQualityBit((1 << 3) | (1 << 5), 4)).toBe(false);

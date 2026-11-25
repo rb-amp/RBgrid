@@ -54,6 +54,11 @@ export interface RawSchema {
   /** History/stats storage readiness: "ready" | "migrating" | "pending_image_valid" | "incompatible". */
   storage_state?: string;
   storage_progress?: number;
+  /** fw 1.3.x: "internal" | "external" | "none" (an adopted external stats chip is missing → history reads empty). */
+  stats_media?: string;
+  /** Next 1.3.0 candidate (root history-slots 23.11): points the hub keeps history for — 12 in its own flash,
+   *  49 on the S3 statistics chip, 0 when the chip is missing. Absent on older hubs. */
+  history_slots?: number;
   /**
    * Which record/telemetry fields each source CLASS measures, keyed by the class tag that
    * equals a unit's `src_class` — canon (root 2026-10-12): "rbamp" | "espnow" (no built-in ADC
@@ -127,6 +132,16 @@ export type CapabilityFlag =
   | 'inputAggregate'
   /** POST /api/v1/ws-ticket: a one-time 30 s ticket for the telemetry socket (fw 1.1.7). */
   | 'wsTicket'
+  /** units-config `inside` + PATCH /api/v1/units/{hex} {inside}: a point measured inside another (fw 1.1.8). */
+  | 'pointNesting'
+  /** /api/v1/dynprice, /price, /rules, /signal, /peaks: dynamic prices, cheap windows, import peaks (fw 1.2.0). */
+  | 'dynamicTariffs'
+  /** GET/POST /api/v1/llm: the LLM API admin page — switch, pairing codes, paired clients, call log (fw 1.3.0). */
+  | 'llm'
+  /** GET/PUT/DELETE /api/system/ui-state: the app's dashboard layout stored on the hub (fw 1.3.0, root ui-state-store). */
+  | 'uiState'
+  /** GET/POST /api/v1/led: the hub's status LEDs — mode, find this hub, acknowledge an event (fw 1.3.0). */
+  | 'leds'
   | 'schema';
 
 export type TelemetryProfile = 'lean' | 'full' | 'unknown';
@@ -145,6 +160,10 @@ export interface DeviceCapabilities {
   build: string | null;
   hwProfile: string | null;
   storageState: string | null;
+  /** schema.stats_media; null on hubs that don't say (all before 1.3.x). */
+  statsMedia: string | null;
+  /** schema.history_slots; null on hubs that don't say (→ 12, HISTORY_SLOTS). */
+  historySlots: number | null;
   /** source tag → measured field names (for dash-not-zero gating). Empty when the device omits it. */
   fieldsBySource: Record<string, string[]>;
   /** Canonical bit→name quality legend (normalized from either schema shape). */
@@ -195,7 +214,7 @@ function limitsOf(schema: RawSchema): DeviceLimits {
 const ALL_FLAGS: CapabilityFlag[] = [
   'espnow', 'economics', 'summary', 'exportCsv', 'telemetryConfigPost',
   'mqttConfig', 'historyTimeRange', 'auth', 'https',
-  'provisioning', 'configBackup', 'inputAggregate', 'wsTicket', 'schema',
+  'provisioning', 'configBackup', 'inputAggregate', 'wsTicket', 'pointNesting', 'dynamicTariffs', 'llm', 'uiState', 'leds', 'schema',
 ];
 
 /** The pre-schema baseline: none of the new surfaces, telemetry-config GET-only. */
@@ -210,6 +229,8 @@ export const BASELINE_CAPABILITIES: DeviceCapabilities = {
   build: null,
   hwProfile: null,
   storageState: null,
+  statsMedia: null,
+  historySlots: null,
   fieldsBySource: {},
   qualityBits: {},
   money: DEFAULT_MONEY_FORMAT,
@@ -292,6 +313,8 @@ export function deriveCapabilities(schema: RawSchema | null): DeviceCapabilities
     build: schema.build ?? null,
     hwProfile: schema.hw_profile ?? null,
     storageState: schema.storage_state ?? null,
+    statsMedia: typeof schema.stats_media === 'string' ? schema.stats_media : null,
+    historySlots: typeof schema.history_slots === 'number' && schema.history_slots >= 0 ? Math.floor(schema.history_slots) : null,
     fieldsBySource: schema.fields_by_source ?? {},
     qualityBits: normalizeQualityBits(schema.quality_bits),
     money: moneyFormatOf(schema),
@@ -322,6 +345,11 @@ export function deriveCapabilities(schema: RawSchema | null): DeviceCapabilities
       // Explicit only — the endpoints are the same; older hubs answer `unit=input` with 400.
       inputAggregate: flag('inputAggregate', false),
       wsTicket: flag('wsTicket', false),
+      pointNesting: flag('pointNesting', false),
+      dynamicTariffs: flag('dynamicTariffs', false),
+      llm: flag('llm', has(eps, '/api/v1/llm')),
+      uiState: flag('uiState', has(eps, '/api/system/ui-state')),
+      leds: flag('leds', has(eps, '/api/v1/led')),
     },
   };
 }

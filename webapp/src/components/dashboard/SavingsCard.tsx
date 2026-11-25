@@ -13,8 +13,9 @@
  * «Сейчас дорого» tariff advice is about prices and reads the same in both modes.
  */
 import { StackedBar } from '../charts/StackedBar';
-import React, { useMemo, useState } from 'react';
-import { Box, Button, Stack, Typography } from '@mui/material';
+import React, { createContext, useContext, useMemo, useState } from 'react';
+import { Box, Button, ButtonBase, Collapse, Stack, Typography } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { VampireHuntDialog } from './VampireHuntDialog';
 import { Card } from '@rbgrid/design-system';
 import { useDsTokens } from '../../theme/useDsTokens';
@@ -23,7 +24,7 @@ import { useInputSeries } from '../../hooks/useInputSeries';
 import { useTariffPlan } from '../../hooks/useTariffPlan';
 import { UnitEntityGroup, unitMetricValue } from '../../entities/model';
 import { UnitsConfigJoin } from '../../hooks/useUnitsConfig';
-import { lineUnits, fullNameOf, isGenerationUnit, mainUnit, isStation } from '../../pages/overviewData';
+import { lineUnits, topLevelLines, fullNameOf, isGenerationUnit, mainUnit, isStation } from '../../pages/overviewData';
 import { signedPowerW } from '../../entities/siteModel';
 import { zoneTimeline, minutesUntilRate } from '../../economics/tariffPlan';
 import { useDeviceClock, formatDeviceTime } from '../../core/deviceTime';
@@ -58,6 +59,8 @@ export interface SavingsCardProps {
   fmt: (v: number | null | undefined) => string;
   /** «Предприятие»: site wording instead of the household one (3φ audit I3P-17). */
   industrial?: boolean;
+  /** Headlines only (with their amounts); a tap opens one (UI redesign S4: five lines, not five paragraphs). */
+  collapsed?: boolean;
 }
 
 const hm = (min: number) => (min >= 60
@@ -66,7 +69,7 @@ const hm = (min: number) => (min >= 60
 
 const genUnitsNow = (groups: UnitEntityGroup[], join: UnitsConfigJoin): boolean => groups.some((g) => g.present && isGenerationUnit(g, join));
 
-export const SavingsCard: React.FC<SavingsCardProps> = ({ groups, join, mainId, inputDayWh, costDay, exportDayWh, revDay, rate, fmt, hubBase, industrial, lost }) => {
+export const SavingsCard: React.FC<SavingsCardProps> = ({ groups, join, mainId, inputDayWh, costDay, exportDayWh, revDay, rate, fmt, hubBase, industrial, lost, collapsed = false }) => {
   const ds = useDsTokens();
   const { mode: lensMode, dayRate } = useMoneyLens();
   const money = lensMode === 'money';
@@ -86,7 +89,10 @@ export const SavingsCard: React.FC<SavingsCardProps> = ({ groups, join, mainId, 
     const sp = zoneTimeline(plan, hubDay);
     return gross ? sp.map((x) => ({ ...x, rate: gross(x.rate) })) : sp;
   }, [plan, hubDay, gross]);
-  const dear = expensiveNow(rate.buy, spans);
+  // The plan's zones say nothing about a dynamic price (round 3 home R3-04, walkthrough W1: «Night — 1.2×
+  // the “Night” rate» at night, and «run it in the Night zone» while the price moves every 15 min):
+  // no zone advice then.
+  const dear = rate.dynamic ? null : expensiveNow(rate.buy, spans);
   // The cheap zone's hours today, merged across midnight (HOME-18: the advice named no hours).
   const cheapHours = dear ? (() => {
     const c = spans.filter((sp) => Math.abs(sp.rate - dear.cheapestRate) < 1e-9).map((sp) => [sp.from, sp.to]);
@@ -107,12 +113,13 @@ export const SavingsCard: React.FC<SavingsCardProps> = ({ groups, join, mainId, 
     const sp = zoneTimeline(plan, (hubDay + 6) % 7);
     return gross ? sp.map((x) => ({ ...x, rate: gross(x.rate) })) : sp;
   }, [plan, hubDay, gross]);
-  const evDear = evYesterday ? dearZoneCharge(evYesterday, yesterdaySpans) : null;
+  const evDear = evYesterday && !rate.dynamic ? dearZoneCharge(evYesterday, yesterdaySpans) : null;
 
   // One appliance on several phases — a group whose points share one role (a three-phase charger,
   // a heat pump) — is one share, not three thirds that each fall under «other points».
   const { names: groupNames } = useDeviceGroups();
-  const lines = lineUnits(groups, join).filter((g) => !isGenerationUnit(g, join))
+  // Shares of the input: a point inside another (fw 1.1.8 `inside`) is in its parent's share.
+  const lines = topLevelLines(groups, join).filter((g) => !isGenerationUnit(g, join))
     .map((g) => ({ name: fullNameOf(g, join), wh: unitMetricValue(g, 'energy_day_in'), key: g.unitKey, gid: join.forGroup(g)?.groupId, role: join.forGroup(g)?.role }));
   const appliances = new Map<number, typeof lines>();
   lines.forEach((l) => { if (l.gid != null) appliances.set(l.gid, [...(appliances.get(l.gid) ?? []), l]); });
@@ -302,15 +309,15 @@ export const SavingsCard: React.FC<SavingsCardProps> = ({ groups, join, mainId, 
   }
 
   return (
-    <Card>
-      <Stack spacing={1.5} sx={{ py: 0.5 }}>
+    <Card tone="quiet">
+      <Stack spacing={collapsed ? 0.75 : 1.5} sx={{ py: 0.5 }}>
         <Typography sx={{ fontWeight: 600, fontSize: 16 }}>{t('cards.savingsTitle')}</Typography>
-        {items.length ? items : (
+        {items.length ? <FoldCtx.Provider value={collapsed}>{items}</FoldCtx.Provider> : (
           <Typography sx={{ color: ds.inkMuted, fontSize: 14 }}>
             {t(lost ? 'cards.savingsLost' : 'cards.savingsEmpty')}
           </Typography>
         )}
-        <Typography sx={{ fontSize: 11, color: ds.inkMuted }}>
+        <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>
           {money ? t('cards.savingsFootnote') : t('cards.savingsFootnoteEnergy')}
         </Typography>
       </Stack>
@@ -319,9 +326,25 @@ export const SavingsCard: React.FC<SavingsCardProps> = ({ groups, join, mainId, 
   );
 };
 
+const FoldCtx = createContext(false);
+
 const Insight: React.FC<{ tone: 'warn' | 'info' | 'tip' | 'good'; title: string; children: React.ReactNode }> = ({ tone, title, children }) => {
   const ds = useDsTokens();
+  const folded = useContext(FoldCtx);
+  const [open, setOpen] = useState(false);
   const color = tone === 'warn' ? ds.sevWarning : tone === 'good' ? ds.statusOnline : tone === 'tip' ? ds.solar : ds.primary;
+  if (folded) {
+    return (
+      <Box sx={{ pl: 1.5, borderLeft: `3px solid ${color}` }}>
+        <ButtonBase onClick={() => setOpen((v) => !v)} aria-expanded={open}
+          sx={{ width: '100%', justifyContent: 'space-between', textAlign: 'left', borderRadius: 1, py: 0.25, gap: 1 }}>
+          <Typography sx={{ fontSize: 14, fontWeight: 600, color: ds.ink }}>{title}</Typography>
+          <ExpandMoreIcon fontSize="small" sx={{ color: ds.inkMuted, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+        </ButtonBase>
+        <Collapse in={open} unmountOnExit><Box sx={{ fontSize: 13, color: ds.inkMuted, pb: 0.5 }}>{children}</Box></Collapse>
+      </Box>
+    );
+  }
   return (
     <Box sx={{ pl: 1.5, borderLeft: `3px solid ${color}` }}>
       <Typography sx={{ fontSize: 14, fontWeight: 600, color: ds.ink }}>{title}</Typography>

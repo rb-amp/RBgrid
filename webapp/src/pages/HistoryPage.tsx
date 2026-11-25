@@ -6,16 +6,19 @@
  * power/voltage; recessive gridlines, mono ticks, partial buckets hatched. The table renders
  * data quality IN WORDS. CSV export carries a rough size estimate in its label.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { PeriodPicker, usePeriodWindow, usePeriodBack } from '../components/common/PeriodPicker';
+import { nestedKeys } from '../entities/nesting';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
+import { StatsMediaAlert } from '../components/common/StatsMediaAlert';
 import { useSessionData } from '../hooks/useLocalStorage';
 import { HelpTip } from '../components/common/HelpTip';
 import {
-  Box, Typography, Stack, Button, Chip, Alert, CircularProgress,
-  ToggleButton, ToggleButtonGroup, MenuItem, TextField, Table, TableBody, TableCell, TableHead, TableRow, IconButton } from '@mui/material';
+  Box, Typography, Stack, Button, Chip, Alert, CircularProgress, Popover, List, ListItemButton, ListItemText, Checkbox, Menu,
+  ToggleButton, ToggleButtonGroup, MenuItem, TextField, Table, TableBody, TableCell, TableHead, TableRow, Link } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import { Card, StatusChip } from '@rbgrid/design-system';
 import { useDsTokens } from '../theme/useDsTokens';
-import { dsFonts } from '../theme/dsTokens';
 import { useCapabilities, useConfigShadow } from '../core';
 import type { JsonObject } from '../core';
 import type { UnitEntityGroup } from '../entities/model';
@@ -25,16 +28,14 @@ import { HistoryRecord, HistoryPeriod } from '../types/history';
 import { hasQualityBit, decodeQualityBits } from '../core/quality/quality';
 import { NoHistoryNote } from '../components/common/NoHistoryNote';
 import { useUnitsConfig } from '../hooks/useUnitsConfig';
-import { fullDisplayName, isGenerationRole, hexKey } from '../entities/siteModel';
+import { fullDisplayName, isGenerationRole, isMainKey, isSupplyRole, hexKey } from '../entities/siteModel';
 import { enWh, pwW, volt, reactive, nf } from '../components/common/ruFormat';
 import { useMoneyFormat } from '../hooks/useMoneyFormat';
 import { useElementWidth } from '../hooks/useElementWidth';
 import { intlLocale, t, dateLocale } from '../i18n';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link as RouterLink } from 'react-router-dom';
 import { parseHistoryLink } from './historyLink';
-import { HIST_WINDOWS, HistWindow, windowSpanAt, windowTotals, deltaPct, Span } from './historyWindow';
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import { HIST_WINDOWS, windowTotals, deltaPct, Span } from './historyWindow';
 import { useDeviceClock, formatDeviceTime, DeviceClock } from '../core/deviceTime';
 import { buildHistoryCsv, buildSummaryCsv } from './historyCsv';
 import { usePeriodTotals, PeriodTotals, TotalsPeriod } from '../hooks/usePeriodTotals';
@@ -49,7 +50,8 @@ import { getApiClient } from '../services/api';
 import { isDemo } from '../services/connection';
 import { demoHistory } from '../mock/demo';
 import { toIntervalStarts, wireRange } from '../core/time/recordTime';
-import { inputDayTotals, mainUnit } from './overviewData';
+import { inputDayTotals, mainUnit, deviceSets, lineUnits } from './overviewData';
+import { useDeviceGroups } from '../hooks/useDeviceGroups';
 import { useHardware } from '../hooks/useHardware';
 import { isBasic, pointHardware } from '../entities/moduleLine';
 
@@ -66,11 +68,12 @@ interface MetricDef {
 /** Type control: «Энергия» / «Мощность» / «Напряжение» / «Деньги» (§7.4). */
 const METRICS: MetricDef[] = [
   { value: 'energy', label: 'history.metricEnergy', historyType: 'energy', kind: 'bars' },
+  // Money second, next to energy (round 2 home H-05: it was last, behind the technical tabs).
+  { value: 'money', label: 'history.metricMoney', historyType: 'economics', kind: 'bars' },
   { value: 'power', label: 'history.metricPower', historyType: 'electrical', kind: 'line' },
   { value: 'voltage', label: 'history.metricVoltage', historyType: 'electrical', kind: 'line' },
   // Reactive power and PF per hour (3φ audit I3P-03): the sign says inductive (+) / capacitive (−).
   { value: 'reactive', label: 'history.metricReactive', historyType: 'electrical', kind: 'line' },
-  { value: 'money', label: 'history.metricMoney', historyType: 'economics', kind: 'bars' },
 ];
 
 const MAX_SERIES = 6; // ds.series carries 6 colours (§7.2)
@@ -242,6 +245,8 @@ const SvgTrend: React.FC<{
   inputKey?: string;
   /** «Total and parts»: the input as one bar of the selected lines + «the rest» (audit B1). */
   stacked?: boolean;
+  /** Series measured inside another selected one (fw 1.1.8 `inside`): not a part of the stack. */
+  nested?: Set<string>;
   nameOf?: (key: string) => string;
   /** The previous period of one point, shifted by `offset` s onto this period's axis. */
   ghost?: { key: string; records: HistoryRecord[]; offset: number };
@@ -251,7 +256,7 @@ const SvgTrend: React.FC<{
   yWindow?: [number, number];
   /** The previous period's name in the tooltip («Yesterday»). */
   ghostLabel?: string;
-}> = ({ series, kind, period, valueOf, upOf, downOf, bandOf, fmtY, curve = 'monotoneX', nominalV, xRange, inputKey, stacked, nameOf, ghost, height: heightProp = H, yWindow, ghostLabel }) => {
+}> = ({ series, kind, period, valueOf, upOf, downOf, bandOf, fmtY, curve = 'monotoneX', nominalV, xRange, inputKey, stacked, nested, nameOf, ghost, height: heightProp = H, yWindow, ghostLabel }) => {
   const [measureRefEarly, measuredEarly] = useElementWidth<HTMLDivElement>(820);
   // Phones: a 220 px chart keeps the legend and the chart on one screen (charts spec 17.10).
   const height = heightProp === CHART_H && measuredEarly < 600 ? 220 : heightProp;
@@ -404,7 +409,7 @@ const SvgTrend: React.FC<{
   if (stacked && inputKey && synced.length > 1) {
     const inS = synced.find((x) => x.key === inputKey);
     for (const r of inS?.recs ?? []) {
-      const sum = synced.filter((x) => x !== inS).reduce((a, x) => {
+      const sum = synced.filter((x) => x !== inS && !nested?.has(x.key)).reduce((a, x) => {
         const rr = x.recs.find((q) => Math.abs(q.ts - r.ts) < STEP_SEC[period] / 2);
         return a + Math.max(0, (rr && up(rr)) || 0);
       }, 0);
@@ -422,8 +427,13 @@ const SvgTrend: React.FC<{
   const zeroY = yFor(0);
   // Time-true slots: a bucket without data stays an empty slot (RES-16), not squeezed out.
   const step = STEP_SEC[period];
-  const t0 = xRange ? Math.min(xRange.from, bucketTs[0]) : bucketTs[0];
-  const slotOf = (ts: number) => Math.round((ts - t0) / step);
+  const tFirst = xRange ? Math.min(xRange.from, bucketTs[0]) : bucketTs[0];
+  // Hours: a part that starts mid-hour (the hub came back at 18:40, or a restart split the hour) is
+  // in the hour it starts in — rounding put an 18:40–19:00 part on the 19:00 bar. The slots start on
+  // the hub's hour; a closing a few seconds early still counts as its own hour (36 s slack).
+  const hourOf = (ts: number) => { const ds = clock.dayStart(ts); return ds + Math.floor((ts - ds) / 3600) * 3600; };
+  const t0 = period === 'hour' ? hourOf(tFirst + 36) : tFirst;
+  const slotOf = (ts: number) => (period === 'hour' ? Math.floor((ts - t0) / step + 0.01) : Math.round((ts - t0) / step));
   const lastGhost = ghostRecs.length ? ghostRecs[ghostRecs.length - 1].ts : bucketTs[0];
   const n = Math.min(400, Math.max(slotOf(bucketTs[bucketTs.length - 1]) + 1, slotOf(lastGhost) + 1, xRange ? Math.round((xRange.to - t0) / step) : 0));
   const slotW = PW / n;
@@ -448,14 +458,19 @@ const SvgTrend: React.FC<{
     const idx = tsIndex.get(r.ts);
     const total = up(r);
     if (idx == null || total == null) return [];
-    const parts = synced.filter((x) => x !== inputS).map((x) => {
-      const rr = x.recs.find((q) => Math.abs(q.ts - r.ts) < step / 2);
-      return { name: nameOf?.(x.key) ?? x.key, color: x.color, v: Math.max(0, (rr && up(rr)) || 0), rest: false };
-    }).filter((pt) => pt.v > 0);
+    const valueAt = (x: typeof inputS) => {
+      const rr = x!.recs.find((q) => Math.abs(q.ts - r.ts) < step / 2);
+      return Math.max(0, (rr && up(rr)) || 0);
+    };
+    const parts = synced.filter((x) => x !== inputS && !nested?.has(x.key)).map((x) => (
+      { name: nameOf?.(x.key) ?? x.key, color: x.color, v: valueAt(x), rest: false }
+    )).filter((pt) => pt.v > 0);
+    // A point inside a selected one is already in that part: named in the tooltip, not stacked.
+    const inner = synced.filter((x) => nested?.has(x.key)).map((x) => ({ name: nameOf?.(x.key) ?? x.key, v: valueAt(x) }));
     const sum = parts.reduce((a, pt) => a + pt.v, 0);
     const rest = Math.max(0, total - sum);
     if (rest > 0) parts.push({ name: t('history.restOfInput'), color: ds.inkMuted, v: rest, rest: true });
-    return [{ ts: r.ts, idx, total: Math.max(total, sum), parts, down: Math.max(0, down(r) ?? 0), partial: isPartial(r, period, clock) }];
+    return [{ ts: r.ts, idx, total: Math.max(total, sum), parts, inner, down: Math.max(0, down(r) ?? 0), partial: isPartial(r, period, clock) }];
   }) : null;
 
   return (
@@ -477,7 +492,7 @@ const SvgTrend: React.FC<{
           const top = segs.length ? segs[segs.length - 1].y : zeroY;
           return (
             <g key={c.ts}>
-              <title>{`${formatRowTime(c.ts, period, clock)}: ${fmtY(c.total)}${c.parts.map((pt) => `\n${pt.name}: ${fmtY(pt.v)}`).join('')}${c.down > 0 ? `\n↓ ${fmtY(c.down)}` : ''}`}</title>
+              <title>{`${formatRowTime(c.ts, period, clock)}: ${fmtY(c.total)}${c.parts.map((pt) => `\n${pt.name}: ${fmtY(pt.v)}`).join('')}${c.inner.map((pt) => `\n${t('history.nestedPart', { name: pt.name })}: ${fmtY(pt.v)}`).join('')}${c.down > 0 ? `\n↓ ${fmtY(c.down)}` : ''}`}</title>
               {segs.map((sg, k) => (
                 // 2 px of surface between sections; only the top one rounded
                 k === segs.length - 1
@@ -617,7 +632,7 @@ const SvgFrame: React.FC<{
           <g key={i}>
             <line x1={ML} x2={ML + PW} y1={y} y2={y} stroke={ds.chartGrid} strokeWidth={1} />
             <text x={ML - 8} y={y + 3} textAnchor="end"
-              fontFamily={dsFonts.mono} fontSize={11} fill={ds.inkMuted}>{label}</text>
+              fontSize={11} style={{ fontVariantNumeric: 'tabular-nums' }} fill={ds.inkMuted}>{label}</text>
           </g>
         );
       })}
@@ -627,7 +642,7 @@ const SvgFrame: React.FC<{
         const anchor = x - 18 < 0 ? 'start' : x + 18 > W ? 'end' : 'middle';
         return (
           <text key={i} x={x} y={H - 10} textAnchor={anchor}
-            fontFamily={dsFonts.mono} fontSize={11} fill={ds.inkMuted}>{formatTs(ts, period, clock)}</text>
+            fontSize={11} style={{ fontVariantNumeric: 'tabular-nums' }} fill={ds.inkMuted}>{formatTs(ts, period, clock)}</text>
         );
       })}
       {children}
@@ -677,15 +692,6 @@ function todayRecord(t: TodaySoFar, type: 'electrical' | 'energy' | 'economics',
   return null;
 }
 
-/** «16 окт.», «10–16 окт.», «сентябрь 2026», «2025» — the period on display, in the hub's time. */
-function periodLabel(l: { from: number; to: number; kind: 'day' | 'week' | 'month' | 'year' }, clock: DeviceClock): string {
-  const f = (ts: number, o: Intl.DateTimeFormatOptions) => formatDeviceTime(clock, ts, o, dateLocale());
-  if (l.kind === 'day') return f(l.from, { day: 'numeric', month: 'short' });
-  if (l.kind === 'week') return `${f(l.from, { day: 'numeric', month: 'short' })} – ${f(Math.max(l.from, l.to - 1), { day: 'numeric', month: 'short' })}`;
-  if (l.kind === 'month') return f(l.from + 3600, { month: 'long', year: 'numeric' });
-  return f(l.from + 3600, { year: 'numeric' });
-}
-
 export const HistoryPage: React.FC = () => {
   const hardware = useHardware(); // BASIC points: consumption only (table columns)
   const ds = useDsTokens();
@@ -714,13 +720,30 @@ export const HistoryPage: React.FC = () => {
     }
     return [...live, ...extra];
   }, [data, unitsShadow.reported, joinEarly]);
-  const orderedKeys = useMemo(() => points.map((p) => p.unitKey).sort(), [points]);
-  const colorIndex = useCallback((k: string) => orderedKeys.indexOf(k), [orderedKeys]);
+  // The inputs first, then by key: a node's points (6Axx) sort before an rbAmp input (9001) by key, and
+  // the input fell out of the first MAX_SERIES (selectable) and lost the default selection.
+  const orderedKeys = useMemo(() => {
+    const supply = (p: UnitEntityGroup) => (isSupplyRole(joinEarly.forGroup(p)?.role) || isMainKey(p.unitKey) ? 0 : 1);
+    return [...points].sort((x, y) => supply(x) - supply(y) || (x.unitKey < y.unitKey ? -1 : x.unitKey > y.unitKey ? 1 : 0)).map((p) => p.unitKey);
+  }, [points, joinEarly]);
+  const [selected, setSelected] = useState<string[]>([]);
+  // Any point can be picked, up to MAX_SERIES at once (UI redesign U7). A point keeps its colour
+  // while it stays selected (colour follows the entity, not its rank); a freed colour is reused.
+  const slotRef = useRef<Record<string, number>>({});
+  const slots = useMemo(() => {
+    const prev = slotRef.current;
+    const next: Record<string, number> = {};
+    const used = new Set<number>();
+    selected.forEach((k) => { const s0 = prev[k]; if (s0 != null && !used.has(s0)) { next[k] = s0; used.add(s0); } });
+    selected.forEach((k) => { if (next[k] == null) { let x = 0; while (used.has(x)) x += 1; next[k] = x; used.add(x); } });
+    slotRef.current = next;
+    return next;
+  }, [selected]);
   const colorFor = useCallback(
-    (k: string) => { const i = colorIndex(k); return i >= 0 && i < MAX_SERIES ? ds.series[i] : ds.inkMuted; },
-    [colorIndex, ds.series, ds.inkMuted]
+    (k: string) => (slots[k] != null ? ds.series[slots[k] % ds.series.length] : ds.inkMuted),
+    [slots, ds.series, ds.inkMuted]
   );
-  const selectable = useCallback((k: string) => colorIndex(k) < MAX_SERIES, [colorIndex]);
+  const selectable = useCallback((k: string) => selected.includes(k) || selected.length < MAX_SERIES, [selected]);
   // One name per point, the same as on the Overview (UX audit T6 — chips read «RBGrid Unit 0006»,
   // «floor1.kitchen»).
   const unitsCfg = useUnitsConfig();
@@ -733,11 +756,11 @@ export const HistoryPage: React.FC = () => {
     [points, unitsCfg]
   );
 
-  const [selected, setSelected] = useState<string[]>([]);
   // A WINDOW («вчера», «прошлый месяц»), the step follows from it (W2-1: RES-05).
   // Period, metric and view survive Back for the tab's session (L3P-21: Yesterday → a point → Back
   // landed on Today).
-  const [win, setWin] = useSessionData<HistWindow>('rbgrid.history_win', 'today');
+  // The window is shared with Economics (UI redesign N4): switching pages keeps the period.
+  const [win, setWin] = usePeriodWindow();
   const clock = useDeviceClock();
   // Running-period totals per selected point, the Economics way (HA-R04) — probes report up.
   const [periodTotals, setPeriodTotals] = useState<Record<string, PeriodTotals | null>>({});
@@ -745,9 +768,7 @@ export const HistoryPage: React.FC = () => {
   const [todaySoFar, setTodaySoFar] = useState<Record<string, TodaySoFar | null>>({});
   const onToday = useCallback((k: string, v: TodaySoFar | null) => setTodaySoFar((m) => (m[k] === v ? m : { ...m, [k]: v })), []);
   // ‹ › steps the window back / forward by its period (HA-R10); a new window starts at «now».
-  const [back, setBack] = useState(0);
-  useEffect(() => { setBack(0); }, [win]);
-  const span = useMemo(() => windowSpanAt(win, back, Math.floor(Date.now() / 1000), clock), [win, back, clock]);
+  const { back, setBack, span, label: spanLabel } = usePeriodBack(win);
   const period = span.step;
   const [prevResults, setPrevResults] = useState<Record<string, PointResult>>({});
   const [metricKey, setMetricKey] = useSessionData<ViewMetric>('rbgrid.history_metric', 'energy');
@@ -786,9 +807,25 @@ export const HistoryPage: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the session setters change identity per value
   }, [params, points, joinEarly]);
 
+  const [picker, setPicker] = useState<HTMLElement | null>(null);
+  const [dlMenu, setDlMenu] = useState<HTMLElement | null>(null);
+  const [pickerQ, setPickerQ] = useState('');
   const togglePoint = (k: string) => {
     if (!selectable(k)) return;
     setSelected((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
+  };
+  // An appliance as one line in the list (role audit 22.11 H-02): its phases picked or dropped together.
+  const { names: applianceNames } = useDeviceGroups();
+  const appliances = useMemo(() => (data
+    ? deviceSets(lineUnits(data.units, unitsCfg), unitsCfg).filter((st) => st.units.length > 1 && st.groupId != null)
+      .map((st) => ({ id: st.groupId as number, name: applianceNames.get(st.groupId as number) || st.lead.name, keys: st.units.map((u) => u.unitKey) }))
+    : []), [data, unitsCfg, applianceNames]);
+  const toggleAppliance = (keys: string[]) => {
+    const all = keys.every((k) => selected.includes(k));
+    if (all) { setSelected((prev) => prev.filter((k) => !keys.includes(k))); return; }
+    const add = keys.filter((k) => !selected.includes(k));
+    if (selected.length + add.length > MAX_SERIES) return;
+    setSelected((prev) => [...prev, ...add]);
   };
 
   const onResult = useCallback((key: string, r: PointResult) => {
@@ -814,6 +851,10 @@ export const HistoryPage: React.FC = () => {
   // The selected input and whether «total and parts» applies (the input + at least one line).
   const inputKey = selected.find((k) => { const g = points.find((p) => p.unitKey === k); return !!g && joinEarly.forGroup(g)?.role === 'MAIN_SUPPLY'; });
   const canStack = !!inputKey && selected.length > 1;
+  const stackNested = useMemo(() => nestedKeys(selected, (k) => {
+    const g = points.find((p) => p.unitKey === k);
+    return g ? joinEarly.forGroup(g) : joinEarly.forKey?.(k);
+  }), [selected, points, joinEarly]);
 
   const loading = selected.some((k) => !results[k] || results[k].loading);
   const [slowLoad, setSlowLoad] = useState(false);
@@ -904,11 +945,11 @@ export const HistoryPage: React.FC = () => {
         if (live && !live.loading && live.n > 0) return { name: nameFor(k), inWh: live.inWh, outWh: live.outWh, cost: live.cost, revenue: live.revenue, input };
         return { name: nameFor(k), inWh: te.inWh, outWh: te.outWh, cost: tm.cost, revenue: tm.revenue, input };
       }));
-      const text = buildSummaryCsv(rows, recordCur ?? caps.money.currencyCode ?? '', periodLabel(span.label, clock));
+      const text = buildSummaryCsv(rows, recordCur ?? caps.money.currencyCode ?? '', spanLabel);
       const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `rbgrid_${t('history.summaryFile')}_${periodLabel(span.label, clock)}.csv`.replace(/\s+/g, '_');
+      a.download = `rbgrid_${t('history.summaryFile')}_${spanLabel}.csv`.replace(/\s+/g, '_');
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
@@ -944,6 +985,7 @@ export const HistoryPage: React.FC = () => {
 
   return (
     <Box>
+      <StatsMediaAlert />
       {back === 0 && ['today', 'week', 'thisMonth', 'year'].includes(win) && totalsMetric && selected.map((k) => {
         const g = points.find((p) => p.unitKey === k);
         return <TotalsProbe key={`pt-${k}-${win}`} k={k} id={(g && joinEarly.forGroup(g)?.hex) || k} group={g}
@@ -965,72 +1007,82 @@ export const HistoryPage: React.FC = () => {
       <Stack direction="row" alignItems="center" flexWrap="wrap" columnGap={1.5} rowGap={1} mb={2.5} sx={{ minWidth: 0 }}>
         <Typography variant="h4" fontWeight={800} sx={{ color: ds.ink }}>{t('history.title')}</Typography>
         {hasPartial && <><StatusChip status="dormant" label={t('history.hasPartial')} /><HelpTip topic="partial" /></>}
-        <Button
-          startIcon={<DownloadIcon />}
-          onClick={exportCsv}
-          disabled={exporting || !selected.length || !hasData}
-          sx={{ ml: 'auto', whiteSpace: 'nowrap', flexShrink: 0 }}
-          title={!hasData ? t('history.exportEmpty') : undefined}
-        >
-          {exporting ? t('history.exporting') : t('history.downloadCsv', { size: csvEstimate })}
+        {/* Two downloads behind one «Download» (UI/UX audit U09: on a phone they took two rows above the data). */}
+        <Button startIcon={<DownloadIcon />} disabled={exporting || !selected.length} onClick={(e) => setDlMenu(e.currentTarget)}
+          aria-haspopup="menu" sx={{ ml: 'auto', whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {exporting ? t('history.exporting') : t('history.download')}
         </Button>
-        <Button onClick={exportSummary} disabled={exporting || !selected.length} sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
-          {t('history.summaryCsv')}
-        </Button>
+        <Menu anchorEl={dlMenu} open={!!dlMenu} onClose={() => setDlMenu(null)}>
+          <MenuItem disabled={!hasData} onClick={() => { setDlMenu(null); exportCsv(); }}>
+            {hasData ? t('history.downloadCsv', { size: csvEstimate }) : t('history.exportEmpty')}
+          </MenuItem>
+          <MenuItem onClick={() => { setDlMenu(null); void exportSummary(); }}>{t('history.summaryCsv')}</MenuItem>
+        </Menu>
       </Stack>
 
-      {/* §7.2 — point chips, each carrying its series colour */}
-      {/* Phones: one scrolling row, not half a screen of chips before the data (H3P-21). */}
-      <Stack direction="row" gap={1} mb={1.5} sx={{ flexWrap: { xs: 'nowrap', sm: 'wrap' }, overflowX: { xs: 'auto', sm: 'visible' }, pb: { xs: 0.5, sm: 0 }, '& > *': { flexShrink: 0 } }}>
-        {points.length === 0 && (
+      {/* §7.2 — points: a «Points: N» button opens a searchable list with ticks (UI redesign U7);
+          the picked ones show below as chips in their series colour. */}
+      <Stack direction="row" gap={1} mb={1.5} alignItems="center" sx={{ flexWrap: { xs: 'nowrap', sm: 'wrap' }, overflowX: { xs: 'auto', sm: 'visible' }, pb: { xs: 0.5, sm: 0 }, '& > *': { flexShrink: 0 } }}>
+        {points.length === 0 ? (
           <Typography variant="body2" sx={{ color: ds.inkMuted }}>{t('history.noPoints')}</Typography>
+        ) : (
+          <Button variant="outlined" size="small" endIcon={<ArrowDropDownIcon />} onClick={(e) => { setPickerQ(''); setPicker(e.currentTarget); }}
+            aria-haspopup="dialog" aria-expanded={!!picker}>
+            {t('history.pointsN', { n: selected.length })}
+          </Button>
         )}
-        {points.map((p) => {
-          const on = selected.includes(p.unitKey);
-          const can = selectable(p.unitKey);
-          const c = colorFor(p.unitKey);
-          return (
-            <Chip
-              key={p.unitKey}
-              label={nameFor(p.unitKey)}
-              disabled={!can}
-              onClick={() => togglePoint(p.unitKey)}
-              variant={on ? 'filled' : 'outlined'}
-              icon={<Box component="span" sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: c, ml: 1 }} />}
-              sx={{
-                maxWidth: '100%',
-                color: on ? ds.onPrimary : ds.ink,
-                bgcolor: on ? c : 'transparent',
-                borderColor: c,
-                '& .MuiChip-label': { fontWeight: on ? 700 : 500 },
-              }}
-            />
-          );
-        })}
+        {selected.map((k) => (
+          <Chip key={k} label={nameFor(k)} onDelete={() => togglePoint(k)}
+            icon={<Box component="span" sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: colorFor(k), ml: 1 }} />}
+            sx={{ maxWidth: '100%', '& .MuiChip-label': { fontWeight: 600 } }} />
+        ))}
       </Stack>
-      {points.length > MAX_SERIES && (
-        <Typography variant="caption" sx={{ color: ds.inkMuted, display: 'block', mb: 1.5 }}>
-          {t('history.firstPointsShown', { count: MAX_SERIES })}
-        </Typography>
-      )}
+      <Popover open={!!picker} anchorEl={picker} onClose={() => setPicker(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        slotProps={{ paper: { sx: { width: 340, maxWidth: 'calc(100vw - 32px)' } } }}>
+        <Box sx={{ p: 1.5, pb: 1 }}>
+          <TextField size="small" fullWidth autoFocus placeholder={t('history.pointsSearch')} value={pickerQ} onChange={(e) => setPickerQ(e.target.value)}
+            inputProps={{ 'aria-label': t('history.pointsSearch') }} />
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
+            {t('history.pointsLimit', { n: MAX_SERIES })}
+          </Typography>
+        </Box>
+        <List dense sx={{ maxHeight: 360, overflowY: 'auto', pt: 0 }}>
+          {appliances.filter((a) => !pickerQ.trim() || a.name.toLowerCase().includes(pickerQ.trim().toLowerCase())).map((a) => {
+            const on = a.keys.every((k) => selected.includes(k));
+            const can = on || selected.length + a.keys.filter((k) => !selected.includes(k)).length <= MAX_SERIES;
+            return (
+              <ListItemButton key={`g${a.id}`} dense disabled={!can} onClick={() => toggleAppliance(a.keys)}>
+                <Checkbox edge="start" size="small" checked={on} indeterminate={!on && a.keys.some((k) => selected.includes(k))} tabIndex={-1} disableRipple inputProps={{ 'aria-label': a.name }} />
+                <ListItemText primary={a.name} secondary={t('pointTile.phasesN', { n: a.keys.length })} />
+              </ListItemButton>
+            );
+          })}
+          {orderedKeys.filter((k) => !pickerQ.trim() || nameFor(k).toLowerCase().includes(pickerQ.trim().toLowerCase())).map((k) => {
+            const on = selected.includes(k);
+            return (
+              <ListItemButton key={k} dense disabled={!on && !selectable(k)} onClick={() => togglePoint(k)}>
+                <Checkbox edge="start" size="small" checked={on} tabIndex={-1} disableRipple inputProps={{ 'aria-label': nameFor(k) }} />
+                <ListItemText primary={nameFor(k)} />
+                {on && <Box component="span" sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: colorFor(k) }} />}
+              </ListItemButton>
+            );
+          })}
+        </List>
+      </Popover>
 
       {/* §7.3 period · §7.4 type · §7.5 view */}
       {/* Toggles: on phones each group is a full-width segment row that scrolls sideways
           when its labels don't fit (never widens the page). */}
       <Stack direction="row" flexWrap="wrap" gap={1.5} alignItems="center" mb={2} sx={{ minWidth: 0 }}>
-        <ToggleButtonGroup size="small" exclusive value={win} sx={segmentSx}
-          onChange={(_, v) => v && setWin(v as HistWindow)}>
-          {HIST_WINDOWS.map((w) => <ToggleButton key={w.value} value={w.value}>{t(w.label)}</ToggleButton>)}
-        </ToggleButtonGroup>
-        <Stack direction="row" alignItems="center" spacing={0.5}>
-          <IconButton size="small" aria-label={t('history.periodBack')} onClick={() => setBack((b) => b + 1)} sx={{ minWidth: 44, minHeight: 44 }}><ChevronLeftIcon /></IconButton>
-          <Typography sx={{ fontSize: 13, minWidth: 120, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{periodLabel(span.label, clock)}</Typography>
-          <IconButton size="small" aria-label={t('history.periodForward')} disabled={back === 0} onClick={() => setBack((b) => Math.max(0, b - 1))} sx={{ minWidth: 44, minHeight: 44 }}><ChevronRightIcon /></IconButton>
-        </Stack>
+        <PeriodPicker win={win} onWin={setWin} back={back} onBack={setBack} label={spanLabel} />
         <ToggleButtonGroup size="small" exclusive value={metricKey} sx={segmentSx}
           onChange={(_, v) => v && setMetricKey(v as ViewMetric)}>
           {METRICS.map((m) => <ToggleButton key={m.value} value={m.value}>{t(m.label)}</ToggleButton>)}
         </ToggleButtonGroup>
+        {/* Money by the hour ↔ its totals and breakdown (UI redesign N5): the same period in Economics. */}
+        {metricKey === 'money' && (
+          <Link component={RouterLink} to="/economics" underline="hover" sx={{ fontSize: 14 }}>{t('history.toEconomics')}</Link>
+        )}
         <ToggleButtonGroup size="small" exclusive value={view}
           onChange={(_, v) => v && setView(v as 'chart' | 'table')} sx={{ ...segmentSx, ml: { sm: 'auto' } }}>
           <ToggleButton value="chart">{t('history.viewChart')}</ToggleButton>
@@ -1090,14 +1142,16 @@ export const HistoryPage: React.FC = () => {
                   <Typography sx={{ fontSize: 22, fontWeight: 700, color: gen ? ds.solarInk : ds.ink, fontVariantNumeric: 'tabular-nums' }}>
                     {cur.n ? (money ? mf.money(cur.cost) : enWh(curV)) : '—'}
                   </Typography>
-                  {live && live.n > 0 && <Typography sx={{ fontSize: 11, color: ds.inkMuted }}>{t(win === 'today' ? 'history.todayCounters' : 'history.inclToday')}</Typography>}
+                  {live && live.n > 0 && <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>{t(win === 'today' ? 'history.todayCounters' : 'history.inclToday')}</Typography>}
                   {cur.n > 0 && !gen && (money ? cur.revenue > 0 : cur.outWh > 0) && (
                     <Typography sx={{ fontSize: 13, color: ds.flowExport }}>
                       {money ? t('history.totalRevenue', { v: mf.money(cur.revenue) }) : t('history.totalOut', { v: enWh(cur.outWh) })}
                     </Typography>
                   )}
                   <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>
-                    {d == null ? t('history.noCompare')
+                    {/* The previous span is drawn when it has records — say «incomplete», not «no data» beside it
+                        (round 2 EV-08 / B10). */}
+                    {d == null ? (prv.n > 0 ? t('history.partialCompare', { n: prv.n, m: closed.n }) : t('history.noCompare'))
                       : Math.abs(d) < 0.5 ? t('history.deltaSame', { than: t(span.prevLabel) })
                       : t(d >= 0 ? 'history.deltaMore' : 'history.deltaLess', { pct: Math.abs(d).toLocaleString(intlLocale(), { maximumFractionDigits: 0 }), than: t(span.prevLabel) })}
                   </Typography>
@@ -1180,6 +1234,7 @@ export const HistoryPage: React.FC = () => {
             xRange={period === 'hour' && span.label.kind === 'day' ? { from: span.from, to: clock.dayStart(span.from + 1.5 * 86400) } : undefined}
             inputKey={inputKey}
             stacked={canStack && barMode === 'stack'}
+            nested={stackNested}
             ghostLabel={t(`history.cmpPrev_${back > 0 ? 'other' : win}`) + (selected.length > 1 && ghostKey && !stackShown ? ` · ${nameFor(ghostKey)}` : '')}
             ghost={ghostKey && (prevResults[ghostKey]?.records?.length ?? 0) > 0 && span.prevFull
               ? { key: ghostKey, records: prevResults[ghostKey].records, offset: span.from - span.prevFull.from }
@@ -1243,7 +1298,8 @@ const HistoryTable: React.FC<{
   consumptionOnly?: boolean;
 }> = ({ records, metric, period, fmtMoney, ds, consumptionOnly }) => {
   const clock = useDeviceClock();
-  const mono = { fontFamily: dsFonts.mono, fontVariantNumeric: 'tabular-nums' as const, whiteSpace: 'nowrap' as const };
+// One typeface for figures (UI/UX audit U06): the UI sans with tabular figures; mono only for codes and logs.
+  const mono = { fontVariantNumeric: 'tabular-nums' as const, whiteSpace: 'nowrap' as const };
   const head = { color: ds.inkMuted, fontWeight: 700, borderColor: ds.border };
   const xsHide = { display: { xs: 'none', sm: 'table-cell' } };
   const cell = { color: ds.ink, borderColor: ds.border };
@@ -1302,7 +1358,7 @@ const HistoryTable: React.FC<{
                 <TableCell sx={{ ...cell, ...mono }}>
                   {formatRowTime(r.ts, period, clock, num(r, 'dur'))}
                   {qualityWord(r, period, clock, skip) !== t('history.qualityFull') && (
-                    <Box component="span" sx={{ display: { xs: 'block', sm: 'none' }, fontFamily: 'inherit', fontSize: 11, color: partial ? ds.sevAlarm : ds.inkMuted, whiteSpace: 'normal' }}>
+                    <Box component="span" sx={{ display: { xs: 'block', sm: 'none' }, fontFamily: 'inherit', fontSize: 12, color: partial ? ds.sevAlarm : ds.inkMuted, whiteSpace: 'normal' }}>
                       {qualityWord(r, period, clock, skip)}
                     </Box>
                   )}

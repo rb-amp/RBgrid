@@ -146,6 +146,17 @@ export function fullDisplayName(
   return localizeFactory(cfg?.name) || localizeFactory(cfg?.shortName) || fallbackName(g);
 }
 
+/** The full name with the short one in brackets when they differ — «EV charger L1 (EV L1)» — where a
+ *  dialog must tie the card's short label to the full name (role audit F10). */
+export function nameWithShort(
+  g: UnitEntityGroup,
+  cfg?: { shortName?: string; name?: string },
+): string {
+  const full = fullDisplayName(g, cfg);
+  const short = displayName(g, cfg);
+  return short && short !== full ? `${full} (${short})` : full;
+}
+
 /** Short name — schemas and tiles (the short name when set). */
 export function displayName(
   g: UnitEntityGroup,

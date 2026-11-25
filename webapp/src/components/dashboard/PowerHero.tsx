@@ -39,7 +39,7 @@ const MiniStat: React.FC<{ label: string; value: string; sub?: string }> = ({ la
   <Stack spacing={0.25}>
     <Typography sx={{ fontSize: 12, letterSpacing: '0.02em' }} color="text.secondary">{label}</Typography>
     <Typography sx={{ fontSize: 16, fontWeight: 600 }}>{value}</Typography>
-    {sub && <Typography sx={{ fontSize: 12 }} color="text.secondary">{sub}</Typography>}
+    {sub && <Typography sx={{ fontSize: 13 }} color="text.secondary">{sub}</Typography>}
   </Stack>
 );
 
@@ -59,9 +59,9 @@ export const PowerHero: React.FC<PowerHeroProps> = ({ frame, voltage, phaseVolta
   const showShare = frame.gridHasDirection && frame.solar != null && frame.house > 0;
 
   return (
-    <Card>
+    <Card tone="hero">
       <Stack spacing={1.5} sx={{ py: 0.5 }}>
-        <Typography sx={{ fontSize: 12, letterSpacing: '0.02em' }} color="text.secondary">
+        <Typography component="h3" sx={{ fontSize: 16, fontWeight: 700, m: 0 }}>
           {label}{staleS != null && <Box component="span" sx={{ color: ds.sevWarning, fontWeight: 600 }}>{` · ${t('cards.staleFor', { s: Math.round(staleS) })}`}</Box>}
         </Typography>
         {/* displayXl 52 desktop / 44 phone (spec §2, review 03 P1-12); never wraps the unit. */}
@@ -86,8 +86,8 @@ export const PowerHero: React.FC<PowerHeroProps> = ({ frame, voltage, phaseVolta
         {showShare && (
           <Box sx={{ pt: 0.5 }}>
             <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-              <Typography sx={{ fontSize: 12 }} color="text.secondary">{t('cards.houseFromSolar')}</Typography>
-              <Typography sx={{ fontSize: 12, fontWeight: 600, color: ds.solarInk }}>{sharePct}%</Typography>
+              <Typography sx={{ fontSize: 13 }} color="text.secondary">{t('cards.houseFromSolar')}</Typography>
+              <Typography sx={{ fontSize: 13, fontWeight: 600, color: ds.solarInk }}>{sharePct}%</Typography>
             </Stack>
             <LinearProgress
               variant="determinate"

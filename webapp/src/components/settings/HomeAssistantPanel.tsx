@@ -6,6 +6,7 @@
  * to pick in HA's Energy dashboard. Entity names are the hub's (English metric names), the device
  * names are the points' own names.
  */
+import { MoreText } from '../common/MoreText';
 import React from 'react';
 import { Box, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow, Alert } from '@mui/material';
 import { PanelCard } from '@rbgrid/design-system';
@@ -51,14 +52,19 @@ export const HomeAssistantPanel: React.FC = () => {
     { ha: t('ha.cost'), pick: 'Cost (Total)' },
     { ha: t('ha.compensation'), pick: fixed ? 'Export value (Total)' : 'Revenue (Total)' },
     ...gens.map((g) => ({ ha: t('ha.solar'), pick: `${nameOf(g)} · Energy Out` })),
-    ...(loads.length ? [{ ha: t('ha.devices'), pick: loads.map((u) => `${nameOf(u)} · Energy In`).join(', ') }] : []),
+    // A point measured inside another (fw 1.1.8 `inside`): in HA its parent is its «Upstream device»,
+    // or HA counts its energy twice in the untracked rest.
+    ...(loads.length ? [{ ha: t('ha.devices'), pick: loads.map((u) => {
+      const parent = typeof u.inside === 'number' && u.inside > 0 ? list.find((x) => x.unit_id === u.inside) : undefined;
+      return parent ? t('ha.deviceInside', { device: `${nameOf(u)} · Energy In`, parent: nameOf(parent) }) : `${nameOf(u)} · Energy In`;
+    }).join(', ') }] : []),
   ];
 
   return (
     <Box id="home-assistant" sx={{ scrollMarginTop: 16 }}>
       <PanelCard title={t('ha.title')}>
         <Stack spacing={1.5}>
-          <Typography variant="body2" color="text.secondary">{t('ha.intro')}</Typography>
+          <MoreText text={t('ha.intro')} />
           <Alert severity={connected ? 'success' : 'info'}>
             {connected
               ? (effective ? t('ha.connected', { uri: effective }) : t('ha.connectedDefault'))

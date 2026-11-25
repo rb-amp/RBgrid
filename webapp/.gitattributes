@@ -1,0 +1,3 @@
+# Internal design-tool sync (Claude Design project link, previews): not part of the public source archive
+design-system/.design-sync export-ignore
+design-system/design-sync.config.json export-ignore

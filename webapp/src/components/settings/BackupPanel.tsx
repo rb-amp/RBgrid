@@ -12,9 +12,9 @@ import { PanelCard } from '@rbgrid/design-system';
 import { useDeviceSession } from '../../core';
 import type { BackupStatus } from '../../core/transport/types';
 import { getApiClient } from '../../services/api';
+import { useMarkReboot } from '../../app/rebootPending';
 import { t, dateLocale } from '../../i18n';
 import { useConfirm } from '../common/ConfirmDialog';
-import { RebootNowButton } from '../common/RebootNowButton';
 
 const when = (ts: number) => new Date(ts * 1000).toLocaleString(dateLocale(), { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -24,6 +24,8 @@ export const BackupPanel: React.FC = () => {
   const [st, setSt] = useState<BackupStatus | null | undefined>(undefined);
   const [busy, setBusy] = useState<'save' | 'restore' | null>(null);
   const [msg, setMsg] = useState<{ sev: 'success' | 'error' | 'info' | 'warning'; text: string; reboot?: boolean } | null>(null);
+  // «Saved, after a restart» goes to the one «Waits for a restart» strip (SPEC §5.3), not a button here.
+  useMarkReboot(!!msg?.reboot, t('backup.title'));
 
   const load = useCallback(async () => setSt(await session.transport.getBackupStatus().catch(() => null)), [session]);
   useEffect(() => { void load(); }, [load]);
@@ -91,7 +93,7 @@ export const BackupPanel: React.FC = () => {
             {busy === 'restore' ? t('backup.restoring') : t('backup.restore')}
           </Button>
         </Stack>
-        {msg && <Alert severity={msg.sev} action={msg.reboot ? <RebootNowButton /> : undefined}>{msg.text}</Alert>}
+        {msg && <Alert severity={msg.sev}>{msg.text}</Alert>}
       </Stack>
     </PanelCard>
   );

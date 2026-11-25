@@ -15,5 +15,9 @@
   "setTokenLabel": "Set token",
   "placeholder": "paste token",
   "rotate": "Change",
-  "install": "Set"
+  "install": "Set",
+  "aiNeedsToken": "AI assistants need an API token: until one is set, they can't be switched on.",
+  "aiOn": "AI assistants: on ({n} connected)",
+  "aiOff": "AI assistants: off",
+  "aiOpen": "AI assistants"
 }

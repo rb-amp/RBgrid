@@ -6,7 +6,9 @@
 import React, { useEffect, useState } from 'react';
 import { Stack, Button, Alert, Typography, Box } from '@mui/material';
 import { PanelCard, FormField, StatusChip } from '@rbgrid/design-system';
-import { useDeviceSession } from '../../core';
+import { Link as RouterLink } from 'react-router-dom';
+import { useCapabilities, useDeviceSession } from '../../core';
+import { llmApi } from '../../core/llm/api';
 import { t } from '../../i18n';
 import { useConfirm } from '../common/ConfirmDialog';
 
@@ -17,6 +19,14 @@ export const SecurityPanel: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const confirm = useConfirm();
   const [msg, setMsg] = useState<{ sev: 'success' | 'error'; text: string } | null>(null);
+
+  // AI assistants (fw 1.3.0) need the admin token; say so here, with their state.
+  const caps = useCapabilities();
+  const [ai, setAi] = useState<{ on: boolean; n: number } | null>(null);
+  useEffect(() => {
+    if (!caps.flags.llm) return;
+    llmApi.get().then((d) => setAi({ on: d.enabled, n: d.tokens.length })).catch(() => setAi(null));
+  }, [caps.flags.llm, tokenSet]);
 
   const refresh = () => { session.transport.getTokenStatus().then(setTokenSet).catch(() => setTokenSet(null)); };
   useEffect(() => { refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -69,6 +79,13 @@ export const SecurityPanel: React.FC = () => {
         </Box>
       </Stack>
       {msg && <Alert severity={msg.sev} sx={{ mt: 1.5 }}>{msg.text}</Alert>}
+      {caps.flags.llm && (
+        <Stack direction="row" alignItems="center" spacing={1.5} mt={2} flexWrap="wrap" useFlexGap>
+          <Typography variant="body2" color="text.secondary">{t('security.aiNeedsToken')}</Typography>
+          {ai && <StatusChip status={ai.on ? 'live' : 'dormant'} label={ai.on ? t('security.aiOn', { n: ai.n }) : t('security.aiOff')} />}
+          <Button size="small" component={RouterLink} to="/ai">{t('security.aiOpen')}</Button>
+        </Stack>
+      )}
     </PanelCard>
   );
 };

@@ -14,6 +14,8 @@ import { BaseResponse } from '../types/api';
 import { HubEvent, HubEventsPage, HubVersion } from '../types/hubEvents';
 import { demoVariant } from './demoVariant';
 import { demoSite, demoPoint, DemoRole } from './demoSites';
+import { demoDocs, docsDynPrices, docsHubVersion, DOCS_OUTAGE_HOURS_BACK } from './demoDocs';
+import { demoHasPrices, demoPrices } from './demoPrices';
 
 export { DEMO_CT_MODELS } from './demoSites';
 
@@ -22,7 +24,8 @@ export { DEMO_CT_MODELS } from './demoSites';
 
 /** Lifetime counters (Wh) at today's midnight — the live e_in/e_out and the history's et_in/et_out
  *  are both counted from them, so the running hour (live − last record) is a real hour. */
-const E_IN_BASE = 125_000;
+// Above a year of history (role audit B9: the input's «total taken» 157.8 kWh was less than its month).
+const E_IN_BASE = 9_500_000;
 const E_OUT_BASE = 1_850_000;
 
 export function demoEnvelope<T>(type: string, data: T): BaseResponse<T> {
@@ -40,8 +43,8 @@ const DEMO_BOOT_ID = 2896034471;
 
 interface DemoUnitOpts {
   point?: string;
-  src: 'i2c';
-  srcClass: 'rbamp';
+  src: 'i2c' | 'espnow';
+  srcClass: 'rbamp' | 'espnow';
   caps: string[];
   dayIn?: number;
   dayOut?: number;
@@ -177,13 +180,14 @@ export function demoTelemetryFrame(): TelemetryFrame {
     // US: a two-pole 240 V line with ONE CT reads one conductor — half of the full power (W9 ×2).
     const p = day.nowW * (pt.pole ?? 1);
     const u = demoUnit(p, {
-      point: pt.point || undefined, src: 'i2c', srcClass: 'rbamp', caps: ['DEVICE_ENERGY', 'PERSISTED'],
-      module: pt.module, ch: pt.ch, dayIn: gen ? 0 : Math.round(day.inWh), dayOut: gen ? Math.round(day.outWh) : undefined,
+      point: pt.point || undefined, src: pt.node ? 'espnow' : 'i2c', srcClass: pt.node ? 'espnow' : 'rbamp', caps: ['DEVICE_ENERGY', 'PERSISTED'],
+      ...(pt.node ? {} : { module: pt.module, ch: pt.ch }), dayIn: gen ? 0 : Math.round(day.inWh), dayOut: gen ? Math.round(day.outWh) : undefined,
     });
     if (pt.absent) { units[pt.id] = { ...u, present: false, p_act: 0, i: 0 }; continue; }
     // The CT's load as the hub reports it (root 04.11): % of the nominal; ct_warn at 0.9 × ct_fs_a,
     // clip at ct_fs_a (SCT-013 clipping starts ≈ +16 % over nominal). STD factory sensors (CT-) have
     // no limits in the registry — no load / warn / clip.
+    if (pt.node) { units[pt.id] = u; continue; }
     const onStd = site.modules.find((m) => m.module === pt.module)?.line === 'std';
     const loadPct = Math.round(((u.i ?? 0) / pt.ct.a) * 100);
     const fsA = pt.ct.a * SCT_FS;
@@ -230,10 +234,10 @@ export function demoTelemetryFrame(): TelemetryFrame {
     system: {
       p_act: jitter(net), p_rea: jitter(net * 0.08),
       // Today from the hourly model — the same day the History and Economics show.
-      e_in: 156_200 + Math.round(inp.inWh), e_day_in: Math.round(inp.inWh), e_out: 2400 + Math.round(inp.outWh), e_day_out: Math.round(inp.outWh),
+      e_in: E_IN_BASE + Math.round(inp.inWh), e_day_in: Math.round(inp.inWh), e_out: E_OUT_BASE + Math.round(inp.outWh), e_day_out: Math.round(inp.outWh),
       cost_total: dm(9_861.4) + inp.cost, cost_day: Math.round(inp.cost * 100) / 100, rev_total: dm(418.2) + inp.rev, rev_day: Math.round(inp.rev * 100) / 100,
       units: Object.keys(units).length, present: Object.values(units).filter((u) => u.present !== false).length,
-      tariff: { zone: dayZone ? 'DAY' : 'NIGHT', buy_rate: buyRate, sell_rate: plan.sell ?? 0, cost_rate_h: (Math.max(0, net) / 1000) * buyRate, currency: reg.cur },
+      tariff: { zone: dayZone ? 'DAY' : 'NIGHT', buy_rate: buyRate, sell_rate: plan.sell ?? 0, cost_rate_h: (Math.max(0, net) / 1000) * buyRate, currency: reg.cur, ...(demoHasPrices() ? demoPrices.liveTariff() : {}) },
     },
     units,
   };
@@ -263,7 +267,7 @@ function demoSensorsBase(): SensorListEntry[] {
   // (ct_rated_a / ct_fs_a); a channel of an STD module (factory-paired CT-) carries no model or limits.
   const ct = (m: number, code: number, a: number) => (std(m) ? { ct_code: 0 } : { ct_code: code, ct_rated_a: a, ct_fs_a: Math.round(a * SCT_FS * 10) / 10 });
   return [
-    ...site.points.map((p): SensorListEntry => ({ iface: 'i2c', present: !p.absent, unit_id: p.id, bus: 0, module: p.module, ch: p.ch, ...ct(p.module, p.ct.code, p.ct.a), addr: addr(p.module), src_class: 'rbamp' } as SensorListEntry)),
+    ...site.points.filter((p) => !p.node).map((p): SensorListEntry => ({ iface: 'i2c', present: !p.absent, unit_id: p.id, bus: 0, module: p.module, ch: p.ch, ...ct(p.module, p.ct.code, p.ct.a), addr: addr(p.module), src_class: 'rbamp' } as SensorListEntry)),
     ...site.free.map((f): SensorListEntry => ({ iface: 'i2c', present: true, unit_id: null, bus: 0, module: f.module, ch: f.ch, ...ct(f.module, 3, 30), addr: addr(f.module), src_class: 'rbamp' } as SensorListEntry)),
   ];
 }
@@ -364,7 +368,11 @@ function demoHourW(role: DemoRole, h: number, dayNo: number): number {
     case 'ev2': return bump(h, 7, 10, 3600) + bump(h, 12, 15, 7000) + (dayNo % 2 === 0 ? bump(h, 16, 18, 2100) : 0);
     case 'ev3': return bump(h, 9, 12, 7000) + bump(h, 15, 19, 6500) + bump(h, 2, 5, 3700);
     case 'solar': return -2600 * demoSky(dayNo) * Math.max(0, Math.sin((Math.PI * (h + 0.5 - 6)) / 14)) ** 1.5;
-    case 'garage': return 90 + bump(h, 17, 20, 300);
+    // The docs build meters the garage as a sub-panel with the car charger inside it (mock/demoDocs).
+    case 'garage': return 90 + bump(h, 17, 20, 300) + (demoDocs() ? demoHourW('homeEv', h, dayNo) : 0);
+    // the docs build's remote node in the garden (mock/demoDocs)
+    case 'shed': return 25 + bump(h, 9, 12, 650) + bump(h, 16, 18, 400);
+    case 'pool': return h >= 10 && h < 16 ? 750 : 0;
     case 'off': return 0;
     case 'line': return 60 + bump(h, 18, 22, 90);
     // the flat
@@ -390,7 +398,8 @@ function demoHourW(role: DemoRole, h: number, dayNo: number): number {
     default: {
       // The input carries the site: every present line (generation negative) + the unmetered rest.
       const site = demoSite();
-      const lines = site.points.filter((p) => p.profile !== 'input' && !p.absent)
+      // A point inside another (docs build) is already in its parent's reading.
+      const lines = site.points.filter((p) => p.profile !== 'input' && !p.absent && !p.inside)
         .reduce((sum, p) => sum + demoHourW(p.profile, h, dayNo), 0);
       return lines + site.restW(h, workday);
     }
@@ -473,14 +482,20 @@ export function demoHistory(type: HistoryType, period: HistoryPeriod, n = 48, un
   ends.forEach((end, k) => {
     const nominal = span(k);
     const partial = period === 'hour' && k === 2; // one recent partial hour (a short outage)
-    const dur = partial ? Math.round(nominal / 3) : nominal;
-    const q = partial ? (1 << 0) : 0;
+    // Docs build: the hub was off ~1.5 h and came back 20 min into this hour; the modules' counters
+    // carried the energy of the break, credited here (quality bit 12, fw 1.1.7+).
+    const outage = demoDocs() && period === 'hour' && k === DOCS_OUTAGE_HOURS_BACK;
+    // The docs build's partial hour covers 40 min, not 20: hub 1.1.8's app drew a part under 30 min
+    // on the next hour's bar, and the docs frames stand for 1.1.8.
+    const cover = partial ? (demoDocs() ? 2 / 3 : 1 / 3) : outage ? 2 / 3 : 1;
+    const dur = Math.round(nominal * cover);
+    const q = partial ? (1 << 0) : outage ? (1 << 0) | (1 << 12) : 0;
     // Σ over the bucket's hours (local clock): energy in / out, money, mean / min / max power.
     let ec = 0, es = 0, c = 0, r = 0, pSum = 0, pMin = Infinity, pMax = -Infinity, hours = 0;
     for (let t0 = end - nominal; t0 < end; t0 += 3600) {
       const d = new Date(t0 * 1000);
       const dayNo = demoDayNo(t0);
-      const w = demoHourW(role, d.getHours(), dayNo) * (partial ? 1 / 3 : 1);
+      const w = demoHourW(role, d.getHours(), dayNo) * (outage ? cover + 1.5 : cover);
       const imp = Math.max(0, w), exp = Math.max(0, -w);
       ec += imp; es += exp; c += (imp / 1000) * demoRateAt(d.getHours()); r += (exp / 1000) * demoSellRate();
       pSum += w; pMin = Math.min(pMin, w); pMax = Math.max(pMax, w); hours += 1;
@@ -615,14 +630,20 @@ export function demoHubEvents(level: 'all' | 'event' | 'fail'): HubEventsPage {
     { seq: 7, b: 2, ts: t0 + 7230, up: 2, lvl: 'event', msg: 'boot: reset=planned restart' },
     { seq: 8, b: 2, ts: t0 + 7235, up: 7, lvl: 'event', msg: 'ota: new image confirmed valid' },
   ];
+  // The docs build's hub 1.2.0: its price lines after the restart (mock/demoPrices).
+  if (docsDynPrices()) {
+    demoPrices.logLines(t0 + 7235).forEach((l, i) => all.push({ seq: 9 + i, b: 2, ts: l.ts, up: l.ts - (t0 + 7228), lvl: l.fail ? 'fail' : 'event', msg: l.msg }));
+  }
   const rank = { periodic: 0, event: 1, fail: 2 } as const;
   const min = level === 'all' ? 0 : rank[level];
   const events = all.filter((e) => rank[e.lvl] >= min);
-  return { events, boot: 2, seq_last: 8, next: 8, more: false, persist: true, fail_boot: 0, now };
+  const last = all[all.length - 1].seq;
+  return { events, boot: 2, seq_last: last, next: last, more: false, persist: true, fail_boot: 0, now };
 }
 
 export function demoHubVersion(): HubVersion {
   // No version number: demo.rbgrid.io is a public surface and may only name a published firmware
   // (site team 03.11) — the screens show «—» instead.
-  return { project: 'main', idf: 'v5.4.1', build_date: 'Nov 1 2026 12:00:00', partition: 'ota_0', image_md5: '10723b74229b8ec55b881dc239f0897b' };
+  // The docs build (never deployed) is a 1.2.0 hub (`?hub=1.1.8`: 1.1.8): the version-gated screens show as on one.
+  return { ...(demoDocs() ? { version: docsHubVersion() } : {}), project: 'main', idf: 'v5.4.1', build_date: 'Nov 1 2026 12:00:00', partition: 'ota_0', image_md5: '10723b74229b8ec55b881dc239f0897b' };
 }

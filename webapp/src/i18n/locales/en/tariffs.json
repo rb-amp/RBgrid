@@ -12,7 +12,7 @@
   "planType": "Plan type",
   "netMetering": "Net metering (monthly kWh credit)",
   "sellRatio": "Selling ratio",
-  "sellPriceComputed": "Selling price /kWh (calculated)",
+  "sellPriceComputed": "Grid export price /kWh (computed)",
   "zones": "Zones ({n})",
   "now": "now",
   "enabled": "On",
@@ -26,7 +26,7 @@
   "on": "on",
   "off": "off",
   "fixedPayments": "Fixed payments",
-  "sellRate": "Sell price, {cur}/kWh",
+  "sellRate": "Grid export price, {cur}/kWh",
   "zoneRatio": "Net-metering ratio",
   "vatHint": "0–100 %",
   "ratioHint": "0–1, share of the buy price",
@@ -63,5 +63,7 @@
   "unsaved": "The tariff has unsaved changes",
   "sellWithoutNm": "Exports are valued at the zones' sell prices below even with net metering off. Net metering adds the kWh credit on top. No feed-in contract? Set the sell prices to 0.",
   "removeZoneBodyToDefault": "Its hours go to the default zone “{zone}”, unless another zone covers them.",
-  "removeZoneBodyDefault": "This is the default zone: hours without a zone of their own stay unpriced until you pick another default zone."
+  "removeZoneBodyDefault": "This is the default zone: hours without a zone of their own stay unpriced until you pick another default zone.",
+  "openPrices": "Open prices",
+  "dynamicOn": "A dynamic price is on. The hub prices each 15-minute period from it; the zone rates below apply only where it has no price (or are added on top, if set so on Prices). This plan's fees and VAT are added to spot prices."
 }

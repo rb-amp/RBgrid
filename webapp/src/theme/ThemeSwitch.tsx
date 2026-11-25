@@ -35,7 +35,7 @@ export const ThemeSwitch: React.FC = () => {
       >
         {OPTIONS.map((o) => (
           <ToggleButton key={o.value} value={o.value} aria-label={t('shell.themeIs', { theme: t(o.label) })} title={t('shell.themeIs', { theme: t(o.label) })} sx={{ py: 0.5 }}>
-            {o.icon}
+            {o.icon}<Typography component="span" sx={{ ml: 0.75, fontSize: 13, textTransform: 'none' }}>{t(o.label)}</Typography>
           </ToggleButton>
         ))}
       </ToggleButtonGroup>

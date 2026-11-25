@@ -12,9 +12,12 @@ import { EspnowStatus } from './espnow/types';
 import { demoRegion, dm, demoPosixTz, demoTariff, demoZoneMoney, DEMO_CT_MODELS } from '../mock/demo';
 import { demoSite } from '../mock/demoSites';
 import { demoVariant } from '../mock/demoVariant';
+import { demoDocs, docsPairing } from '../mock/demoDocs';
+import { demoHasPrices } from '../mock/demoPrices';
 
 /** Mock GET /api/v1/espnow — a hub with one online node (two channels bound). */
 export function mockEspnow(): EspnowStatus {
+  if (demoDocs()) return docsEspnow();
   return {
     running: true,
     enabled: 'auto',
@@ -39,6 +42,32 @@ export function mockEspnow(): EspnowStatus {
           { ch: 0, ct_code: 3, unit_id: '0x6A00', present: true },
           { ch: 1, ct_code: 6, unit_id: '0x6A01', present: true },
         ],
+      },
+    ],
+  };
+}
+
+/** The docs build's hub (mock/demoDocs): radio on, two nodes on firmware 1.5 — the garden node with
+ *  the shed and the pool pump, and the greenhouse node, unheard for 1.5 h. MACs are made up. */
+function docsEspnow(): EspnowStatus {
+  const left = docsPairing.leftS();
+  const sync = { resid_sd_us: 41, skew_ppm: 1.4, loss_pct: 0.6, fits: 1630 };
+  return {
+    running: true, enabled: 'auto', keys: true, max_nodes: 6, max_channels_per_node: 4, channel: 6,
+    pairing_open: left > 0, pairing_left_s: left, paired_count: 0,
+    beacons_sent: 86_420, rt_recv: 83_910, stats_recv: 5_520, periods_recv: 192, periods_injected: 192, periods_dropped: 0, periods_dup: 1,
+    // `?nodes=stopped`: the hub's node-data task isn't running (hub 1.2.0 reports inject_age_ms −1).
+    inject_age_ms: typeof window !== 'undefined' && /[?&]nodes=stopped\b/.test(window.location.search) ? -1 : 850,
+    nodes: [
+      {
+        mac: '24:0A:C4:00:00:01', online: true, disabled: false, last_seen_s: 1, sync, fw: '1.5', rssi_dbm: -63, period_s: 900, config_state: 'applied',
+        channels: [{ ch: 0, ct_code: 3, unit_id: '0x6A00', present: true }, { ch: 1, ct_code: 2, unit_id: '0x6A01', present: true }],
+        config: [{ ch: 0, enabled: true, ct_code: 3 }, { ch: 1, enabled: true, ct_code: 2 }, { ch: 2, enabled: false, ct_code: 0 }, { ch: 3, enabled: false, ct_code: 0 }],
+      },
+      {
+        mac: '24:0A:C4:00:00:02', online: false, disabled: false, last_seen_s: 5_420, fw: '1.5', rssi_dbm: -84, period_s: 900, config_state: 'applied',
+        channels: [{ ch: 0, ct_code: 2, unit_id: '0x6A10', present: false }],
+        config: [{ ch: 0, enabled: true, ct_code: 2 }, { ch: 1, enabled: false, ct_code: 0 }, { ch: 2, enabled: false, ct_code: 0 }, { ch: 3, enabled: false, ct_code: 0 }],
       },
     ],
   };
@@ -76,7 +105,10 @@ export function mockConfig(domain: ConfigDomain): JsonObject {
     case 'telemetry':
       return { telemetry_enabled: true, compact_json: true, json_buffer_size: 4096 };
     case 'mqtt':
-      return { broker_uri: 'mqtt://192.168.1.101:1883', persisted: true, connected: false };
+      // The docs build: mqtts with the broker's own CA uploaded, verified (hub 1.1.8 `tls`).
+      return demoDocs()
+        ? { broker_uri: 'mqtts://192.168.1.101:8883', persisted: true, connected: true, tls: { state: 'ok', ca_uploaded: true } }
+        : { broker_uri: 'mqtt://192.168.1.101:1883', persisted: true, connected: false };
     case 'tariff':
       return { plan_name: demoTariff().plan, currency_code: demoRegion().cur, vat_percent: demoTariff().vat, net_metering_enabled: demoTariff().sell != null };
     case 'units': {
@@ -92,6 +124,7 @@ export function mockConfig(domain: ConfigDomain): JsonObject {
           unit_id: parseInt(p.id, 16), point: p.point, name: p.name, short_name: p.short, type: 'CURRENT_LOAD', role: p.role,
           ...(p.group ? { group_id: p.group, role_trunk: 0 } : {}),
           ...(p.role === 'EV_CHARGING' ? { charge_threshold_w: 0, idle_timeout_min: 0 } : {}),
+          ...(p.inside ? { inside: parseInt(p.inside, 16) } : {}),
           phase: p.phase, rated_power_w: p.ratedW, max_current_a: p.maxA, rated_voltage_v: p.phase === 5 ? v * 2 : v,
         })),
       };
@@ -135,7 +168,7 @@ export function mockSchema(): RawSchema {
       rbamp: ['v', 'i', 'p_act', 'v_min', 'v_max', 'i_min', 'i_max', 'p_min', 'p_max'],
       espnow: ['v', 'i', 'p_act'],
     },
-    quality_bits: { PARTIAL: 0, TIME_UNSYNC: 1, CLOCK_STEP: 2, SRC_GAP: 3, RECOMPUTED: 4, ESTIMATED: 5, UNSIGNED_SRC: 6, OVERRANGE: 7, MIGRATED: 8 },
+    quality_bits: { PARTIAL: 0, TIME_UNSYNC: 1, CLOCK_STEP: 2, SRC_GAP: 3, RECOMPUTED: 4, ESTIMATED: 5, UNSIGNED_SRC: 6, OVERRANGE: 7, MIGRATED: 8, ...(demoDocs() ? { OUTAGE: 12 } : {}) },
     transports: { ws: '/ws-telemetry', mqtt: 'rbgrid/<mac>/telemetry' },
     // configurable surface (canon fc0f962b — same shape as GET /api/v1/schema on .139)
     units_of_measure: { energy: 'Wh', power: 'W', voltage: 'V', current: 'A', frequency: 'Hz', money: 'major', rate: 'major_per_kwh' },
@@ -158,6 +191,8 @@ export function mockSchema(): RawSchema {
       espnow: true, economics: true, summary: true, exportCsv: true,
       telemetryConfigPost: true, mqttConfig: true,
       historyTimeRange: true, auth: true, https: true, provisioning: true, configBackup: true,
+      ...(demoDocs() ? { pointNesting: true } : {}),
+      ...(demoHasPrices() ? { dynamicTariffs: true } : {}),
     },
     endpoints: [
       { path: '/api/v1/schema', methods: 'GET', tier: '2', auth_required: false, requires_reboot: false },

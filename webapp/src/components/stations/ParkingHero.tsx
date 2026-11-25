@@ -38,7 +38,7 @@ export const ParkingHero: React.FC<ParkingHeroProps> = ({
   if (offline > 0) parts.push(t('stations.offlineCount', { count: String(offline) }));
 
   return (
-    <Card>
+    <Card tone="hero">
       <Box
         sx={{
           display: 'grid', gap: { xs: 2, md: 3 }, py: 0.5, alignItems: 'center', opacity: lost ? 0.6 : 1,
@@ -53,7 +53,7 @@ export const ParkingHero: React.FC<ParkingHeroProps> = ({
           </Typography>
           <Typography sx={{ fontSize: 13, color: offline > 0 ? ds.statusOffline : ds.inkMuted }}>{parts.join(' · ')}</Typography>
           <Tooltip title={t('stations.measuredTooltip')} arrow>
-            <Typography sx={{ fontSize: 11, color: ds.inkMuted, width: 'fit-content' }}>{stationStatusTooltip()}</Typography>
+            <Typography sx={{ fontSize: 12, color: ds.inkMuted, width: 'fit-content' }}>{stationStatusTooltip()}</Typography>
           </Tooltip>
         </Stack>
 

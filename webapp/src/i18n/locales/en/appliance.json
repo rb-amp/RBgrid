@@ -1,0 +1,15 @@
+{
+  "notFound": "Appliance not found",
+  "notFoundWhy": "The hub has no such group of one appliance's phases — it may have been renamed or split up.",
+  "now": "Now",
+  "perHour": "Per hour",
+  "today": "Today",
+  "todayMoney": "Today ≈ {money} at the day's average price.",
+  "trend": "Energy in the period",
+  "trendAria": "{name}'s energy per step of the period",
+  "phases": "The appliance's phases",
+  "periodTotal": "For the period",
+  "periodSum": "Period total: {wh}",
+  "atAvg": "from the hub's records, today at the day's average price",
+  "phasesCaption": "now and today"
+}

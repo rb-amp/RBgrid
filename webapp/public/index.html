@@ -4,10 +4,15 @@
     <meta charset="utf-8" />
     <link rel="shortcut icon" href="%PUBLIC_URL%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#1A73E8" />
+    <meta name="theme-color" content="#f3f5f8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111418" media="(prefers-color-scheme: dark)" />
+    <!-- The page's background before React starts, in the chosen theme (UI/UX audit U16: a white flash
+         before the dark theme). Colours = design-system tokens light.bg / dark.bg. -->
+    <style>html{background:#f3f5f8}html.rb-dark{background:#111418}@media (prefers-color-scheme:dark){html:not(.rb-light){background:#111418}}</style>
+    <script>try{var p=localStorage.getItem('rbgrid.theme');if(p==='dark')document.documentElement.className='rb-dark';else if(p==='light')document.documentElement.className='rb-light';}catch(e){}</script>
     <meta
       name="description"
-      content="RBGrid — ESP32 power monitoring: live telemetry, history, tariffs and device settings."
+      content="RBgrid — ESP32 power monitoring: live telemetry, history, tariffs and device settings."
     />
     <link
       rel="apple-touch-icon"
@@ -15,7 +20,7 @@
       href="%PUBLIC_URL%/apple-icon.png"
     />
     <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-    <title>RBGrid — Power Monitoring</title>
+    <title>RBgrid — Power Monitoring</title>
     <!-- IBM Plex Sans + Plex Mono (UI-design spec §2.1 / D4), SELF-HOSTED (SIL OFL): renders offline
          when served from the hub, inside mobile wrappers, and makes no third-party request. -->
     <link rel="preload" href="%PUBLIC_URL%/fonts/ibm-plex-sans-latin-400-700.woff2" as="font" type="font/woff2" crossorigin />

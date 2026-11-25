@@ -11,5 +11,9 @@
   "error": "Could not save: {reason}",
   "misfit": "These points have a phase the chosen mains system doesn’t allow: {points}. Change the phase on the point’s page.",
   "suggest": "The points' phases suggest: {kind}. Choose the system if that is right.",
-  "notValidatedHelp": "The hub measures and shows the phases. “Not validated on hardware” means we have not yet run this system on our test bench against a reference meter. The note goes away by itself after that test."
+  "notValidatedHelp": "The hub measures and shows the phases. “Not validated on hardware” means we have not yet run this system on our test bench against a reference meter. The note goes away by itself after that test.",
+  "confirmTitle": "Mains system: {kind}?",
+  "confirmBody": "The hub applies it at once; the points' phases are checked against it and the phase card follows it.",
+  "confirmMisfit": "The hub applies it at once. These points would sit on a phase this system doesn't have: {points} — their phase will need fixing.",
+  "confirmApply": "Apply"
 }

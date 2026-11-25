@@ -131,7 +131,7 @@ const Field: React.FC<{
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     return (
       <Box sx={{ pl: 1.5, borderLeft: 2, borderColor: 'divider' }}>
-        <Typography variant="overline" color="text.secondary">{label}</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'text.secondary' }}>{label}</Typography>
         <Stack spacing={1.5} sx={{ mt: 0.5 }}>
           {Object.entries(value as JsonObject).map(([k, v]) => (
             <Field key={k} name={k} value={v} path={[...path, k]} onChange={onChange} enums={enums} limits={limits} errId={errId} />
@@ -196,7 +196,7 @@ export const ShadowConfigEditor: React.FC<{
       <Stack spacing={1.5} key={epoch}>
         {restart && (
           <Box>
-            <Typography variant="overline" color="warning.main" sx={{ display: 'block', lineHeight: 1.6 }}>{t('configEditor.atStartTitle')}</Typography>
+            <Typography color="warning.main" sx={{ display: 'block', fontSize: 14, fontWeight: 700, mt: 1 }}>{t('configEditor.atStartTitle')}</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{t('configEditor.atStartHint')}</Typography>
           </Box>
         )}
@@ -212,7 +212,7 @@ export const ShadowConfigEditor: React.FC<{
       {live.map(field)}
       {atStart.length > 0 && (
         <Box sx={live.length ? { pt: 1, borderTop: 1, borderColor: 'divider' } : undefined}>
-          <Typography variant="overline" color="warning.main" sx={{ display: 'block', lineHeight: 1.6 }}>
+          <Typography color="warning.main" sx={{ display: 'block', fontSize: 14, fontWeight: 700, mt: 1 }}>
             {t('configEditor.atStartTitle')}
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>

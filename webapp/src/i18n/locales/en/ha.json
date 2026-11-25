@@ -13,6 +13,7 @@
   "compensation": "Compensation for return",
   "solar": "Solar panels",
   "devices": "Individual devices",
+  "deviceInside": "{device} (upstream device: {parent})",
   "notDay": "Pick the sensors without “(Day)”: they only grow and HA works out days and months itself. “(Day)” sensors reset at midnight — they are for cards, not for the Energy dashboard.",
   "oldHub": "Hubs before firmware 1.1.2: HA may not offer “Cost (Total)” and “Revenue (Total)” for the Energy dashboard — they carry the wrong statistics type. Firmware 1.1.2 fixes it and calls the second one Export value.",
   "oldHubDemo": "HA may not offer “Cost (Total)” and “Revenue (Total)” for the Energy dashboard: they carry the wrong statistics type.",

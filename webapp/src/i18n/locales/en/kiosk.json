@@ -1,0 +1,8 @@
+{
+  "open": "Wall display (full screen)",
+  "rotate": "Change boards",
+  "every": "every {s} s",
+  "off": "don't change",
+  "alarms": "Alarms: {n}",
+  "offline": "No link: {names}"
+}

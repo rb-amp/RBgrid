@@ -93,6 +93,7 @@
   "cmpWith": "Compare with the previous period",
   "cmpNone": "No comparison",
   "restOfInput": "The rest (not metered)",
+  "nestedPart": "{name}, inside a part above",
   "cmpCur_today": "Today",
   "cmpCur_yesterday": "Yesterday",
   "cmpCur_week": "These 7 days",
@@ -108,5 +109,13 @@
   "cmpPrev_year": "Last year",
   "cmpPrev_other": "The previous period",
   "pfStrip": "cos φ (power factor): 1 — all power is useful; below 0.9 — a noticeable reactive load",
-  "basicNote": "A point on a BASIC module: consumption only (no direction) — these records carry no export."
+  "basicNote": "A point on a BASIC module: consumption only (no direction) — these records carry no export.",
+  "statsChipMissing": "The statistics memory chip is not responding. History is not shown and new history is not saved until it is reconnected; the history already on the chip comes back with it. Live values work. The hub finds the chip again on its next restart.",
+  "pointsN": "Points: {n}",
+  "pointsSearch": "Find a point",
+  "pointsLimit": "Up to {n} points on the chart at once — untick one to pick another.",
+  "periodAria": "Period",
+  "toEconomics": "Totals and breakdown in Economics →",
+  "download": "Download",
+  "partialCompare": "the previous period is incomplete ({n} of {m}) — no percentage; it is drawn on the chart"
 }

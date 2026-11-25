@@ -4,12 +4,16 @@
  * русифицированная отвязка; свободные датчики предлагают привязку. Гейт готовности
  * (503 «инициализация» → повтор) отличаем от «датчиков нет».
  */
+import { HelpTip } from '../components/common/HelpTip';
+import { PageSkeleton } from '../components/common/PageSkeleton';
 import { useTariffPlan } from '../hooks/useTariffPlan';
 import { channelLabel } from '../entities/phaseGroup';
 import React, { useMemo, useState } from 'react';
 import {
-  Box, Typography, Grid, Button, Stack, Alert, CircularProgress,
+  Box, Typography, Grid, Button, Stack, Alert, CircularProgress, Tab, Tabs, IconButton, Menu, MenuItem, Divider, Collapse,
 } from '@mui/material';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import { useSessionData } from '../hooks/useLocalStorage';
 import { useNavigate } from 'react-router-dom';
 import { Card, StatusChip } from '@rbgrid/design-system';
 import AddLinkIcon from '@mui/icons-material/AddLink';
@@ -17,10 +21,10 @@ import LinkOffIcon from '@mui/icons-material/LinkOff';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useSensors } from '../hooks/useSensors';
 import { isBasic, isCurrentOnly, ctName, ctRatingOf, channelRange, sensorClassOf } from '../entities/moduleLine';
-import { nf } from '../components/common/ruFormat';
+import { nf, pwW } from '../components/common/ruFormat';
 import { useTelemetryEntities } from '../hooks/useTelemetryEntities';
 import { useUnitsConfig } from '../hooks/useUnitsConfig';
-import { displayName, fullDisplayName } from '../entities/siteModel';
+import { fullDisplayName, fullPower, nameWithShort } from '../entities/siteModel';
 import { useCapabilities } from '../core';
 import { getApiClient } from '../services/api';
 import { SensorListEntry, SensorModule, freeSensors, channelMissing, sctUncorrected } from '../types/sensors';
@@ -28,6 +32,7 @@ import { UnitEntityGroup, unitMetricValue } from '../entities/model';
 import { BindUnitDialog } from '../components/devices/BindUnitDialog';
 import { ModuleFirmwareDialog } from '../components/devices/ModuleFirmwareDialog';
 import { AddModuleDialog } from '../components/devices/AddModuleDialog';
+import { I2cBusesPanel } from '../components/devices/I2cBusesPanel';
 import { isDemo } from '../services/connection';
 import { refreshHardware } from '../hooks/useHardware';
 import { RELEASE_HIDDEN } from '../constants/release';
@@ -46,7 +51,8 @@ import { liveRate, dayAvgRate, solarDayOf } from '../economics/costRate';
 import { useMoneyFormat } from '../hooks/useMoneyFormat';
 import { useConfirm } from '../components/common/ConfirmDialog';
 import { isSupplyRole, signedPowerW, isPseudoKey, isMainKey } from '../entities/siteModel';
-import { mainUnit, isGenerationUnit } from './overviewData';
+import { mainUnit, isGenerationUnit, deviceSets } from './overviewData';
+import { useDeviceGroups } from '../hooks/useDeviceGroups';
 
 const tnum = { fontVariantNumeric: 'tabular-nums' } as const;
 
@@ -91,6 +97,12 @@ export const DevicesPage: React.FC = () => {
   // module's channels «no signal».
   const hubVersionEarly = useHubVersion();
   const canAddModule = !isDemo() && !RELEASE_HIDDEN.addModule && fwAtLeast(hubVersionEarly, [1, 1, 2]) === true;
+  // Bus 1 for metering points: hub 1.3.0 (before it a point on a bus-1 channel answered 400 — root i2c-bus1-support).
+  const twoBuses = canAddModule && !RELEASE_HIDDEN.i2cBus && fwAtLeast(hubVersionEarly, [1, 3, 0]) === true;
+  // The module list carries no bus; its channels do. The same address can sit on both buses, so the bus
+  // is shown on the module card as soon as any module is on bus 1.
+  const moduleBus = (m: SensorModule): number => (m as { bus?: number }).bus ?? sensors.find((x) => x.iface === 'i2c' && x.module === m.module)?.bus ?? 0;
+  const showBus = twoBuses || modules.some((m) => moduleBus(m) !== 0);
   const telem = useTelemetryEntities();
   const { plan: tariffPlan } = useTariffPlan();
   const unitsCfg = useUnitsConfig();
@@ -103,6 +115,11 @@ export const DevicesPage: React.FC = () => {
   const [unbindErr, setUnbindErr] = useState<string | null>(null);
   const confirm = useConfirm();
   const ds = useDsTokens();
+  // «Points» and «Hardware» (UI redesign §5.4): the points first; modules, buses and nodes apart.
+  const [tab, setTab] = useSessionData<'points' | 'hardware'>('rbgrid.devices_tab', 'points');
+  const [tileMenu, setTileMenu] = useState<{ el: HTMLElement; s: SensorListEntry } | null>(null);
+  const [wiringOpen, setWiringOpen] = useState<Set<string>>(new Set());
+  const [openSets, setOpenSets] = useState<Set<number>>(new Set());
 
   // The input on all three phases of a U3I3 (v1.1.2 rebind; hidden until root's .139 run).
   const hubVersion = hubVersionEarly;
@@ -217,6 +234,34 @@ export const DevicesPage: React.FC = () => {
     telem.data?.units.forEach((g) => m.set(g.unitKey, g));
     return m;
   }, [telem.data]);
+  // Points of one appliance (its phases) together under the appliance's name (UI redesign §5.4).
+  const { names: applianceNames } = useDeviceGroups();
+  const boundRows = useMemo(() => {
+    const groups = bound.map((s) => groupByKey.get(s.unit_id ?? '')).filter((g): g is UnitEntityGroup => !!g);
+    const sets = deviceSets(groups, unitsCfg).filter((st) => st.units.length > 1);
+    const setOf = new Map<string, number>();
+    sets.forEach((st, i) => st.units.forEach((u) => setOf.set(u.unitKey, i)));
+    // Appliances first, then the single points under their own header (round 2 installer N03: a single
+    // point right under an appliance's header read as its phase).
+    type Row = { s: SensorListEntry; header?: string; gid?: number; keys?: string[]; singles?: boolean };
+    const rows: Row[] = [];
+    const singles: Row[] = [];
+    const done = new Set<number>();
+    for (const s of bound) {
+      const i = setOf.get(s.unit_id ?? '');
+      if (i == null) { singles.push({ s }); continue; }
+      if (done.has(i)) continue;
+      done.add(i);
+      const st = sets[i];
+      const name = (st.groupId != null ? applianceNames.get(st.groupId) : undefined) || st.lead.name;
+      st.units.forEach((u, k) => {
+        const own = bound.find((x) => (x.unit_id ?? '') === u.unitKey);
+        if (own) rows.push({ s: own, header: k === 0 ? t('devices.applianceHeader', { name, n: st.units.length }) : undefined, gid: st.groupId, keys: k === 0 ? st.units.map((x) => x.unitKey) : undefined });
+      });
+    }
+    if (rows.length && singles.length) singles[0] = { ...singles[0], header: t('devices.singlePoints'), singles: true };
+    return [...rows, ...singles];
+  }, [bound, groupByKey, unitsCfg, applianceNames]);
   const sensorKeys = useMemo(() => new Set(sensors.map((x) => (x.unit_id ?? '').toUpperCase()).filter(Boolean)), [sensors]);
   const otherPoints = useMemo(
     () => (telem.data?.units ?? []).filter((g) => !isPseudoKey(g.unitKey) && !isMainKey(g.unitKey) && !sensorKeys.has(g.unitKey.toUpperCase())),
@@ -226,7 +271,8 @@ export const DevicesPage: React.FC = () => {
   const unbind = async (s: SensorListEntry) => {
     if (!s.unit_id) return;
     // the factory «Main Voltage Bus» in the UI language (W191-16), as everywhere else
-    const name = fullDisplayName({ unitKey: s.unit_id } as UnitEntityGroup, cfgOf(s.unit_id));
+    // The card's short label next to the full name (role audit F10: card «EV L1», dialog «EV charger L1»).
+    const name = nameWithShort({ unitKey: s.unit_id } as UnitEntityGroup, cfgOf(s.unit_id));
     if (!(await confirm({ title: t('devices.unbindTitle', { name }), body: t('devices.unbindBody'), confirmLabel: t('devices.unbind'), danger: true }))) return;
     setBusyId(s.unit_id);
     setUnbindErr(null);
@@ -242,7 +288,7 @@ export const DevicesPage: React.FC = () => {
   };
 
   if (state === 'loading') {
-    return <Centered><CircularProgress aria-label={t('common.loading')} /></Centered>;
+    return <PageSkeleton kind="cards" />;
   }
   if (state === 'initializing') {
     return (
@@ -287,8 +333,8 @@ export const DevicesPage: React.FC = () => {
         telem.data?.system.totals, dayAvgRate(telem.data?.system.totals).buy ?? lensRate.buy, lensRate.sell)}>
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 1, mb: 2.5 }}>
-        <Typography variant="h4" fontWeight={800}>{t('devices.title')}</Typography>
-        {/* bus 0, up to the hub's module limit (v1.1.2, operator 02.11); the demo has no bus */}
+        <Typography variant="h4" fontWeight={800}>{t('devices.title')}<HelpTip topic="point" /></Typography>
+        {/* bus 0 (v1.1.2) or either bus (hub 1.3.0), up to the hub's module limit; the demo has no bus */}
         {canAddModule && <Button startIcon={<AddIcon />} onClick={() => setAddingModule(true)} sx={{ ml: 'auto' }}>{t('devices.addModule')}</Button>}
         <Button startIcon={<RefreshIcon />} onClick={reload} sx={{ ml: canAddModule ? 1 : 'auto' }}>{t('devices.refresh')}</Button>
       </Box>
@@ -301,12 +347,18 @@ export const DevicesPage: React.FC = () => {
       {groupMsg && groupMsg.module == null && <Alert severity={groupMsg.sev} onClose={() => setGroupMsg(null)} action={groupMsg.reboot ? <RebootNowButton /> : undefined} sx={{ mb: 2 }}>{groupMsg.text}</Alert>}
       {unbindErr && <Alert severity="error" onClose={() => setUnbindErr(null)} sx={{ mb: 2 }}>{unbindErr}</Alert>}
 
+      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2.5, minHeight: 40 }} aria-label={t('devices.tabsAria')}>
+        <Tab value="points" label={t('devices.tabPoints', { n: bound.length + otherPoints.length })} sx={{ minHeight: 40, textTransform: 'none', fontWeight: 600 }} />
+        <Tab value="hardware" label={t('devices.tabHardware', { n: modules.length })} sx={{ minHeight: 40, textTransform: 'none', fontWeight: 600 }} />
+      </Tabs>
+
+      {tab === 'hardware' && <>
       {caps.flags.espnow && <NodesPanel />}
 
       {/* rbAmp modules as identified by the hub (delta №5) — model, address, channels, calibration. */}
       {modules.length > 0 && (
         <>
-          <Typography variant="overline" color="text.secondary" sx={tnum}>{t('devices.modulesHeader', { n: modules.length })}</Typography>
+          <Typography sx={{ ...tnum, fontSize: 15, fontWeight: 700, display: 'block', mb: 0.5 }}>{t('devices.modulesHeader', { n: modules.length })}</Typography>
           <Grid container spacing={2} sx={{ mb: 3, mt: 0 }}>
             {modules.map((m) => (
               <Grid item xs={12} sm={6} md={4} key={m.module}>
@@ -317,7 +369,8 @@ export const DevicesPage: React.FC = () => {
                       <StatusChip status={m.present ? 'present' : 'dormant'} label={m.present ? t('devices.online') : t('devices.moduleAbsent')} />
                     </Stack>
                     <Typography sx={{ ...tnum, fontSize: 13, color: ds.inkMuted }}>
-                      {[t('devices.moduleN', { module: m.module }), m.addr !== undefined ? `0x${m.addr.toString(16)}` : '', channelsText(m), occupancyText(m, sensors)].filter(Boolean).join(' · ')}
+                      {[t('devices.moduleN', { module: m.module }), m.addr !== undefined ? `0x${m.addr.toString(16)}` : '',
+                        showBus ? t('devices.moduleBus', { bus: moduleBus(m) }) : '', channelsText(m), occupancyText(m, sensors)].filter(Boolean).join(' · ')}
                     </Typography>
                     {/* BASIC has no calibration register (cal "n/a", d03f19ed): its sensor_class says it. */}
                     {m.cal !== 'n/a' && <Typography sx={{ fontSize: 13, color: m.cal === 'ok' ? ds.ink : ds.inkMuted }}>{calText(m.cal)}</Typography>}
@@ -332,7 +385,9 @@ export const DevicesPage: React.FC = () => {
                     {sensorClassOf(m) === 'uncalibrated' && (
                       <Typography sx={{ fontSize: 12, color: ds.sevWarning }}>{t('devices.uncalibrated')}</Typography>
                     )}
-                    {sensorClassOf(m) !== 'uncalibrated' && sensors.filter((s) => s.module === m.module && (s.ct_code ?? 0) > 0 && !channelMissing(s, modules)).map((s) => {
+                    {sensorClassOf(m) !== 'uncalibrated' && sensors.filter((s) => s.module === m.module && ((s.ct_code ?? 0) > 0 || !!s.ct_name) && !channelMissing(s, modules))
+                      // In channel order (round 3 installer N15: I2, I0, I1); a factory-paired CT has a name, no code (F09).
+                      .sort((a, b) => (a.ch ?? 0) - (b.ch ?? 0)).map((s) => {
                       const rating = ctRatingOf(s, { ...caps.ctModels, ...caps.ctModelsFixed });
                       const r = rating ? channelRange(s, rating, sensorClassOf(m)) : null;
                       return (
@@ -404,7 +459,13 @@ export const DevicesPage: React.FC = () => {
           </Grid>
         </>
       )}
+      {twoBuses && <Box sx={{ mb: 3 }}><I2cBusesPanel onChanged={reload} /></Box>}
+      {modules.length === 0 && !caps.flags.espnow && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{t('devices.noHardware')}</Typography>
+      )}
+      </>}
 
+      {tab === 'points' && <>
       {sensors.length === 0 && (
         <Card outlined>
           <Box sx={{ py: 3, textAlign: 'center', color: 'text.secondary' }}>
@@ -415,17 +476,44 @@ export const DevicesPage: React.FC = () => {
 
       {bound.length > 0 && (
         <>
-          <Typography variant="overline" color="text.secondary" sx={tnum}>{t('devices.boundHeader', { n: bound.length })}</Typography>
+          <Typography sx={{ ...tnum, fontSize: 15, fontWeight: 700, display: 'block', mb: 0.5 }}>{t('devices.boundHeader', { n: bound.length })}</Typography>
           <Grid container spacing={2} sx={{ mb: 3, mt: 0 }}>
-            {bound.map((s) => {
+            {boundRows.map(({ s, header, gid, keys }) => {
               const key = s.unit_id ?? '';
               const group = groupByKey.get(key);
               const go = () => navigate(`/point/${key}`);
               return (
-                <Grid item xs={12} sm={6} md={4} key={key}>
+                <React.Fragment key={key}>
+                {header && (
+                  // The appliance as one (role audit 22.11 H-02): its page, its phases folded until asked.
+                  <Grid item xs={12}>
+                    <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap
+                      sx={gid != null ? { mt: 1, p: 1.5, borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper' } : { mt: 2 }}>
+                      <Typography sx={{ fontSize: 15, fontWeight: 700 }}>{header}</Typography>
+                      {/* The appliance's live sum on its header (round 2 installer N03: no figure when folded). */}
+                      {keys && (() => {
+                        const gs = keys.map((k) => groupByKey.get(k)).filter((g): g is UnitEntityGroup => !!g && g.present);
+                        if (!gs.length) return null;
+                        const w = gs.reduce((a, g) => a + Math.abs(fullPower(g, unitsCfg.forGroup(g)).w ?? 0), 0);
+                        return <Typography sx={{ fontSize: 15, fontVariantNumeric: 'tabular-nums', color: 'text.secondary', mr: 'auto' }}>{pwW(w)}</Typography>;
+                      })()}
+                      {gid != null && <Button size="small" onClick={() => navigate(`/appliance/${gid}`)}>{t('devices.openAppliance')}</Button>}
+                      {gid != null && (
+                        <Button size="small" color="inherit" onClick={() => setOpenSets((cur) => { const n = new Set(cur); if (n.has(gid)) n.delete(gid); else n.add(gid); return n; })}>
+                          {openSets.has(gid) ? t('pointTile.hidePhases') : t('pointTile.showPhases')}
+                        </Button>
+                      )}
+                    </Stack>
+                  </Grid>
+                )}
+                <Grid item xs={12} sm={6} md={4} sx={gid != null && !openSets.has(gid) ? { display: 'none' } : undefined}>
                   <Stack spacing={1}>
                     {group ? (
-                      <PointTile group={group} name={displayName(group, unitsCfg.forGroup(group))} onClick={go} generation={isGenerationUnit(group, unitsCfg)} cfg={unitsCfg.forGroup(group)} />
+                      <PointTile group={group} name={fullDisplayName(group, unitsCfg.forGroup(group))} onClick={go} generation={isGenerationUnit(group, unitsCfg)} cfg={unitsCfg.forGroup(group)}
+                        action={(
+                          <IconButton size="small" sx={{ my: -0.5 }} aria-label={t('devices.pointMenu', { name: fullDisplayName(group, unitsCfg.forGroup(group)) })}
+                            onClick={(e) => setTileMenu({ el: e.currentTarget, s })}><MoreVertIcon fontSize="small" /></IconButton>
+                        )} />
                     ) : (
                       <Card muted={!s.present}>
                         <Box
@@ -447,16 +535,25 @@ export const DevicesPage: React.FC = () => {
                         </Box>
                       </Card>
                     )}
-                    {/* Which hardware measures this point (UX audit PNT-14: «какой канал — какая линия»
-                        was only in the technical details). */}
+                    {/* Which hardware measures this point (UX audit PNT-14) — folded under «Connection»
+                        (UI redesign §5.4: no I2C addresses on the tiles until asked). */}
                     {group && (
-                      <Typography variant="caption" color="text.secondary" sx={{ ...tnum, px: 0.5 }}>
-                        {addressing(s)}{modelOf(s) ? ` · ${modelOf(s)}` : ''}
-                      </Typography>
+                      <Box sx={{ px: 0.5 }}>
+                        <Button size="small" sx={{ p: 0, minWidth: 0, textTransform: 'none', fontSize: 13 }} aria-expanded={wiringOpen.has(key)}
+                          onClick={() => setWiringOpen((cur) => { const n = new Set(cur); if (n.has(key)) n.delete(key); else n.add(key); return n; })}>
+                          {t('devices.connection')}
+                        </Button>
+                        <Collapse in={wiringOpen.has(key)}>
+                          <Typography variant="caption" color="text.secondary" display="block" sx={tnum}>
+                            {addressing(s)}{modelOf(s) ? ` · ${modelOf(s)}` : ''}
+                          </Typography>
+                        </Collapse>
+                      </Box>
                     )}
-                    {unbindButton(s)}
+                    {!group && unbindButton(s)}
                   </Stack>
                 </Grid>
+                </React.Fragment>
               );
             })}
           </Grid>
@@ -467,11 +564,11 @@ export const DevicesPage: React.FC = () => {
           (PNT-04: they were on the Overview but nowhere to open or rename). */}
       {otherPoints.length > 0 && (
         <>
-          <Typography variant="overline" color="text.secondary" sx={tnum}>{t('devices.otherHeader', { n: otherPoints.length })}</Typography>
+          <Typography sx={{ ...tnum, fontSize: 15, fontWeight: 700, display: 'block', mb: 0.5 }}>{t('devices.otherHeader', { n: otherPoints.length })}</Typography>
           <Grid container spacing={2} sx={{ mb: 3, mt: 0 }}>
             {otherPoints.map((g) => (
               <Grid item xs={12} sm={6} md={4} key={g.unitKey}>
-                <PointTile group={g} name={displayName(g, unitsCfg.forGroup(g))} onClick={() => navigate(`/point/${g.unitKey}`)}
+                <PointTile group={g} name={fullDisplayName(g, unitsCfg.forGroup(g))} onClick={() => navigate(`/point/${g.unitKey}`)}
                   generation={isGenerationUnit(g, unitsCfg)} cfg={unitsCfg.forGroup(g)} />
               </Grid>
             ))}
@@ -486,7 +583,7 @@ export const DevicesPage: React.FC = () => {
 
       {unbound.length > 0 && (
         <>
-          <Typography variant="overline" color="text.secondary" sx={tnum}>{t('devices.unboundHeader', { n: unbound.length })}</Typography>
+          <Typography sx={{ ...tnum, fontSize: 15, fontWeight: 700, display: 'block', mb: 0.5 }}>{t('devices.unboundHeader', { n: unbound.length })}</Typography>
           <Grid container spacing={2} sx={{ mt: 0 }}>
             {unbound.map((s, i) => (
               <Grid item xs={12} sm={6} md={4} key={`${addressing(s)}-${i}`}>
@@ -506,7 +603,23 @@ export const DevicesPage: React.FC = () => {
         </>
       )}
 
-      <AddModuleDialog open={addingModule} onClose={() => { setAddingModule(false); reload(); }} onChanged={() => { reload(); void refreshHardware(); }} />
+      </>}
+
+      {(() => {
+        const s = tileMenu?.s;
+        const key = s?.unit_id ?? '';
+        const canUnbind = !!s && !isSupplyRole(cfgOf(key)?.role) && cfgOf(key)?.type !== 'VOLTAGE_BUS';
+        const close = () => setTileMenu(null);
+        return (
+          <Menu anchorEl={tileMenu?.el} open={!!tileMenu} onClose={close}>
+            <MenuItem onClick={() => { close(); navigate(`/point/${key}?setup`); }}>{t('devices.configure')}</MenuItem>
+            {canUnbind && <Divider />}
+            {canUnbind && <MenuItem sx={{ color: 'error.main' }} disabled={busyId === key} onClick={() => { close(); if (s) void unbind(s); }}>{t('devices.unbind')}</MenuItem>}
+          </Menu>
+        );
+      })()}
+
+      <AddModuleDialog twoBuses={twoBuses} open={addingModule} onClose={() => { setAddingModule(false); reload(); }} onChanged={() => { reload(); void refreshHardware(); }} />
       <ModuleFirmwareDialog module={fwModule} onClose={() => { setFwModule(null); reload(); }} onDone={reload} />
       <BindUnitDialog
         sensor={bindTarget}

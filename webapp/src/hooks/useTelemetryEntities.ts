@@ -15,6 +15,7 @@
  * clears it (back to 'live' / 'snapshot'). The last data is kept — screens grey it out.
  */
 
+import { noteHubBoot } from '../app/rebootPending';
 import { foldSplitInput } from '../entities/splitInput';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getApiClient } from '../services/api';
@@ -105,6 +106,7 @@ export function useTelemetryEntities(): UseTelemetryEntitiesResult {
     }
     lastFrameAt.current = now;
     const raw = frame as { hw_rev?: unknown; boot_id?: unknown };
+    if (typeof raw.boot_id === 'number') noteHubBoot(raw.boot_id); // a restart clears «waits for a restart»
     const rev = typeof raw.hw_rev === 'number' ? `${String(raw.boot_id ?? '')}|${raw.hw_rev}` : null;
     if (rev != null) {
       if (lastHwRev != null && rev !== lastHwRev) void refreshHardware();

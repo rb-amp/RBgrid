@@ -21,13 +21,14 @@
  */
 import type { SensorModule } from '../types/sensors';
 import { demoVariant, DemoVariantId } from './demoVariant';
+import { demoDocs } from './demoDocs';
 
 /** A point's day profile (mock/demo.ts demoHourW). */
 export type DemoRole =
   | 'input' | 'kitchen' | 'solar' | 'garage' | 'ev1' | 'ev2' | 'ev3' | 'off' | 'line'
   | 'workshop' | 'lighting' | 'compressor' | 'hvac' | 'office'
   | 'heater' | 'laundry' | 'living' | 'bedrooms' | 'building' | 'parkLight' | 'homeEv'
-  | 'hpEv' | 'heatPump' | 'hpKitchen';
+  | 'hpEv' | 'heatPump' | 'hpKitchen' | 'shed' | 'pool';
 
 export interface DemoPoint {
   /** HEX4 unit id. */
@@ -52,6 +53,10 @@ export interface DemoPoint {
   absent?: boolean;
   /** One CT on a two-pole line reads one leg (US 240 V). */
   pole?: number;
+  /** Measured inside this point (HEX4; units-config `inside`, fw 1.1.8): its parent's reading holds it. */
+  inside?: string;
+  /** Measured by a remote node (ESP-NOW), not an rbAmp channel. */
+  node?: boolean;
 }
 
 export interface DemoSite {
@@ -188,7 +193,7 @@ const SITES: Record<DemoVariantId, () => DemoSite> = {
       { id: '9010', point: 'shop.compressor', name: 'Compressor', short: 'Compressor', role: 'DEVICE_LOAD', profile: 'compressor', module: 2, ch: 0, phase: 2, ratedW: 3000, maxA: 16, ct: CT30, group: 1 },
       { id: '9031', point: 'building.office', name: 'Office', short: 'Office', role: 'ZONE_LOAD', profile: 'office', module: 2, ch: 1, phase: 2, ratedW: 3000, maxA: 16, ct: CT30, group: 2 },
       { id: '9021', point: 'building.lighting', name: 'Lighting', short: 'Lighting', role: 'ZONE_LOAD', profile: 'lighting', module: 3, ch: 0, phase: 3, ratedW: 2000, maxA: 10, ct: CT30, group: 2 },
-      { id: '9030', point: 'building.hvac', name: 'Ventilation & AC', short: 'HVAC', role: 'HEATING_COOLING', profile: 'hvac', module: 3, ch: 1, phase: 3, ratedW: 6000, maxA: 25, ct: CT30, group: 2 },
+      { id: '9030', point: 'building.hvac', name: 'Ventilation & AC', short: 'Ventilation', role: 'HEATING_COOLING', profile: 'hvac', module: 3, ch: 1, phase: 3, ratedW: 6000, maxA: 25, ct: CT30, group: 2 },
     ],
     free: [{ module: 2, ch: 2 }, { module: 3, ch: 2 }],
     groups: [{ id: 1, name: 'Production' }, { id: 2, name: 'Building' }],
@@ -197,15 +202,17 @@ const SITES: Record<DemoVariantId, () => DemoSite> = {
   ev: () => ({
     title: 'Car park (demo)',
     // The input on an STD-UI1 (operator 04.11: always STD), a BASIC-UI3 for the building and the
-    // lighting, a BASIC-UI3 for the three stations.
-    modules: [std1(0), basic(1, 'BASIC-UI3', 3), basic(2, 'BASIC-UI3', 3)],
+    // lighting, a BASIC-UI3 for the three stations; a fourth charger on its own module that has lost
+    // its link (role audit 22.11: «a station offline» could not be seen on the car park).
+    modules: [std1(0), basic(1, 'BASIC-UI3', 3), basic(2, 'BASIC-UI3', 3), basic(3, 'BASIC-UI1', 1, false)],
     points: [
       { id: '9001', point: '', name: 'Main input', short: 'Main', role: 'MAIN_SUPPLY', profile: 'input', module: 0, ch: 0, phase: 1, ratedW: 22000, maxA: 100, ct: CT100 },
       { id: '9020', point: 'building', name: 'Building', short: 'Building', role: 'ZONE_LOAD', profile: 'building', module: 1, ch: 0, phase: 1, ratedW: 3680, maxA: 16, ct: CT30 },
       { id: '9021', point: 'parking.lighting', name: 'Car park lighting', short: 'Lighting', role: 'ZONE_LOAD', profile: 'parkLight', module: 1, ch: 1, phase: 1, ratedW: 1500, maxA: 10, ct: CT30 },
-      { id: '9030', point: 'ev.station1', name: 'Charger 1', short: 'EV-1', role: 'EV_CHARGING', profile: 'ev1', module: 2, ch: 0, phase: 1, ratedW: 7400, maxA: 32, ct: CT50, group: 1 },
-      { id: '9031', point: 'ev.station2', name: 'Charger 2', short: 'EV-2', role: 'EV_CHARGING', profile: 'ev2', module: 2, ch: 1, phase: 1, ratedW: 7400, maxA: 32, ct: CT50, group: 1 },
-      { id: '9032', point: 'ev.station3', name: 'Charger 3', short: 'EV-3', role: 'EV_CHARGING', profile: 'ev3', module: 2, ch: 2, phase: 1, ratedW: 7400, maxA: 32, ct: CT50, group: 1 },
+      { id: '9030', point: 'ev.station1', name: 'Charger 1', short: 'Charger 1', role: 'EV_CHARGING', profile: 'ev1', module: 2, ch: 0, phase: 1, ratedW: 7400, maxA: 32, ct: CT50, group: 1 },
+      { id: '9031', point: 'ev.station2', name: 'Charger 2', short: 'Charger 2', role: 'EV_CHARGING', profile: 'ev2', module: 2, ch: 1, phase: 1, ratedW: 7400, maxA: 32, ct: CT50, group: 1 },
+      { id: '9032', point: 'ev.station3', name: 'Charger 3', short: 'Charger 3', role: 'EV_CHARGING', profile: 'ev3', module: 2, ch: 2, phase: 1, ratedW: 7400, maxA: 32, ct: CT50, group: 1 },
+      { id: '9033', point: 'ev.station4', name: 'Charger 4', short: 'Charger 4', role: 'EV_CHARGING', profile: 'off', module: 3, ch: 0, phase: 1, ratedW: 7400, maxA: 32, ct: CT50, group: 1, absent: true },
     ],
     free: [{ module: 1, ch: 2 }],
     groups: [{ id: 1, name: 'Charging stations' }],
@@ -228,9 +235,26 @@ const SITES: Record<DemoVariantId, () => DemoSite> = {
   }),
 };
 
+/** The docs build's additions to «home» (mock/demoDocs): the charger inside the garage sub-panel
+ *  (now metered for both), and two remote nodes: one with the shed and the pool pump, one offline. */
+function docsHome(site: DemoSite): DemoSite {
+  const points = site.points.map((p) => (p.id === '9030' ? { ...p, inside: '9031' }
+    : p.id === '9031' ? { ...p, name: 'Garage sub-panel', short: 'Garage', ratedW: 11040, maxA: 48, ct: CT50 } : p));
+  return {
+    ...site,
+    points: [
+      ...points,
+      { id: '6A00', point: 'garden.shed', name: 'Garden shed', short: 'Shed', role: 'ZONE_LOAD', profile: 'shed', module: 0, ch: 0, phase: 1, ratedW: 2300, maxA: 10, ct: CT30, node: true },
+      { id: '6A01', point: 'garden.pool', name: 'Pool pump', short: 'Pool', role: 'DEVICE_LOAD', profile: 'pool', module: 0, ch: 1, phase: 1, ratedW: 1100, maxA: 6, ct: CT10, node: true },
+      { id: '6A10', point: 'garden.greenhouse', name: 'Greenhouse', short: 'Greenhs', role: 'ZONE_LOAD', profile: 'off', module: 0, ch: 0, phase: 1, ratedW: 2300, maxA: 10, ct: CT10, node: true, absent: true },
+    ],
+  };
+}
+
 /** The active variant's site. */
 export function demoSite(): DemoSite {
-  return SITES[demoVariant().id]();
+  const site = SITES[demoVariant().id]();
+  return demoDocs() && demoVariant().id === 'home' ? docsHome(site) : site;
 }
 
 /** A demo point by unit id (upper-case HEX4); the legacy input key 0006 is the input. */

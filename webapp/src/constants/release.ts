@@ -12,14 +12,16 @@ const preview = override === 'true' ? true : override === 'false' ? false : proc
 
 export const RELEASE_HIDDEN = {
   espnow: !preview,
-  i2cBus: !preview,
+  /** Bus 1 in «Add a module» + the «I2C buses» panel (root i2c-bus1-support 22.11): open; the page gates it on hub ≥ 1.3.0. */
+  i2cBus: false,
   splitPhase: !preview,
   /** «Add a module» on Points (bus 0, v1.1.2 — operator 02.11 via root). Shown since root's .139 run
    *  (03.11); the page itself gates it on hub ≥ 1.1.2. */
   addModule: false,
   /** MQTT «Secure connection (TLS, mqtts)» (root 03.11): the hub takes mqtts:// but sets no CA / cert
    *  bundle, so the connection fails verification and was never tested. Hidden until root's HW run;
-   *  a hub that already has an mqtts:// URI still shows it, read-only. */
+   *  a hub that already has an mqtts:// URI still shows it, read-only. Hub 1.1.8 (broker CA upload, `tls` in
+   *  mqtt-config) opens it regardless (MqttBrokerForm). */
   mqttTls: !preview,
   /** «Use as the three-phase input» on a U3I3 card (v1.1.2 rebind, operator 03.11 via root): shown since root's
    *  .139 gate (03.11, image 4456a483). */

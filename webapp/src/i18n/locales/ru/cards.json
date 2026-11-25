@@ -173,5 +173,10 @@
   "evDearTitle": "{name} вчера: {energy} в зоне «{zone}»",
   "evDearText": "Та же энергия в зоне «{cheapest}» обошлась бы на ≈ {money} дешевле — по ставкам плана за фактически потреблённое.",
   "vampExcluding": "Не учтены: {names} — у них свой график работы.",
-  "evChargingRole": "Зарядка EV"
+  "evChargingRole": "Зарядка EV",
+  "dynamicPrice": "динамическая",
+  "priceNow": "Цена сейчас:",
+  "yesterday": "Вчера",
+  "statusOk": "в норме",
+  "colMonth": "С начала месяца"
 }

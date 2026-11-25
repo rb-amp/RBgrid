@@ -19,7 +19,10 @@ import { HistoryPage } from './pages/HistoryPage';
 import { EventsPage } from './pages/EventsPage';
 import { EconomicsPage } from './pages/EconomicsPage';
 import { ConfigurationPage } from './pages/ConfigurationPage';
-import { TariffsPage } from './pages/TariffsPage';
+import { TariffsPricesPage } from './pages/TariffsPricesPage';
+import { AiPage } from './pages/AiPage';
+import { KioskPage } from './pages/KioskPage';
+import { AppliancePage } from './pages/AppliancePage';
 import { ConfirmProvider } from './components/common/ConfirmDialog';
 
 /** Gate the app behind a device connection — first step is choosing a device or demo mode. */
@@ -37,6 +40,8 @@ const App: React.FC = () => (
         <DeviceLanguage />
         <HashRouter>
           <Routes>
+            {/* «Wall display»: a board on the whole screen, outside the shell (UI redesign §7). */}
+            <Route path="/board/:id" element={<KioskPage />} />
             <Route path="/" element={<AppShell />}>
               <Route index element={<Navigate to="dashboard" replace />} />
               <Route path="dashboard" element={<DashboardPage />} />
@@ -45,11 +50,16 @@ const App: React.FC = () => (
               <Route path="setup" element={<Navigate to="/onboarding" replace />} />
               <Route path="devices" element={<DevicesPage />} />
               <Route path="point/:unitKey" element={<PointDetailPage />} />
+              <Route path="appliance/:groupId" element={<AppliancePage />} />
               <Route path="history" element={<HistoryPage />} />
               <Route path="events" element={<EventsPage />} />
               <Route path="economics" element={<EconomicsPage />} />
-              <Route path="tariffs" element={<TariffsPage />} />
+              <Route path="tariffs" element={<TariffsPricesPage />} />
+              <Route path="tariffs/:tab" element={<TariffsPricesPage />} />
+              <Route path="prices" element={<Navigate to="/tariffs/dynamic" replace />} />
+              <Route path="ai" element={<AiPage />} />
               <Route path="config" element={<ConfigurationPage />} />
+              <Route path="config/:section" element={<ConfigurationPage />} />
               <Route path="settings" element={<Navigate to="/config" replace />} />
               <Route path="*" element={<Navigate to="dashboard" replace />} />
             </Route>

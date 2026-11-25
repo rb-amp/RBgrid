@@ -51,6 +51,9 @@ export interface LineConfig {
   idleTimeoutMin?: number;
   /** v1.1.2 (root 6e32d29): false = live only, no hour/day/month records; undefined = the hub doesn't say. */
   history?: boolean;
+  /** v1.1.8 (root point-nesting): HEX4 of the point this one is measured inside (a load in a metered
+   *  sub-panel); undefined = top level (0 on the wire). Its power is already in the parent's. */
+  inside?: string;
 }
 
 export interface UnitsConfigJoin {
@@ -98,6 +101,7 @@ function toLineConfig(u: JsonObject): LineConfig {
     trunk: u.role_trunk === 1 || u.role_trunk === true,
     chargeThresholdW: posOrUndef(u.charge_threshold_w),
     idleTimeoutMin: posOrUndef(u.idle_timeout_min),
+    inside: hexKey(u.inside) === '0000' ? undefined : hexKey(u.inside),
   };
 }
 

@@ -44,6 +44,25 @@ export interface SecurityConfig {
   origins_max?: number;
 }
 
+/** One certificate of the broker CA the hub holds for mqtts:// (hub 1.1.8, GET/POST /api/system/mqtt-ca). */
+export interface MqttCaCert {
+  subject: string;
+  issuer: string;
+  /** ISO UTC. */
+  valid_from?: string;
+  valid_to?: string;
+  /** False when the certificate is not a CA (the hub still stores it, with a warning). */
+  ca?: boolean;
+}
+
+export interface MqttCaStatus {
+  present: boolean;
+  certs: MqttCaCert[];
+  /** Upload reply: the hub's note when no certificate is a CA. */
+  warning?: string;
+  requiresReboot?: boolean;
+}
+
 /**
  * GET /api/system/backup — the ON-DEVICE restore point (single slot, 6 config files; token
  * files excluded). There is NO bundle download — this is "create restore point", not "download".
@@ -102,6 +121,12 @@ export interface DeviceTransport {
   setConfig(domain: ConfigDomain, doc: JsonObject): Promise<SetConfigResult | void>;
   /** POST mqtt-config {broker_uri} (apply-on-restart). Optional: transports without it → read-only. */
   setMqttBroker?(uri: string): Promise<SetConfigResult>;
+  /** The uploaded broker CA (hub 1.1.8); null when unsupported. Direct/HTTP only. */
+  getMqttCa?(): Promise<MqttCaStatus | null>;
+  /** Upload a PEM (≤ 8 KB, certificates only; applies at the next restart). 400 field=pem on a bad file. */
+  setMqttCa?(pem: string): Promise<MqttCaStatus>;
+  /** Remove it: back to the public CA bundle at the next restart. */
+  deleteMqttCa?(): Promise<MqttCaStatus>;
   /**
    * Patch ONE unit's declarative fields (POST /api/v1/units/{hex}, canon a3b5fc62): any of
    * name, short_name, phase, rated_power_w, max_current_a, role. Live + persisted, atomic.

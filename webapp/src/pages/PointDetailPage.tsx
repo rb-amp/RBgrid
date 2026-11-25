@@ -8,11 +8,14 @@
  * sev-critical. For an EV station the current session (status-from-power) is added. Plain SVG,
  * ru-RU, dark tokens — consistent with the redesigned Overview.
  */
-import React, { useMemo, useState, useRef } from 'react';
+import { ROLE_ICONS, roleIcon } from '../entities/roleVisual';
+import { PageSkeleton } from '../components/common/PageSkeleton';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { StatsMediaAlert } from '../components/common/StatsMediaAlert';
 import { dayAvgRate, solarValue } from '../economics/costRate';
 import { useDeviceClock, formatDeviceTime } from '../core/deviceTime';
 import { useParams, Link as RouterLink, useNavigate, useLocation } from 'react-router-dom';
-import { Box, Stack, Typography, Button, ToggleButton, ToggleButtonGroup, CircularProgress, Alert, Link, Accordion, AccordionSummary, AccordionDetails } from '@mui/material';
+import { Box, Stack, Typography, Button, ToggleButton, ToggleButtonGroup, Alert, Link, Accordion, AccordionSummary, AccordionDetails, Breadcrumbs, Link as MuiLink } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { Card } from '@rbgrid/design-system';
@@ -31,8 +34,9 @@ import { UnitEntityGroup, unitMetricValue } from '../entities/model';
 import { useDsTokens } from '../theme/useDsTokens';
 import { dsFonts } from '../theme/dsTokens';
 import { pwW, curA, volt, enWh, nf, reactive } from '../components/common/ruFormat';
-import { isStation, fullNameOf, roleLabel, isGenerationUnit } from './overviewData';
-import { apiUnitId, isSupplyRole, VBUS_KEY } from '../entities/siteModel';
+import { isStation, fullNameOf, roleLabel, isGenerationUnit, deviceSets, lineUnits, isCarPark } from './overviewData';
+import { useDeviceGroups } from '../hooks/useDeviceGroups';
+import { apiUnitId, isSupplyRole, VBUS_KEY, nameWithShort } from '../entities/siteModel';
 import { deriveStationStatus, STATION_STATUS, stationStatusTooltip, evThresholds, stationThresholds } from '../components/stations/evStatus';
 import { EvConfig } from '../types/config';
 import { useElementWidth } from '../hooks/useElementWidth';
@@ -46,27 +50,9 @@ import { useConfirm } from '../components/common/ConfirmDialog';
 import { useMoneyFormat } from '../hooks/useMoneyFormat';
 import { getApiClient } from '../services/api';
 import { WALLCLOCK_TS } from '../entities/history';
-import { historyHref, winForPeriod } from './historyLink';
+import { historyHref } from './historyLink';
+import { PeriodPicker, usePeriodWindow, usePeriodBack } from '../components/common/PeriodPicker';
 
-const ICON: Record<string, string> = {
-  plug: 'M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4',
-  sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
-  drop: 'M12 2.7l5.7 5.7a8 8 0 1 1-11.4 0z',
-  flame: 'M12 2c1 3 5 5 5 10a5 5 0 0 1-10 0c0-3 2-4 2-7 1 1 2 2 3 4',
-  bulb: 'M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z',
-  car: 'M3 13l2-6h14l2 6v4H3zM6 17v2M18 17v2M7 13h.01M17 13h.01',
-  tower: 'M12 2v20M5 22l7-20 7 20M7 9h10M6 14h12',
-};
-function iconFor(g: UnitEntityGroup): string {
-  const n = `${g.point ?? ''} ${g.name}`.toLowerCase();
-  if (/(ev|charg|заряд|авто|car)/.test(n)) return 'car';
-  if (/(solar|солн|pv|генер)/.test(n)) return 'sun';
-  if (/(boiler|бойлер|water|вода|hot)/.test(n)) return 'drop';
-  if (/(heat|отопл|flame|печ|furnace)/.test(n)) return 'flame';
-  if (/(light|освещ|lamp|свет)/.test(n)) return 'bulb';
-  if (/(main|ввод|grid|сеть)/.test(n)) return 'tower';
-  return 'plug';
-}
 
 const SRC_LABEL: Record<string, string> = { rbamp: 'rbAmp', espnow: 'ESP-NOW' };
 /** History energy is ALWAYS float Wh on the wire (canon fc0f962b). */
@@ -84,12 +70,19 @@ const scaleNum = (v: number): string => nf(v, Math.abs(v) >= 100 ? 0 : Math.abs(
 
 export const PointDetailPage: React.FC = () => {
   const { unitKey = '' } = useParams<{ unitKey: string }>();
-  const setupOpen = /[?&]setup\b/.test(useLocation().search);
+  const loc = useLocation();
+  const setupOpen = /[?&]setup\b/.test(loc.search);
+  // Where the user came from (UI redesign N7): the crumb leads back there.
+  const fromOverview = (loc.state as { from?: string } | null)?.from === 'dashboard';
   const setupScrolled = useRef(false);
   const { data } = useTelemetryEntities();
   const caps = useCapabilities();
   const unitsCfg = useUnitsConfig();
   const sysShadow = useConfigShadow('system'); // system.ev: the hub's station thresholds
+  // Opened directly (a bookmark), the system domain may not be loaded yet — the station's price and
+  // thresholds come from it (round 2 ev N-01 on Economics, same here).
+  const sysLoaded = Object.keys(sysShadow.reported ?? {}).length > 0;
+  useEffect(() => { if (!sysLoaded) void sysShadow.load().catch(() => undefined); }, [sysLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
   // BASIC module (root dd861a54): consumption only, accuracy floor ≈1.5 % of the CT.
   const basicPoint = useIsBasicPoint(unitKey);
   const currentOnly = useIsCurrentOnlyPoint(unitKey); // I1/I2/I3: monitoring, not metering
@@ -101,7 +94,12 @@ export const PointDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const mf = useMoneyFormat(data?.system.totals?.tariff?.currency);
 
-  const [period, setPeriod] = useState<HistoryPeriod>('hour');
+  // The trend's period is the one History and Economics use (UI redesign N4), shared for the tab's
+  // session; its step follows the window (hours of a day, days of a week / month, months of a year).
+  const [win, setWin] = usePeriodWindow();
+  const step = usePeriodBack(win); // ‹ › whole periods back (round 2 uiux U12)
+  const span = step.span;
+  const period: HistoryPeriod = span.step;
   const [ctype, setCtype] = useState<ChartType>('power');
   const [delBusy, setDelBusy] = useState(false);
   const [delErr, setDelErr] = useState<string | null>(null);
@@ -111,27 +109,34 @@ export const PointDetailPage: React.FC = () => {
   const group = data?.units.find((u) => u.unitKey === unitKey)
     ?? data?.units.find((u) => (unitsCfg.forGroup(u)?.hex ?? apiUnitId(u.unitKey)) === (apiUnitId(unitKey) ?? unitKey).toUpperCase());
   const histType: HistoryType = ctype === 'energy' ? 'energy' : 'electrical';
+  // A phase of an appliance: the crumbs lead to the appliance (round 2 home N-07 / uiux N14).
+  const { names: applNames } = useDeviceGroups();
+  const appliance = useMemo(() => {
+    if (!data || !group) return null;
+    const st = deviceSets(lineUnits(data.units, unitsCfg), unitsCfg).find((x) => x.units.length > 1 && x.units.some((u) => u.unitKey === group.unitKey));
+    return st && st.groupId != null ? { id: st.groupId, name: applNames.get(st.groupId) || fullNameOf(st.lead, unitsCfg) } : null;
+  }, [data, group, unitsCfg, applNames]);
   // REST takes HEX4 ids only ("main" → 0006); legacy telemetry keys are translated here.
   // The configured unit's HEX4 wins (an rbAmp input may still be keyed "main" in telemetry).
   const apiId = group ? (unitsCfg.forGroup(group)?.hex ?? apiUnitId(group.unitKey)) : null;
-  const { records } = useHistory(apiId, period, histType);
+  const { records, loading: histLoading } = useHistory(apiId, period, histType, span.limit, { from: span.from, to: span.to });
 
   // A generation point's energy is what it PRODUCED (`es`), not «взято» (UX audit GEN-12).
   const genPoint = !!group && isGenerationUnit(group, unitsCfg);
   const series = useMemo(() => {
     if (ctype === 'energy') {
       const recs = (records as HistoryEnergyRecord[]).filter((r) => typeof r.ts === 'number' && r.ts >= WALLCLOCK_TS) /* no uptime-stamped / 1970 test records (INP-05) */;
-      return [...recs].reverse().slice(-24).map((r) => ({ ts: r.ts, value: toKwh((genPoint ? r.es : r.ec) ?? 0) }));
+      return recs.filter((r) => r.ts >= span.from && r.ts < span.to).sort((a, b) => a.ts - b.ts).map((r) => ({ ts: r.ts, value: toKwh((genPoint ? r.es : r.ec) ?? 0) }));
     }
     const recs = (records as HistoryElectricalRecord[]).filter((r) => typeof r.ts === 'number' && r.ts >= WALLCLOCK_TS) /* no uptime-stamped / 1970 test records (INP-05) */;
     // A generation point's output is negative on the wire (export) — drawn as a positive hump,
     // not a noon «dip» (rerun 16.10 GEN-R09).
-    return [...recs].reverse().slice(-48).map((r) => ({ ts: r.ts, value: ctype === 'power' ? (genPoint ? Math.abs(r.p_act) : r.p_act) : r.v }));
-  }, [records, ctype, genPoint]);
+    return recs.filter((r) => r.ts >= span.from && r.ts < span.to).sort((a, b) => a.ts - b.ts).map((r) => ({ ts: r.ts, value: ctype === 'power' ? (genPoint ? Math.abs(r.p_act) : r.p_act) : r.v }));
+  }, [records, ctype, genPoint, span.from, span.to]);
 
   if (!data) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}><CircularProgress aria-label={t('common.loading')} /></Box>
+      <PageSkeleton kind="dashboard" />
     );
   }
 
@@ -156,7 +161,7 @@ export const PointDetailPage: React.FC = () => {
   const deletePoint = async () => {
     if (!apiId) return;
     const ok = await confirm({
-      title: t('point.deleteConfirm', { name: fullNameOf(group, unitsCfg) }),
+      title: t('point.deleteConfirm', { name: nameWithShort(group, unitsCfg.forGroup(group)) }),
       body: t('point.deleteBody'), confirmLabel: t('common.delete'), danger: true,
     });
     if (!ok) return;
@@ -186,12 +191,18 @@ export const PointDetailPage: React.FC = () => {
   if ((group.caps ?? []).some((c) => c === 'PERSISTED' || c === 'DEVICE_ENERGY')) capWords.push(t('point.capPersisted'));
   if (cfg?.phase) capWords.push(t('point.capPhase', { phase: phaseLabel(cfg.phase) }));
 
+  // Above its rating — the rule of «Needs attention» and Events (round 3 business R2: «normal» at 128 %).
+  const ratedW = !isSupplyRole(cfg?.role) && !isGenerationUnit(group, unitsCfg) ? cfg?.ratedPowerW : undefined;
+  const overPct = group.present && ratedW && power != null && Math.abs(power) > ratedW ? (Math.abs(power) / ratedW) * 100 : null;
   const statusText = !group.present
-    ? (group.noChannel ? t('cards.noChannel') : t('common.noData'))
-    : station
-      ? STATION_STATUS[deriveStationStatus(power, group.present, null, stationThresholds(evThresholds(sysShadow.reported.ev as unknown as EvConfig | undefined), cfg))].label
-      : t('point.statusNormal');
-  const statusColor = !group.present ? ds.statusOffline : ds.statusOnline;
+    // «no link», as the banner above and the Overview say (round 3 ev N-05: «no data» here)
+    ? (group.noChannel ? t('cards.noChannel') : t('cards.offline'))
+    : overPct != null
+      ? `${t('cards.aboveRated')} · ${nf(overPct, 0)} %`
+      : station
+        ? STATION_STATUS[deriveStationStatus(power, group.present, null, stationThresholds(evThresholds(sysShadow.reported.ev as unknown as EvConfig | undefined), cfg))].label
+        : t('point.statusNormal');
+  const statusColor = !group.present ? ds.statusOffline : overPct != null ? ds.sevCritical : ds.statusOnline;
 
   // live values gated by fields_by_source for this unit's src_class
   const showPf = isFieldMeasured(caps, group.srcClass, 'pf');
@@ -224,7 +235,9 @@ export const PointDetailPage: React.FC = () => {
   const totIn = known(unitMetricValue(group, 'energy_in'));
   const totOut = known(unitMetricValue(group, 'energy_out'));
 
-  const mono = { fontFamily: dsFonts.mono, fontVariantNumeric: 'tabular-nums' as const };
+// One typeface for figures (UI/UX audit U06): the UI sans with tabular figures; mono only for codes and logs.
+  const mono = { fontVariantNumeric: 'tabular-nums' as const };
+  const techMono = { fontFamily: dsFonts.mono, fontVariantNumeric: 'tabular-nums' as const };
 
   // Today's money of the point at the input's AVERAGE price of the day (rerun 16.10 R-T1 — the
   // current zone's rate made the kitchen 4,82 ₽ here vs 1,92 ₽ on the Overview); the live rate
@@ -234,6 +247,9 @@ export const PointDetailPage: React.FC = () => {
   const buy = avg.buy ?? (liveR?.buy_rate && liveR.buy_rate > 0 ? liveR.buy_rate : null);
   const sell = avg.sell ?? (liveR?.sell_rate && liveR.sell_rate > 0 ? liveR.sell_rate : null);
   const dayMoneyIn = dayIn != null && buy != null ? (dayIn / 1000) * buy : null;
+  // Fees and margin only on a car park (isCarPark); a home's charger shows the energy's cost.
+  const park = !!data && isCarPark(data.units, unitsCfg, sysShadow.reported.site_profile);
+  const stationPrice = (() => { const ev = sysShadow.reported.ev as { price_per_kwh?: unknown } | undefined; return typeof ev?.price_per_kwh === 'number' && ev.price_per_kwh > 0 ? ev.price_per_kwh : null; })();
   // A generation point's day = the sun's value (self-use at the day's average price + its export
   // revenue) — the same figure as «Солнце сегодня» and Economics (rerun 16.10 GEN-R01).
   const dayMoneyOut = genPoint && dayOut != null
@@ -242,11 +258,30 @@ export const PointDetailPage: React.FC = () => {
 
   return (
     <Box>
-      {/* Back — the page has no menu item (UX audit HEU-22/PNT-21: only the browser's back). */}
-      <Button size="small" startIcon={<ArrowBackIcon />} sx={{ mb: 1, ml: -1 }}
-        onClick={() => (window.history.length > 1 ? navigate(-1) : navigate('/devices'))}>
-        {t('common.back')}
-      </Button>
+      {/* Breadcrumbs (UI redesign N7): «Overview › Kitchen» when opened from the Overview, else
+          «Points › Kitchen»; Back still goes to the previous page (HEU-22/PNT-21). */}
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1, ml: -1 }}>
+        <Button size="small" startIcon={<ArrowBackIcon />}
+          onClick={() => (window.history.length > 1 ? navigate(-1) : navigate(fromOverview ? '/dashboard' : '/devices'))}>
+          {t('common.back')}
+        </Button>
+        <Breadcrumbs aria-label={t('point.crumbsAria')} sx={{ fontSize: 13 }}>
+          <MuiLink component={RouterLink} to={fromOverview ? '/dashboard' : '/devices'} underline="hover" color="text.secondary">
+            {t(fromOverview ? 'shell.navOverview' : 'shell.navPoints')}
+          </MuiLink>
+          {appliance && (
+            <MuiLink component={RouterLink} to={`/appliance/${appliance.id}`} underline="hover" color="text.secondary">{appliance.name}</MuiLink>
+          )}
+          <Typography sx={{ fontSize: 13 }} color="text.primary">{fullNameOf(group, unitsCfg)}</Typography>
+        </Breadcrumbs>
+      </Stack>
+      <StatsMediaAlert />
+      {/* A point without link says so first (round 2 ev N-05: its page read «no data» with a flat 0 W line). */}
+      {!group.present && (
+        <Alert severity="warning" sx={{ mb: 2 }} action={<Button color="inherit" size="small" component={RouterLink} to="/events">{t('point.offlineWhat')}</Button>}>
+          {t('point.offlineBanner')}
+        </Alert>
+      )}
       {/* Header */}
       <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
         <Box sx={{
@@ -256,7 +291,7 @@ export const PointDetailPage: React.FC = () => {
         }}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"
             stroke={group.present ? ds.inkMuted : ds.statusOffline} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <path d={ICON[iconFor(group)]} />
+            <path d={ROLE_ICONS[roleIcon(group, unitsCfg.forGroup(group)?.role)]} />
           </svg>
         </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -355,6 +390,26 @@ export const PointDetailPage: React.FC = () => {
                 <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>{t('point.energyToday')}</Typography>
                 <Typography sx={{ ...mono, fontSize: 16, fontWeight: 600, color: ds.ink }}>{enWh(dayIn)}</Typography>
               </Stack>
+              {/* The station's money today, labelled (round 1/2 EV-05: an unlabelled «≈ 8,22 €» was the
+                  purchase): fees at the current customer price, the purchase at the day's average price. */}
+              {park && stationPrice != null && dayIn != null && (
+                <Stack spacing={0.25}>
+                  <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>{t('point.evFeesToday')}</Typography>
+                  <Typography sx={{ ...mono, fontSize: 16, fontWeight: 600, color: ds.ink }}>≈ {mf.money((dayIn / 1000) * stationPrice)}</Typography>
+                </Stack>
+              )}
+              {dayMoneyIn != null && (
+                <Stack spacing={0.25}>
+                  <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>{t(park ? 'point.evBoughtToday' : 'point.evCostToday')}</Typography>
+                  <Typography sx={{ ...mono, fontSize: 16, fontWeight: 600, color: ds.ink }}>≈ {mf.money(dayMoneyIn)}</Typography>
+                </Stack>
+              )}
+              {park && stationPrice != null && dayIn != null && dayMoneyIn != null && (
+                <Stack spacing={0.25}>
+                  <Typography sx={{ fontSize: 12, color: ds.inkMuted }}>{t('point.evMarginToday')}</Typography>
+                  <Typography sx={{ ...mono, fontSize: 16, fontWeight: 600, color: ds.ink }}>≈ {mf.money((dayIn / 1000) * stationPrice - dayMoneyIn)}</Typography>
+                </Stack>
+              )}
             </Stack>
             <Typography sx={{ fontSize: 12, color: ds.inkMuted, mt: 1 }}>
               {t('point.sessionHistoryNote')}
@@ -372,12 +427,8 @@ export const PointDetailPage: React.FC = () => {
               <ToggleButton value="voltage">{t('point.voltage')}</ToggleButton>
               <ToggleButton value="energy">{t('point.energy')}</ToggleButton>
             </ToggleButtonGroup>
-            <ToggleButtonGroup size="small" exclusive value={period} onChange={(_, v) => v && setPeriod(v)}>
-              <ToggleButton value="hour">{t('point.periodHours')}</ToggleButton>
-              <ToggleButton value="day">{t('point.periodDays')}</ToggleButton>
-              <ToggleButton value="week">{t('point.periodWeeks')}</ToggleButton>
-            </ToggleButtonGroup>
-            <Link component={RouterLink} to={historyHref({ point: unitKey, win: winForPeriod(period), metric: ctype, view: 'table' })} underline="hover" sx={{ fontSize: 13 }}>{t('common.asTable')}</Link>
+            <PeriodPicker win={win} onWin={setWin} back={step.back} onBack={step.setBack} label={step.label} canBack={!(step.back > 0 && !series.length && !histLoading)} />
+            <Link component={RouterLink} to={historyHref({ point: unitKey, win, metric: ctype, view: 'table' })} underline="hover" sx={{ fontSize: 13 }}>{t('common.asTable')}</Link>
           </Stack>
           <Trend
             series={series}
@@ -396,7 +447,7 @@ export const PointDetailPage: React.FC = () => {
         <Card>
           <Typography sx={{ fontWeight: 700, fontSize: 15, mb: 1 }}>{t('point.counters')}</Typography>
           <Stack direction="row" spacing={4} flexWrap="wrap" useFlexGap>
-            <Counter label={t('point.todayIn')} value={enWh(dayIn)} sub={dayMoneyIn != null ? `≈ ${mf.money(dayMoneyIn)}` : undefined} ds={ds} mono={mono} />
+            <Counter label={t('point.todayIn')} value={enWh(dayIn)} sub={dayMoneyIn != null ? `≈ ${mf.money(dayMoneyIn)}${station ? ` · ${t('point.purchaseWord')}` : ''}` : undefined} ds={ds} mono={mono} />
             {(dayOut ?? 0) > 0 && <Counter label={t(genPoint ? 'point.todayGen' : 'point.todayOut')} value={enWh(dayOut)} sub={dayMoneyOut != null ? `≈ +${mf.money(dayMoneyOut)}` : undefined} ds={ds} mono={mono} />}
             <Counter label={t('point.totalIn')} value={enWh(totIn)} ds={ds} mono={mono} />
             {/* BASIC counts no export; an «отдано» left from a previous module isn't this point's. */}
@@ -422,12 +473,14 @@ export const PointDetailPage: React.FC = () => {
       <Box sx={{ mb: 2 }}>
         <Card>
           <Typography sx={{ fontWeight: 700, fontSize: 15, mb: 1 }}>{t('point.techDetails')}</Typography>
-          <Box sx={{ ...mono, fontSize: 12, color: ds.inkMuted, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
+          <Box sx={{ ...techMono, fontSize: 12, color: ds.inkMuted, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
             {[
               `unit_id   ${group.unitKey}`,
               `point     ${group.point ?? '—'}`,
               `source    ${group.src ?? '—'} · ${group.srcClass}`,
               `module/ch ${String(group.attributes?.module ?? '—')} / ${chText(group.attributes?.ch, group.attributes?.ch_label)}`,
+              // The same module address may sit on both buses: the bus tells them apart (hub 1.3.0).
+              `i2c bus   ${String(group.attributes?.bus ?? pointHardware(unitKey, hwAll.sensors, hwAll.modules).sensor?.bus ?? '—')}`,
               `caps      ${(group.caps ?? []).join(', ') || '—'}`,
               cfg?.ratedPowerW ? t('point.techRated', { value: `${nf(cfg.ratedPowerW)} ${t('units.W')}` }) : '',
             ].filter(Boolean).join('\n')}
@@ -493,7 +546,7 @@ const Trend: React.FC<{
   const span = Math.max(0.001, max - min);
   const n = series.length;
   // Lines by TIME, not by index: a gap or a restart fragment no longer squeezes the hours.
-  const tsMin = series[0].ts, stepSec = period === 'hour' ? 3600 : period === 'day' ? 86400 : 7 * 86400;
+  const tsMin = series[0].ts, stepSec = period === 'hour' ? 3600 : period === 'day' ? 86400 : period === 'week' ? 7 * 86400 : 30 * 86400;
   const lineCurve: Curve = period === 'hour' && !nominalV ? 'step' : 'monotoneX';
   const tsMax = series[n - 1].ts + (lineCurve === 'step' ? stepSec : 0);
   const xT = (ts: number) => PAD_L + (tsMax === tsMin ? plotW / 2 : ((ts - tsMin) / (tsMax - tsMin)) * plotW);
@@ -511,7 +564,6 @@ const Trend: React.FC<{
     return formatDeviceTime(clock, ts, { day: '2-digit', month: '2-digit' }, dateLocale());
   };
   const minGap = period === 'hour' ? 32 : 48;
-  const step = n <= 1 ? 1 : Math.max(1, Math.ceil(minGap / (plotW / (n - 1))));
 
   return (
     // svg absolutely positioned: its pixel width must not hold the card open when it shrinks.
@@ -570,21 +622,26 @@ const Trend: React.FC<{
           left={PAD_L} right={W - PAD_R} top={PAD_T} bottom={PAD_T + plotH}
           ink={ds.ink} muted={ds.inkMuted} surface={ds.surface} border={ds.border} ariaLabel={t('point.trendAria', { unit })} />
         {/* the scale: top and bottom values (INP-10: no y axis at all) */}
-        <text x={PAD_L} y={PAD_T - 3} fill={ds.inkMuted} fontSize="10">{`${scaleNum(max)} ${unit}`}</text>
-        {kind === 'line' && <text x={PAD_L} y={PAD_T + plotH - 3} fill={ds.inkMuted} fontSize="10">{`${scaleNum(min)} ${unit}`}</text>}
-        {/* Each label once — fragments of one hour after a restart all read «23» (INP-10). */}
-        {series.map((s, i) => {
-          const lbl = fmtTick(s.ts);
-          const prevShown = series.slice(0, i).reverse().find((_, k) => (i - 1 - k) % step === 0);
-          // A new day's label always shows (H3P-13); a regular one too close to it gives way.
-          const dayMark = multiDay && period === 'hour' && clock.parts(s.ts).h === 0;
-          const nearMark = !dayMark && multiDay && period === 'hour' && series.some((o) => clock.parts(o.ts).h === 0 && Math.abs(x(series.indexOf(o)) - x(i)) < minGap);
-          if (!dayMark && (nearMark || i % step !== 0 || (prevShown && fmtTick(prevShown.ts) === lbl))) return null;
-          return (
-            <text key={`t${i}`} x={x(i)} y={H - 6} fill={ds.inkMuted} fontSize="11"
-              textAnchor={i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}>{lbl}</text>
-          );
-        })}
+        <text x={PAD_L} y={PAD_T - 3} fill={ds.inkMuted} fontSize="12">{`${scaleNum(max)} ${unit}`}</text>
+        {kind === 'line' && min !== max && <text x={PAD_L} y={PAD_T + plotH - 3} fill={ds.inkMuted} fontSize="12">{`${scaleNum(min)} ${unit}`}</text>}
+        {/* Labels by their place on the axis, at least minGap apart (round 3 uiux V05, business R7: chosen by
+            record number but placed by time, «19 20» ran together after a gap); a new day's label wins;
+            each label once — fragments of one hour after a restart all read «23» (INP-10). */}
+        {(() => {
+          const marks: { i: number; x: number; lbl: string; day: boolean }[] = series.map((s, i) => ({
+            i, x: x(i), lbl: fmtTick(s.ts), day: multiDay && period === 'hour' && clock.parts(s.ts).h === 0,
+          }));
+          const shown: typeof marks = [];
+          // Day marks first, then the rest where they fit.
+          for (const m of [...marks.filter((q) => q.day), ...marks.filter((q) => !q.day)]) {
+            if (shown.some((o) => Math.abs(o.x - m.x) < minGap || (o.lbl === m.lbl && !m.day))) continue;
+            shown.push(m);
+          }
+          return shown.map((m) => (
+            <text key={`t${m.i}`} x={m.x} y={H - 6} fill={ds.inkMuted} fontSize="12"
+              textAnchor={m.x - PAD_L < 16 ? 'start' : W - PAD_R - m.x < 16 ? 'end' : 'middle'}>{m.lbl}</text>
+          ));
+        })()}
       </svg>
     </Box>
   );

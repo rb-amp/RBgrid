@@ -20,5 +20,17 @@
   "notBoughtTitle": "Not bought from the grid",
   "notBought": "Solar energy the house used itself. It did not have to be bought — valued at the period's average buying price.",
   "closedRecordsTitle": "Closed records",
-  "closedRecords": "The hub writes the totals of each hour, day and month after it ends. The running hour is added when it ends; the Overview already counts it from the live counters."
+  "closedRecords": "The hub writes the totals of each hour, day and month after it ends. The running hour is added when it ends; the Overview already counts it from the live counters.",
+  "pointTitle": "Metering point",
+  "point": "Where a current is measured: the input, a line or an appliance. A point is an rbAmp module channel with a name, a role and history.",
+  "inputTitle": "Input",
+  "input": "The point through which energy comes from the grid into the house or plant. Purchase, export and money for everything are counted by it.",
+  "lineTitle": "Line",
+  "line": "A point on one load or a group of loads after the input: kitchen, heat pump, machine. Lines show where the energy goes.",
+  "zoneTitle": "Tariff zone",
+  "zone": "Hours with one price, e.g. day and night. Zones and prices are set in Tariffs.",
+  "unmeteredTitle": "Unmetered",
+  "unmetered": "The input minus the sum of the lines: what loads without their own point use.",
+  "standbyTitle": "Standby use",
+  "standby": "The power the house draws when «everything is off»: power supplies, chargers, devices on standby. Counted from the quietest night hours."
 }

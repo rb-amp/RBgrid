@@ -17,6 +17,7 @@ import { useUnitsConfig, phaseLabel } from '../../hooks/useUnitsConfig';
 import { useGridSystem } from '../../hooks/useGridSystem';
 import { GridKind, phaseChoices, mainsVoltageText, deriveGridKind, validatedKinds } from '../../entities/gridSystem';
 import { nf } from '../common/ruFormat';
+import { useConfirm } from '../common/ConfirmDialog';
 import { t } from '../../i18n';
 import { useTelemetryEntities } from '../../hooks/useTelemetryEntities';
 import { mainUnit } from '../../pages/overviewData';
@@ -42,6 +43,7 @@ export const GridPanel: React.FC = () => {
   const units = useConfigShadow('units');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ sev: 'success' | 'error'; text: string } | null>(null);
+  const confirm = useConfirm();
 
   const declared = (() => {
     const g = sys.reported.grid as { system?: unknown } | undefined;
@@ -66,6 +68,18 @@ export const GridPanel: React.FC = () => {
   if (!grid.supported) return null;
 
   const choose = async (v: string) => {
+    if (v === declared) return;
+    // It is written at once and every point's phase is checked against it (role audit 22.11 F02:
+    // a slip of the list re-flagged five points) — say what changes and which points would not fit.
+    const ok = new Set(phaseChoices((v || '1P') as GridKind));
+    const list = Array.isArray(units.reported.units) ? (units.reported.units as JsonObject[]) : [];
+    const wouldMisfit = list.filter((u) => typeof u.phase === 'number' && !ok.has(u.phase))
+      .map((u) => String(u.name || u.short_name || ''));
+    if (!(await confirm({
+      title: t('gridPanel.confirmTitle', { kind: v ? kindLabel(v as GridKind) : t('gridPanel.auto') }),
+      body: wouldMisfit.length ? t('gridPanel.confirmMisfit', { points: wouldMisfit.join(', ') }) : t('gridPanel.confirmBody'),
+      confirmLabel: t('gridPanel.confirmApply'),
+    }))) return;
     setBusy(true); setMsg(null);
     try {
       await grid.save(v as GridKind | '');
@@ -85,9 +99,10 @@ export const GridPanel: React.FC = () => {
             onChange={(e) => { void choose(e.target.value); }}
             // A declared system not yet validated says what that means (3φ audit H3P-08: owners read
             // «not validated on hardware» as «my readings are wrong»).
-            helperText={declared
+            // Written on choosing it (SPEC §5.3: «applies at once» under such a field).
+            helperText={(declared
               ? (validated.includes(declared as GridKind) ? undefined : t('gridPanel.notValidatedHelp'))
-              : suggested === '1P' ? undefined : t('gridPanel.suggest', { kind: kindLabel(suggested) })}
+              : suggested === '1P' ? undefined : t('gridPanel.suggest', { kind: kindLabel(suggested) })) ?? t('common.appliesAtOnce')}
             sx={{ maxWidth: 360 }} SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
           >
             <MenuItem value="">{t('gridPanel.auto')}</MenuItem>

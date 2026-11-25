@@ -14,6 +14,7 @@ import { useCapabilities, useConfigShadow } from '../../core';
 import type { JsonObject } from '../../core';
 import { useDeviceGroups, DeviceGroup, MAX_GROUPS } from '../../hooks/useDeviceGroups';
 import { utf8Len } from '../common/utf8';
+import { useSectionForm } from '../../app/sectionForms';
 import { t } from '../../i18n';
 import { useUnsavedChanges } from '../../app/unsavedGuard';
 import { savedText } from '../../services/savedText';
@@ -37,24 +38,28 @@ export const GroupsPanel: React.FC = () => {
 
   useUnsavedChanges('groups', supported && JSON.stringify(draft.map((g) => ({ ...g, name: g.name.trim() }))) !== key);
 
-  if (!supported) return null;
   const maxBytes = caps.limits.nameBytes;
   const tooLong = (g: DeviceGroup) => utf8Len(g.name.trim()) > maxBytes;
   const invalid = draft.some((g) => !g.name.trim() || tooLong(g));
-  const dirty = JSON.stringify(draft.map((g) => ({ ...g, name: g.name.trim() }))) !== key;
+  const dirty = supported && JSON.stringify(draft.map((g) => ({ ...g, name: g.name.trim() }))) !== key;
+  // One «Save» for the section (SPEC §5.3) — this panel's own buttons only outside a section.
+  const inSection = useSectionForm({ id: 'groups', label: t('groups.title'), dirty, invalid, save: () => onSave(), reset: () => { setDraft(groups); setMsg(null); } });
+  if (!supported) return null;
   const orphaned = groups.filter((g) => !draft.some((d) => d.id === g.id) && (members.get(g.id) ?? 0) > 0);
   const nextId = () => { for (let i = 1; i <= 255; i++) if (!draft.some((g) => g.id === i)) return i; return 0; };
 
-  const onSave = async () => {
+  async function onSave(): Promise<boolean> {
     setBusy(true); setMsg(null);
     try {
       await save(draft.map((g) => ({ id: g.id, name: g.name.trim() })));
       setMsg({ sev: 'success', text: savedText('groups.saved') });
+      return true;
     } catch (e) {
       const err = e as { status?: number };
       setMsg({ sev: 'error', text: err.status === 401 || err.status === 403 ? t('common.adminTokenRequired') : t('common.deviceRejected') });
+      return false;
     } finally { setBusy(false); }
-  };
+  }
 
   return (
     <Box id="groups" sx={{ scrollMarginTop: 16 }}>
@@ -82,10 +87,12 @@ export const GroupsPanel: React.FC = () => {
               {t('groups.add')}
             </Button>
             <Box sx={{ flex: 1 }} />
-            <Stack direction="row" spacing={1}>
-              <Button variant="contained" disabled={!dirty || invalid || busy} onClick={onSave}>{busy ? t('common.saving') : t('common.save')}</Button>
-              <Button disabled={!dirty || busy} onClick={() => { setDraft(groups); setMsg(null); }}>{t('common.cancel')}</Button>
-            </Stack>
+            {!inSection && (
+              <Stack direction="row" spacing={1}>
+                <Button variant="contained" disabled={!dirty || invalid || busy} onClick={() => void onSave()}>{busy ? t('common.saving') : t('common.save')}</Button>
+                <Button disabled={!dirty || busy} onClick={() => { setDraft(groups); setMsg(null); }}>{t('common.cancel')}</Button>
+              </Stack>
+            )}
           </Stack>
         </Stack>
       </PanelCard>

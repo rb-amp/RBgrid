@@ -5,7 +5,7 @@
   "firstLogin": "first-login password",
   "remind": "The hub’s own Wi-Fi still uses the first-login password. Set your own so that only you can join it.",
   "newLabel": "New access-point password",
-  "help": "8–63 characters: Latin letters, digits, symbols. Applies at once — devices on the hub’s Wi-Fi reconnect.",
+  "help": "8–63 characters: Latin letters, digits, symbols. Applies at once with this button, apart from the section's bar — devices on the hub’s Wi-Fi reconnect.",
   "bad": "8–63 characters, Latin letters, digits and symbols only.",
   "save": "Change password",
   "reset": "Back to the first-login password",

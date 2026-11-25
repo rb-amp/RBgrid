@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import {
-  Button, Stack, List, ListItemButton, ListItemText, Chip, CircularProgress, Box,
+  Button, Stack, List, ListItemButton, ListItemText, Chip, CircularProgress, Box, Typography,
 } from '@mui/material';
 import WifiIcon from '@mui/icons-material/Wifi';
 import { PanelCard, NetworkStatus, FormField } from '@rbgrid/design-system';
@@ -69,52 +69,51 @@ export const NetworkPanel: React.FC = () => {
     }
   };
 
+  // One Wi-Fi card (role audit F07: «Status» and «Connection» read as two things), the join form under
+  // the current link; its own button is said to save apart from the section's bar (it restarts the hub).
   return (
-    <Stack spacing={2}>
-      <PanelCard title={t('network.status')}>
-        {!status ? (
-          <Box sx={{ color: 'text.secondary' }}>—</Box>
-        ) : (
-          <NetworkStatus
-            mode={modeWord(status.mode)}
-            ssid={status.ssid || status.ap_ssid || ''}
-            ip={status.sta_ip || status.ap_ip || ''}
-            rssi={status.rssi}
-            rssiText={status.rssi != null ? t('network.rssi', { dbm: status.rssi, word: t(rssiWordKey(status.rssi)) }) : undefined}
-            labels={{ mode: t('network.lblMode'), ssid: t('network.lblSsid'), ip: t('network.lblIp'), rssi: t('network.lblRssi') }}
-          />
-        )}
-      </PanelCard>
-
-      <PanelCard
-        title={t('network.connection')}
-        actionLabel={scanning ? t('network.scanning') : t('network.scan')}
-        actionIcon={scanning ? <CircularProgress size={16} aria-label={t('common.loading')} /> : <WifiIcon />}
-        actionDisabled={scanning}
-        onAction={scan}
-        alert={msg ?? undefined}
-        alertSeverity="info"
-      >
-        {networks.length > 0 && (
-          <List dense sx={{ maxHeight: 200, overflow: 'auto', mb: 1 }}>
-            {networks.map((n, i) => (
-              <ListItemButton key={`${n.bssid}-${i}`} onClick={() => setSsid(n.ssid)}>
-                <ListItemText primary={n.ssid || t('network.hidden')} secondary={t('network.netInfo', { auth: n.auth_mode, channel: n.channel })} />
-                <Chip size="small" label={`${n.rssi} dBm`} variant="outlined" />
-              </ListItemButton>
-            ))}
-          </List>
-        )}
-        <Stack spacing={2}>
-          <FormField label="SSID" value={ssid} onChange={setSsid} fullWidth />
-          <FormField label={t('network.password')} type="password" value={password} onChange={setPassword} fullWidth />
-          <Box>
-            <Button variant="contained" onClick={save} disabled={saving || !ssid}>
-              {saving ? t('common.saving') : t('network.saveReboot')}
-            </Button>
-          </Box>
-        </Stack>
-      </PanelCard>
-    </Stack>
+    <PanelCard
+      title={t('network.wifiTitle')}
+      actionLabel={scanning ? t('network.scanning') : t('network.scan')}
+      actionIcon={scanning ? <CircularProgress size={16} aria-label={t('common.loading')} /> : <WifiIcon />}
+      actionDisabled={scanning}
+      onAction={scan}
+      alert={msg ?? undefined}
+      alertSeverity="info"
+    >
+      {!status ? (
+        <Box sx={{ color: 'text.secondary' }}>—</Box>
+      ) : (
+        <NetworkStatus
+          mode={modeWord(status.mode)}
+          ssid={status.ssid || status.ap_ssid || ''}
+          ip={status.sta_ip || status.ap_ip || ''}
+          rssi={status.rssi}
+          rssiText={status.rssi != null ? t('network.rssi', { dbm: status.rssi, word: t(rssiWordKey(status.rssi)) }) : undefined}
+          labels={{ mode: t('network.lblMode'), ssid: t('network.lblSsid'), ip: t('network.lblIp'), rssi: t('network.lblRssi') }}
+        />
+      )}
+      <Typography sx={{ fontSize: 15, fontWeight: 600, mt: 2.5, mb: 1 }}>{t('network.otherNetwork')}</Typography>
+      {networks.length > 0 && (
+        <List dense sx={{ maxHeight: 200, overflow: 'auto', mb: 1 }}>
+          {networks.map((n, i) => (
+            <ListItemButton key={`${n.bssid}-${i}`} onClick={() => setSsid(n.ssid)}>
+              <ListItemText primary={n.ssid || t('network.hidden')} secondary={t('network.netInfo', { auth: n.auth_mode, channel: n.channel })} />
+              <Chip size="small" label={`${n.rssi} dBm`} variant="outlined" />
+            </ListItemButton>
+          ))}
+        </List>
+      )}
+      <Stack spacing={2}>
+        <FormField label="SSID" value={ssid} onChange={setSsid} fullWidth />
+        <FormField label={t('network.password')} type="password" value={password} onChange={setPassword} fullWidth />
+        <Box>
+          <Button variant="contained" onClick={save} disabled={saving || !ssid}>
+            {saving ? t('common.saving') : t('network.saveReboot')}
+          </Button>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>{t('network.ownSave')}</Typography>
+        </Box>
+      </Stack>
+    </PanelCard>
   );
 };

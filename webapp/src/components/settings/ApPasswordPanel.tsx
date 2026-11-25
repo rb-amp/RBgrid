@@ -10,10 +10,10 @@ import { Stack, Button, Alert, Typography, TextField } from '@mui/material';
 import { PanelCard, StatusChip } from '@rbgrid/design-system';
 import { useDeviceSession } from '../../core';
 import type { ApStatus } from '../../core/transport/types';
+import { useMarkReboot } from '../../app/rebootPending';
 import { t } from '../../i18n';
 import { useConfirm } from '../common/ConfirmDialog';
 import { getApiClient } from '../../services/api';
-import { RebootNowButton } from '../common/RebootNowButton';
 
 /** 8–63 printable ASCII (WPA2 passphrase), as the hub checks it. */
 export const apPasswordOk = (p: string): boolean => /^[\x20-\x7E]{8,63}$/.test(p);
@@ -26,6 +26,8 @@ export const ApPasswordPanel: React.FC = () => {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ sev: 'success' | 'warning' | 'error'; text: string; reboot?: boolean } | null>(null);
+  // «Saved, after a restart» goes to the one «Waits for a restart» strip (SPEC §5.3), not a button here.
+  useMarkReboot(!!msg?.reboot, t('ap.title'));
 
   const refresh = () => { session.transport.getAp().then(setAp).catch(() => setAp(null)).finally(() => setLoaded(true)); };
   // Without the admin token /api/system/ap is 403 — the network name still comes from /wifi/status (root .139).
@@ -80,7 +82,7 @@ export const ApPasswordPanel: React.FC = () => {
           <Button variant="contained" disabled={busy || !apPasswordOk(value)} onClick={save}>{t('ap.save')}</Button>
           {ap?.userSet && <Button color="inherit" disabled={busy} onClick={reset}>{t('ap.reset')}</Button>}
         </Stack>
-        {msg && <Alert severity={msg.sev} action={msg.reboot ? <RebootNowButton /> : undefined}>{msg.text}</Alert>}
+        {msg && <Alert severity={msg.sev}>{msg.text}</Alert>}
       </Stack>
     </PanelCard>
   );

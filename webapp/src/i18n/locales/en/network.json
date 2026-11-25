@@ -21,5 +21,8 @@
   "rssi": "{dbm} dBm · {word}",
   "rssiGood": "good",
   "rssiFair": "fair",
-  "rssiWeak": "weak"
+  "rssiWeak": "weak",
+  "wifiTitle": "Wi-Fi",
+  "otherNetwork": "Join another network",
+  "ownSave": "Saved by this button, apart from the section's bar: the hub restarts and joins the new network."
 }

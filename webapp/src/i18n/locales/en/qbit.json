@@ -4,11 +4,12 @@
   "2": "clock step",
   "3": "sensor data gap",
   "4": "recomputed",
-  "5": "estimate: a window over 6 h, lower accuracy",
+  "5": "estimate: lower accuracy (a sensor window over 6 h, or power from the nominal voltage)",
   "6": "consumption only (a source without direction)",
   "7": "clipping: the current hit the sensor's limit — energy under-counted",
   "8": "migrated from the old format",
   "9": "the module restarted — energy before its restart wasn't measured",
   "10": "the module firmware changed",
-  "11": "sensor reversed — consumption not metered"
+  "11": "sensor reversed — consumption not metered",
+  "12": "includes energy from a break in measurement, counted in this hour; its cost is approximate: which rate applied during the break isn't known"
 }

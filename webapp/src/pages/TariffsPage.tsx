@@ -8,9 +8,11 @@
  * echoes it unchanged.
  * Renders through the @rbgrid/design-system surface (Card / FormField / ToggleRow / StatusChip / InfoField).
  */
+import { zoneColorOf } from '../components/charts/StackedBar';
+import { PageSkeleton } from '../components/common/PageSkeleton';
 import React, { useEffect, useState } from 'react';
 import { HelpTip } from '../components/common/HelpTip';
-import { Box, Typography, Button, Stack, Alert, CircularProgress, Grid, IconButton, ToggleButton, ToggleButtonGroup } from '@mui/material';
+import { Box, Typography, Button, Stack, Alert, Grid, IconButton, ToggleButton, ToggleButtonGroup } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { zoneCoverage, zoneRange, zoneDays, daysText, ALL_DAYS, hhmm, parseHhmm, WeekSpan } from '../economics/zoneCoverage';
@@ -31,6 +33,8 @@ import { DecimalField } from '../components/common/DecimalField';
 import { zoneDisplayName } from '../economics/tariffPlan';
 import { toSingleZone } from '../components/onboarding/quickTariffPlan';
 import { useCapabilities } from '../core';
+import { useNavigate } from 'react-router-dom';
+import { useTelemetryEntities } from '../hooks/useTelemetryEntities';
 
 /** Zone types the editor offers. HOLIDAY isn't: the v1.1.x hub has no holiday dates to fill
  *  (root 02.11 — the zone never activates); a plan that already has one still shows it. */
@@ -50,7 +54,8 @@ function condLabel(c: TariffZoneCondition): string {
   return c.condition_type;
 }
 
-export const TariffsPage: React.FC = () => {
+/** `embedded`: inside «Tariffs & prices» (its own title and tabs above). */
+export const TariffsPage: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
   const [env, setEnv] = useState<BaseResponse<TariffPlanConfigData> | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -62,6 +67,10 @@ export const TariffsPage: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const setErr = (id: string, e: string | null) => setErrors((m) => (m[id] === e ? m : { ...m, [id]: e }));
   const caps = useCapabilities();
+  const navigate = useNavigate();
+  // fw 1.2.0: a dynamic price configured on the hub — the plan's zones then price only what it doesn't cover.
+  const liveTariff = useTelemetryEntities().data?.system.totals?.tariff;
+  const dynamicOn = caps.flags.dynamicTariffs && liveTariff?.dynamic === true;
   const rateDecimals = caps.money.rateDecimals;
 
   // The zone in force NOW, from the hub's live tariff (UX audit TAR-06: the config flag was
@@ -197,7 +206,8 @@ export const TariffsPage: React.FC = () => {
   const coverageBad = (coverage.gaps.length > 0 && coverage.fallback === null) || noDays;
   const ds = useDsTokens();
   const dayShort = t('tariffs.days').split(',');
-  const zoneColor = (i: number) => ds.series[i % ds.series.length];
+  // A zone's colour by its kind, as in Economics → By zone (round 2 ev N-04: Day and Night swapped places).
+  const zoneColor = (i: number) => zoneColorOf(String(planZones[i]?.zone_id ?? ''), ds.series);
   const spanText = (g: WeekSpan) => `${g.days === ALL_DAYS ? '' : `${daysText(g.days, dayShort, t('tariffs.everyDay'))} `}${hhmm(g.start)}–${hhmm(g.end)}`;
   const zName = (i: number) => { const z = planZones[i]; return z ? zoneDisplayName(z.zone_id, z.zone_name) : '—'; };
   // One row when every day is priced alike, else Mon..Sun.
@@ -229,15 +239,15 @@ export const TariffsPage: React.FC = () => {
     }
   };
 
-  if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}><CircularProgress aria-label={t('common.loading')} /></Box>;
+  if (loading) return <PageSkeleton />;
   if (!plan) return <Alert severity="error">{msg?.text ?? t('tariffs.planUnavailable')}</Alert>;
 
   return (
     <Box>
-      <Typography variant="h4" fontWeight={800} sx={{ mb: 1.5 }}>{t('tariffs.title')}</Typography>
-      {/* One save bar for every form (HEU-R01): sticky, says whether there are edits, «Отменить»
-          next to «Сохранить» — the same model as Settings. */}
-      <Stack direction="row" alignItems="center" flexWrap="wrap" columnGap={1.5} rowGap={1} sx={{
+      {!embedded && <Typography variant="h4" fontWeight={800} sx={{ mb: 1.5 }}>{t('tariffs.title')}</Typography>}
+      {/* One save bar for every form (HEU-R01): sticky, «Отменить» next to «Сохранить» — the same model as
+          Settings, shown only while there is something to save (uiux U15, walkthrough W3). */}
+      {(dirty || hasErrors || saving) && <Stack direction="row" alignItems="center" flexWrap="wrap" columnGap={1.5} rowGap={1} sx={{
         position: 'sticky', top: 0, zIndex: 5, mb: 2, p: 1.5, borderRadius: 3, bgcolor: 'background.paper',
         border: 1, borderColor: dirty ? 'primary.main' : 'divider' }}>
         <Typography variant="subtitle2" fontWeight={700}>
@@ -249,8 +259,13 @@ export const TariffsPage: React.FC = () => {
             {saving ? t('common.saving') : t('common.save')}
           </Button>
         </Box>
-      </Stack>
+      </Stack>}
       {msg && <Alert severity={msg.sev} sx={{ mb: 2 }}>{msg.text}</Alert>}
+      {dynamicOn && (
+        <Alert severity="info" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => navigate('/tariffs/dynamic')}>{t('tariffs.openPrices')}</Button>}>
+          {t('tariffs.dynamicOn')}
+        </Alert>
+      )}
 
       <Box sx={{ mb: 2 }}>
         <Card>
@@ -363,7 +378,7 @@ export const TariffsPage: React.FC = () => {
       <Stack spacing={0.5} sx={{ mt: 0.5 }}>
         {weekRows.map(({ label, row }) => (
           <Stack key={label} direction="row" alignItems="center" spacing={1}>
-            <Typography sx={{ width: sameWeek ? 'auto' : 24, fontSize: 11, color: 'text.secondary', flexShrink: 0, display: sameWeek ? 'none' : 'block' }}>{label}</Typography>
+            <Typography sx={{ width: sameWeek ? 'auto' : 24, fontSize: 12, color: 'text.secondary', flexShrink: 0, display: sameWeek ? 'none' : 'block' }}>{label}</Typography>
             <Box sx={{ position: 'relative', flex: 1, height: sameWeek ? 22 : 14, borderRadius: 1, overflow: 'hidden', bgcolor: 'action.hover' }}>
               {runsOf(row).filter((r) => r.z >= 0).map((r) => (
                 <Box key={r.a} title={`${zName(r.z)} ${hhmm(r.a)}–${hhmm(r.b)}`}
@@ -374,7 +389,7 @@ export const TariffsPage: React.FC = () => {
           </Stack>
         ))}
       </Stack>
-      <Stack direction="row" justifyContent="space-between" sx={{ fontSize: 11, color: 'text.secondary', mb: 0.5, pl: sameWeek ? 0 : 4 }}>
+      <Stack direction="row" justifyContent="space-between" sx={{ fontSize: 12, color: 'text.secondary', mb: 0.5, pl: sameWeek ? 0 : 4 }}>
         <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span>
       </Stack>
       <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 1, fontSize: 12 }}>

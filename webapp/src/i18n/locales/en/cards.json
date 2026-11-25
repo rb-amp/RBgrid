@@ -171,5 +171,10 @@
   "evDearTitle": "{name} yesterday: {energy} in the “{zone}” zone",
   "evDearText": "The same energy in the “{cheapest}” zone would have cost ≈ {money} less — at the plan’s rates for the energy actually used.",
   "vampExcluding": "Not counted: {names} — they run on their own schedule.",
-  "evChargingRole": "EV charging"
+  "evChargingRole": "EV charging",
+  "dynamicPrice": "dynamic",
+  "priceNow": "Price now:",
+  "yesterday": "Yesterday",
+  "statusOk": "normal",
+  "colMonth": "Month to date"
 }

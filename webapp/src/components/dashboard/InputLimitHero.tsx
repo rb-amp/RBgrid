@@ -9,6 +9,8 @@
  * Data truth (U3): a limit that isn't set is NEVER substituted — the block says «лимит ввода
  * не задан» and links to the settings. Input not present → «—» + «нет связи», never «0 Вт».
  */
+import { APPROACH_PCT } from '../../entities/limits';
+import { HelpTip } from '../common/HelpTip';
 import React from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import { Box, Stack, Typography, Link } from '@mui/material';
@@ -57,15 +59,15 @@ export const InputLimitHero: React.FC<InputLimitHeroProps> = ({
   const ds = useDsTokens();
   const lens = useLensFormat();
   const has = present && powerW != null;
-  // «Мощность ⇄ Деньги»: money mode leads with ≈ ₽/ч; the limit bar and headroom stay physical
-  // (a limit is kW), so the measured kW moves next to «из N кВт».
+  // A limit is kW, so the kW leads here whatever the View (role audit B6: «≈ 4,33 €/ч» at 44 px and
+  // «12,37 кВт из 43 кВт» small grey); in money mode the ≈ €/h stands beside «of N kW».
   const lv = has ? lens.power(powerW, false) : null;
-  const moneyLead = !!lv?.money;
+  const moneySide = !!lv?.money;
   const unm = unmeteredW == null ? null : lens.power(unmeteredW, false);
   const exporting = has && (powerW as number) < 0;
   const load = has ? Math.max(0, powerW as number) : null;
   const pct = load != null && limitW ? (load / limitW) * 100 : null;
-  const word = pct == null ? null : pct > 100 ? t('cards.limitAbove') : pct > 92 ? t('cards.limitNear') : null;
+  const word = pct == null ? null : pct > 100 ? t('cards.limitAbove') : pct >= APPROACH_PCT ? t('cards.limitNear') : null;
   const sev = pct != null && pct > 100 ? ds.sevCritical : ds.sevWarning;
   const barColor = word ? sev : ds.primary;
 
@@ -85,16 +87,16 @@ export const InputLimitHero: React.FC<InputLimitHeroProps> = ({
   const num = { fontVariantNumeric: 'tabular-nums' as const };
   const label = { fontSize: 12, letterSpacing: '0.02em', color: ds.inkMuted };
 
-  const Stat: React.FC<{ title: string; value: string; sub?: React.ReactNode; color?: string }> = ({ title, value, sub, color }) => (
+  const Stat: React.FC<{ title: React.ReactNode; value: string; sub?: React.ReactNode; color?: string }> = ({ title, value, sub, color }) => (
     <Stack spacing={0.25} sx={{ minWidth: 0 }}>
       <Typography sx={label}>{title}</Typography>
-      <Typography sx={{ ...num, fontSize: 20, fontWeight: 600, color: color ?? ds.ink, lineHeight: 1.2 }}>{value}</Typography>
-      {sub && <Typography component="div" sx={{ fontSize: 12, color: color ?? ds.inkMuted }}>{sub}</Typography>}
+      <Typography sx={{ ...num, fontSize: 20, fontWeight: 600, color: color ?? ds.ink, lineHeight: 1.2, whiteSpace: 'nowrap' }}>{value}</Typography>
+      {sub && <Typography component="div" sx={{ fontSize: 13, color: color ?? ds.inkMuted }}>{sub}</Typography>}
     </Stack>
   );
 
   return (
-    <Card>
+    <Card tone="hero">
       <Box
         aria-label={t('cards.limitTitle')}
         sx={{
@@ -107,14 +109,14 @@ export const InputLimitHero: React.FC<InputLimitHeroProps> = ({
           <Typography sx={{ fontWeight: 700, fontSize: 15 }}>{t('cards.limitTitle')}</Typography>
           <Stack direction="row" alignItems="baseline" spacing={1.5} flexWrap="wrap" useFlexGap>
             <Typography title={has && estimated ? t('cards.balanceEstimate') : undefined} sx={{ ...num, fontSize: { xs: 36, md: 44 }, fontWeight: 600, letterSpacing: '-0.02em', lineHeight: 1.05, color: has ? ds.ink : ds.inkMuted }}>
-              {has && estimated ? '≈ ' : ''}{has ? (moneyLead ? lv?.main : pwW(Math.abs(powerW as number))) : '—'}
+              {has && estimated ? '≈ ' : ''}{has ? pwW(Math.abs(powerW as number)) : '—'}
             </Typography>
             {!present && <Typography sx={{ fontSize: 14, fontWeight: 600, color: ds.statusOffline }}>○ {t('cards.offline')}</Typography>}
             {exporting && <Typography sx={{ fontSize: 14, color: ds.flowExport }}>↑ {t('cards.exportingToGrid')}</Typography>}
-            {(limitW != null || moneyLead) && (
+            {(limitW != null || moneySide) && (
               <Typography sx={{ ...num, fontSize: 15, color: ds.inkMuted }}>
-                {moneyLead ? pwW(Math.abs(powerW as number)) : ''}{moneyLead && limitW != null ? ' ' : ''}
                 {limitW != null ? t('cards.limitOf', { limit: kw(limitW) }) : ''}
+                {moneySide && limitW != null ? ' · ' : ''}{moneySide ? lv?.main : ''}
               </Typography>
             )}
           </Stack>
@@ -165,7 +167,7 @@ export const InputLimitHero: React.FC<InputLimitHeroProps> = ({
           }}
         >
           <Stat
-            title={t('cards.unmetered')}
+            title={<>{t('cards.unmetered')}<HelpTip topic="unmetered" /></>}
             value={unm ? (unm.money ? unm.main : pwW(unmeteredW)) : '—'}
             color={remWarn ? ds.sevWarning : undefined}
             sub={`${unm?.money ? `${pwW(unmeteredW)} · ` : ''}${remPct != null ? t('cards.unmeteredPct', { pct: nf(Math.abs(remPct)) }) : t('cards.unmeteredFormula')}`}

@@ -72,6 +72,8 @@ export interface EspnowStatus {
   periods_injected?: number;
   periods_dropped?: number;
   periods_dup?: number;
+  /** fw 1.1.8: ms since the hub's node-data task last ran; -1 = the task isn't running (nodes' data isn't taken in). */
+  inject_age_ms?: number;
   beacons_sent: number;
   rt_recv: number;
   stats_recv: number;

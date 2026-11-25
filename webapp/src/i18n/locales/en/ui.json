@@ -9,5 +9,8 @@
   "languageNoHub": "This hub doesn't store a language — the browser's is used.",
   "languageUnset": "Not set — browser language ({lang})",
   "languageHubNo": "the hub has no texts in this language",
-  "languageFailed": "The hub didn't take the language (no connection, or an admin token is needed)."
+  "languageFailed": "The hub didn't take the language (no connection, or an admin token is needed).",
+  "density": "Density",
+  "densityComfortable": "Roomy",
+  "densityCompact": "Compact"
 }

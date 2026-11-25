@@ -27,13 +27,14 @@ import { RawSchema } from '../schema/capabilities';
 import { ProvisioningStatus } from '../provisioning/ProvisioningFSM';
 import { Economics, Summary, SummaryPeriod } from '../economics/types';
 import { EspnowStatus, EspnowAction, EspnowActionParams, EspnowActionResult } from '../espnow/types';
+import { demoDocs, docsPairing } from '../../mock/demoDocs';
 import { mockSchema, mockProvisioning, mockConfig, mockEconomics, mockSummary, mockEspnow } from '../mocks';
 import { demoAdjustUnitsConfig, demoExportCsv } from '../../mock/demo';
 import { tokenStore } from '../auth/authWiring';
 import { extractConfigPayload } from './envelope';
 import {
   DeviceTransport, TransportKind, UnsupportedDomainError, TokenRole, TokenRoles, SecurityConfig, ApStatus,
-  BackupStatus, RestoreResult, OtaResult, OtaOptions, SetConfigResult,
+  BackupStatus, RestoreResult, OtaResult, OtaOptions, SetConfigResult, MqttCaStatus,
 } from './types';
 
 /** Config-file domains → their device endpoint (the shadow's GET/POST targets). */
@@ -57,6 +58,20 @@ let demoBackup: { ts: number; fw: string; files: number } | null = null;
 /** Demo access point (in-memory): the first-login password until the visitor sets one. */
 const demoAp: ApStatus = { ssid: 'rbgrid-7e01', userSet: false };
 /** Demo CORS policy (in-memory, like the hub's default: open). */
+// The docs build starts with the broker's CA uploaded (mock/demoDocs).
+let demoMqttCa: MqttCaStatus = demoDocs()
+  ? { present: true, certs: [{ subject: 'CN=Mosquitto broker CA, O=Home', issuer: 'CN=Mosquitto broker CA, O=Home', valid_from: '2026-03-01T00:00:00Z', valid_to: '2036-02-27T00:00:00Z', ca: true }] }
+  : { present: false, certs: [] };
+/** The hub's mqtt-ca body → MqttCaStatus (dates ISO UTC; `requires_reboot` on writes). */
+function toMqttCa(raw: Record<string, unknown>): MqttCaStatus {
+  const b = (raw.data ?? raw) as { present?: unknown; certs?: unknown; warning?: unknown; requires_reboot?: unknown };
+  const certs = Array.isArray(b.certs) ? (b.certs as MqttCaStatus['certs']).filter((c) => c && typeof c === 'object') : [];
+  return {
+    present: Boolean(b.present) || certs.length > 0, certs,
+    ...(typeof b.warning === 'string' && b.warning ? { warning: b.warning } : {}),
+    ...(typeof b.requires_reboot === 'boolean' ? { requiresReboot: b.requires_reboot } : {}),
+  };
+}
 let demoSecurity: SecurityConfig = { dev_cors: false, origins: [], builtin_origins: ['https://webapp.rbgrid.io'], origins_max: 8 };
 
 function demoOverrides(): Record<string, JsonObject> {
@@ -136,6 +151,36 @@ export class DirectTransport implements DeviceTransport {
     const res = (await this.api.postConfig('/api/system/mqtt-config', { broker_uri: uri }, { headers: tokenStore.authHeader() })) as
       { requires_reboot?: unknown } | null;
     return { requiresReboot: res?.requires_reboot !== false };
+  }
+
+  async getMqttCa(): Promise<MqttCaStatus | null> {
+    if (isDemo()) return { ...demoMqttCa, certs: [...demoMqttCa.certs] };
+    const base = getBaseUrl();
+    if (!base) return null;
+    try {
+      const res = await axios.get<Record<string, unknown>>(`${base}/api/system/mqtt-ca`, { headers: tokenStore.authHeader(), timeout: 5000 });
+      return toMqttCa(res.data);
+    } catch {
+      return null;
+    }
+  }
+
+  async setMqttCa(pem: string): Promise<MqttCaStatus> {
+    if (isDemo()) {
+      demoMqttCa = { present: true, certs: [{ subject: 'CN=Demo broker CA', issuer: 'CN=Demo broker CA', valid_from: '2026-01-01T00:00:00Z', valid_to: '2036-01-01T00:00:00Z', ca: true }] };
+      return { ...demoMqttCa, requiresReboot: true };
+    }
+    // The body is the PEM text itself (any Content-Type; text/plain keeps the preflight simple).
+    const res = await axios.post<Record<string, unknown>>(`${getBaseUrl()}/api/system/mqtt-ca`, pem, {
+      headers: { ...tokenStore.authHeader(), 'Content-Type': 'text/plain' }, timeout: 10000,
+    });
+    return toMqttCa(res.data);
+  }
+
+  async deleteMqttCa(): Promise<MqttCaStatus> {
+    if (isDemo()) { demoMqttCa = { present: false, certs: [] }; return { ...demoMqttCa, requiresReboot: true }; }
+    const res = await axios.delete<Record<string, unknown>>(`${getBaseUrl()}/api/system/mqtt-ca`, { headers: tokenStore.authHeader(), timeout: 5000 });
+    return toMqttCa(res.data);
   }
 
   async patchUnit(hexId: string, patch: JsonObject): Promise<JsonObject> {
@@ -382,7 +427,11 @@ export class DirectTransport implements DeviceTransport {
   }
 
   async espnowAction(action: EspnowAction, params: EspnowActionParams = {}): Promise<EspnowActionResult> {
-    if (isDemo()) return { ok: true, reboot_to_register: action === 'add' };
+    if (isDemo()) {
+      if (demoDocs() && action === 'pair') docsPairing.open();
+      if (demoDocs() && action === 'pair_cancel') docsPairing.close();
+      return { ok: true, reboot_to_register: action === 'add' };
+    }
     const base = getBaseUrl();
     if (!base) return { ok: false, message: 'not connected' };
     try {

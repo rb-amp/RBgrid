@@ -2,5 +2,11 @@
   "offline": "○ offline",
   "alarm": "⚠ alarm",
   "basicReversed": "sensor reversed — not metered",
-  "noChannel": "○ no such channel on the module"
+  "noChannel": "○ no such channel on the module",
+  "phasesN": "{n} phases",
+  "partsOffline": "{n} of {of} phases offline",
+  "allPhases": "all phases",
+  "openAppliance": "Open the appliance «{name}»",
+  "showPhases": "Show the phases",
+  "hidePhases": "Hide the phases"
 }
