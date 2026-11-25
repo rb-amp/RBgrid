@@ -92,8 +92,10 @@ it('the connect block fills the hub address from connect (mDNS first)', async ()
   jest.spyOn(llmApi, 'get').mockResolvedValue(DOC);
   renderPage();
   expect(await screen.findByText('http://rbgrid-bfac.local/')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('tab', { name: 'Claude Code' }));
-  expect(screen.getByText(/claude mcp add rbgrid -e RBGRID_HUB_URL=http:\/\/rbgrid-bfac\.local\//)).toBeInTheDocument();
+  // Until the bridge is on npm (ai-page-npx-404 25.11): no command to copy, the card says it isn't published yet.
+  expect(screen.queryByRole('tab', { name: 'Claude Code' })).toBeNull();
+  expect(screen.queryByText(/npx|claude mcp add/)).toBeNull();
+  expect(screen.getByText('Мост RBgrid для ассистентов ещё не опубликован')).toBeInTheDocument();
 });
 
 it('Restore shows the diff, then rolls back with the token', async () => {

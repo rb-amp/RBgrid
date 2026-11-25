@@ -1,4 +1,5 @@
-import { hubUrls, snippet } from './connect';
+import { hubUrls } from './connect';
+import { snippet } from './bridge';
 
 const C = { hub_id: 'd8132a03bfac', name: 'Home', mdns_host: 'rbgrid-bfac.local', ip: '192.168.1.50', url: 'http://192.168.1.50/', proto: '1.0' };
 

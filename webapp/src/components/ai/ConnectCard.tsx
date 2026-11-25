@@ -1,33 +1,23 @@
 /**
- * ConnectCard — how to connect an assistant on a computer to this hub (CONNECT-UX §2.2 a):
- * a tab per client with the exact command or config to copy, the hub address filled in from
- * GET /api/v1/llm `connect` (mDNS name first, the IP as a fallback), the remote path greyed
- * (a later release) and a note for Home Assistant users.
+ * ConnectCard — how to connect an assistant on a computer to this hub (CONNECT-UX §2.2 a): the hub address from
+ * GET /api/v1/llm `connect` (mDNS name first, the IP as a fallback), the remote path greyed (a later release) and a
+ * note for Home Assistant users.
+ *
+ * The bridge isn't published yet (25.11: npm answers 404 for the package), so the card offers no command to copy —
+ * an instruction that fails is worse than none — and says so. The client tabs live in BridgeConnect, not imported
+ * until the bridge is published (the release check wants no bridge package name in the kit).
  */
 import React, { useState } from 'react';
-import { Alert, Box, Button, FormControlLabel, Stack, Switch, Tab, Tabs, Typography } from '@mui/material';
+import { Alert, Box, FormControlLabel, Switch, Typography } from '@mui/material';
 import { LlmConnect } from '../../core/llm/api';
-import { CLIENT_TABS, ClientTab, MCPB_URL, hubUrls, snippet } from '../../core/llm/connect';
+import { hubUrls } from '../../core/llm/connect';
 import { t } from '../../i18n';
-import { CopyButton, Section } from './aiShared';
-
-const Code: React.FC<{ text: string; label: string }> = ({ text, label }) => (
-  <Stack direction="row" alignItems="flex-start" spacing={0.5}>
-    <Box component="pre" sx={{
-      m: 0, p: 1.5, flex: 1, minWidth: 0, overflowX: 'auto', bgcolor: 'action.hover', borderRadius: 1,
-      fontFamily: 'monospace', fontSize: 13, whiteSpace: 'pre',
-    }}>{text}</Box>
-    <CopyButton text={text} label={label} />
-  </Stack>
-);
+import { Section } from './aiShared';
 
 export const ConnectCard: React.FC<{ connect: LlmConnect | null; origin: string }> = ({ connect, origin }) => {
-  const [tab, setTab] = useState<ClientTab>('claude-desktop');
   const [useIp, setUseIp] = useState(false);
-  const [readOnly, setReadOnly] = useState(false);
   const urls = hubUrls(connect, origin);
   const hub = useIp && urls.fallback ? urls.fallback : urls.primary;
-  const text = snippet(tab, hub, readOnly);
 
   return (
     <Section title={t('ai.connectTitle')}>
@@ -45,33 +35,10 @@ export const ConnectCard: React.FC<{ connect: LlmConnect | null; origin: string 
           label={<Typography variant="body2">{t('ai.useIp', { url: urls.fallback })}</Typography>} />
       )}
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
-        {CLIENT_TABS.map((c) => <Tab key={c} value={c} label={t(`ai.client_${c}`)} />)}
-      </Tabs>
-
-      {tab === 'claude-desktop' ? (
-        <Stack spacing={1}>
-          <Typography variant="body2">{t('ai.desktop1')}</Typography>
-          <Box>
-            {MCPB_URL
-              ? <Button variant="contained" href={MCPB_URL} target="_blank" rel="noopener noreferrer">{t('ai.desktopDownload')}</Button>
-              : <><Button variant="contained" disabled>{t('ai.desktopDownload')}</Button>
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>{t('ai.desktopSoon')}</Typography></>}
-          </Box>
-          <Typography variant="body2">{t('ai.desktop2', { url: hub })}</Typography>
-          <Typography variant="body2">{t('ai.sayConnect')}</Typography>
-        </Stack>
-      ) : (
-        <Stack spacing={1}>
-          <Typography variant="body2">{t(`ai.where_${tab}`)}</Typography>
-          {text && <Code text={text} label={t('ai.copyText')} />}
-          <FormControlLabel
-            control={<Switch size="small" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />}
-            label={<Typography variant="body2">{t('ai.bridgeReadOnly')}</Typography>} />
-          <Typography variant="body2" color="text.secondary">{t('ai.needsNode')}</Typography>
-          <Typography variant="body2">{t('ai.sayConnect')}</Typography>
-        </Stack>
-      )}
+      <Alert severity="info" sx={{ mt: 1 }}>
+        <Typography variant="body2" fontWeight={600}>{t('ai.bridgeNotYetTitle')}</Typography>
+        <Typography variant="body2">{t('ai.bridgeNotYet')}</Typography>
+      </Alert>
 
       <Box sx={{ mt: 2, p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1, opacity: 0.6 }} aria-disabled>
         <Typography variant="body2" fontWeight={700}>{t('ai.remoteTitle')}</Typography>

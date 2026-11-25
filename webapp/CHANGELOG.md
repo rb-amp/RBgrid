@@ -8,6 +8,7 @@ For hub firmware 1.3.0. Requires hub API version 1. App changes since 1.2.0. The
 
 ### Added
 - **Status lights:** in Settings → Device, where the hub has status lights (hub firmware 1.3.0, `/api/v1/led`): what the green and red lights show now, in words (a red code with its number of flashes); the mode — all, quiet (no green beat in normal work) or off; «Find this hub» makes both lights blink for 10 seconds; when the red light reports an event (an unexpected restart, a rolled-back update), «Acknowledge» clears it. Found by quick search too.
+- **Connecting an assistant:** until the RBgrid assistant bridge is published, the AI page gives no command to copy; it says the bridge isn't published yet and keeps the hub's address, the remote path and the Home Assistant note.
 - **Assistant changes kept:** the AI page says how many settings versions the hub keeps — the first, from before any assistant change, and the newest 7 (hub firmware 1.3.0); it said «the last 5».
 - **I2C buses after a restart:** after «Restart now» the «I2C buses» block re-reads the hub until it is back and clears the «applies after a restart» note by itself; the block stays on screen while the hub restarts.
 - **History slots from the hub:** the «history for N points» notes (a point's page, adding a point, ESP-NOW nodes) use the number the hub reports (`history_slots`: 49 on an ESP32-S3 hub with the statistics chip, 12 in the hub's own flash); hubs that don't report it keep 12. With the chip missing (0) the statistics-chip warning speaks instead.

@@ -42,3 +42,4 @@ ds-bundle/
 /build-webapp
 /build-webapp-zip
 /release-artifacts
+/build-public

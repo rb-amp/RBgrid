@@ -131,5 +131,7 @@
   "bannerLeft": "{time} left",
   "bannerMore": "{n} more waiting",
   "bannerShow": "Show",
-  "bannerNoCode": "An AI assistant wants to connect. Open AI assistants to see its code."
+  "bannerNoCode": "An AI assistant wants to connect. Open AI assistants to see its code.",
+  "bridgeNotYetTitle": "The RBgrid assistant bridge isn't published yet",
+  "bridgeNotYet": "Assistants such as Claude Desktop, Claude Code or Cursor reach the hub through a small bridge program on your computer. It isn't available for download yet; when it is, this card shows how to install it, with this hub's address filled in. The hub is ready: once an assistant asks to pair, its code appears on top of this app."
 }
