@@ -35,8 +35,8 @@
   - the LED mode.
 - **What stays on the hub's own pages:** firmware updates, the factory reset, Wi-Fi, tokens, the supply roles, zone
   priorities, price rules and the time zone.
-- **The event list** keeps restarts, configuration changes, setup changes (a module added, readdressed or moved, bus
-  pins set), modules lost and back, the clock and prices across restarts.
+- **The event list** keeps restarts, configuration changes, setup changes (such as new bus pins),
+  modules lost and back, the clock and prices across restarts.
 - **Clients in this release:**
   - **Claude Desktop**, through the RBgrid extension;
   - other **MCP clients**, through the local bridge `rbgrid-mcp` (`npx`).
