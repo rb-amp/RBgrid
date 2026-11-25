@@ -20,7 +20,8 @@
   - anomalies;
   - *identify channel*: you switch a load on, and the hub says which channel saw the step.
 - **What an assistant sets up:** modules on either bus (add, readdress, set clamp models), points on their inputs,
-  and *identify hub*, which blinks the status LEDs of an ESP32-S3 hub.
+  and *identify hub*, which blinks the status LEDs of an ESP32-S3 hub. These setup actions take effect at once; a
+  new, moved or deleted point is recorded as a configuration version.
 - **How an assistant changes a setting (three steps):**
   1. it proposes the change;
   2. the hub answers with the exact difference and its warnings;
