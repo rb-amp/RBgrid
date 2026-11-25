@@ -1224,7 +1224,7 @@ cJSON *rbdynprice_price_json(uint32_t from, uint32_t until)
     uint32_t vu = rbdynprice_valid_until();
     cJSON_AddNumberToObject(o, "valid_until", vu);
     cJSON_AddStringToObject(o, "currency", rbpower_tariff_currency());
-    /* the HA store, legacy shape (svc-ha reads it back) */
+    /* the HA store, legacy shape (the Home Assistant integration reads it back) */
     cJSON *a = cJSON_AddArrayToObject(o, "prices");
     dp_entry_t *tmp = malloc(RBDP_STORE_MAX * sizeof(dp_entry_t));
     int n = 0;

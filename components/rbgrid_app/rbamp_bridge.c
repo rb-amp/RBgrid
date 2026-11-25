@@ -1502,7 +1502,7 @@ static uint8_t heal_absent_modules(void)
  * verb), so the hour image on NVS holds everything measured while the hub was alive and the
  * reboot-gap tail covers only the real downtime. */
 static int64_t s_last_collect_ok_us[RBAMP_MAX_MODULES];   /* last VALID period snapshot (pre-restart flush skip) */
-/* BASIC repeated-window detector (rbamp-dev.root 23.11, basic-period-double-window): a BASIC module keeps valid=1 and
+/* BASIC repeated-window detector (module team 23.11): a BASIC module keeps valid=1 and
  * the last latched window until the next latch executes, and has no window counter. A lost latch therefore reads
  * back the PREVIOUS window with valid=1; the next latch then closes a double-length window. The repeat is
  * recognised bit-exactly by the same module-reported latch_ms and module_window_ms. Such a read is not booked:

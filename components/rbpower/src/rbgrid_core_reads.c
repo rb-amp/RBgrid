@@ -312,7 +312,7 @@ char *rbgrid_build_summary_json(rbpower_unit_id_t unit, int sp, const char *peri
 {
     // Range totals: sum the VALID period records whose END ts is in (from,to] (bounded + skips empties — same helper as
     // CSV). Records are stamped with the period END, so a record ending exactly at `from` (yesterday's last hour for
-    // from = midnight) lies before the window: the lower bound is exclusive (rbgrid-dev:mcp 20.11).
+    // from = midnight) lies before the window: the lower bound is exclusive (bridge check 20.11).
     struct rbapi_sum_ctx sc = {0};
     rbgrid_foreach_valid_record(unit, sp, rbgrid_period_str_to_flash(period_str), from ? from + 1 : 0, to, rbapi_sum_emit, &sc);
 
