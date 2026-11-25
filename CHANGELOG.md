@@ -7,8 +7,8 @@
   - the manifest at `GET /api/llm/v1/manifest`;
   - calls at `POST /api/llm/v1/call`;
   - pairing under `/api/llm/v1/pair/*`.
-- **Turning it on.** The interface is off until you turn it on, and it needs an admin token on the hub first. A
-  read-only mode keeps every assistant to reading.
+- **Turning it on.** The interface is off until you turn it on, and it needs an admin token on the hub first. In
+  read-only mode an assistant can read and preview a change, and every change is refused.
 - **Pairing.** An assistant pairs with a six-digit code shown on the *AI assistants* page, then uses its own token.
   Each paired assistant is listed on that page and can be revoked there. Scopes: `read`, and `read` with `config`.
 - **What an assistant reads:**
@@ -116,10 +116,6 @@
   browser comes up with its pages.
 
 ### Fixed
-- **A module that restarts inside a 15-min period no longer books that period twice.** A BASIC module that restarted
-  in the middle of a 15-min period reported its average since its own start. The hub multiplied that average by the
-  whole period, so the period was booked as if the load had run all 15 minutes. Such a period is now booked from the
-  hub's own readings of the module.
 - **One hub name.** The network announcement, the hub's pages and the assistant all use the name set on the hub, or
   "RBgrid" when none is set.
 - **`GET /api/v1/summary`:** the lower bound of the window is exclusive on the record end, so `from` = local
