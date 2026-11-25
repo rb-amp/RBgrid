@@ -37,10 +37,6 @@
   priorities, price rules and the time zone.
 - **The event list** keeps restarts, configuration changes, setup changes (such as new bus pins),
   modules lost and back, the clock and prices across restarts.
-- **Clients in this release:**
-  - **Claude Desktop**, through the RBgrid extension;
-  - other **MCP clients**, through the local bridge `rbgrid-mcp` (`npx`).
-  The text to paste into each client is on the web app's *AI assistants* page.
 - **For developers.** The manifest carries a JSON Schema for the input and the output of every tool, and it is the
   authority for what a hub offers. A period in a call is either a preset or `from` and `to`.
 
