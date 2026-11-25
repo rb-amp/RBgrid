@@ -4758,7 +4758,7 @@ static cJSON *t_delete_point(const cJSON *a, rbllm_cx_t *cx)
     cJSON_AddBoolToObject(r, "deleted", true);
     char h[5]; snprintf(h, sizeof(h), "%04X", uid);
     cJSON_AddStringToObject(r, "channel", h);
-    note(cx, "The input is free again (create_point). The point's stored history stays in its slot until the slot is reused; its id is not given to a new point meanwhile.");
+    note(cx, "The input is free again (create_point). The point's stored history was erased with it (the hub frees its history slot).");
     cx->as_of = now_s();
     return r;
 }
@@ -5177,7 +5177,7 @@ static const rbllm_tool_t TOOLS[] = {
       t_identify_hub },
     { "delete_point", RBLLM_SCOPE_CONFIG,
       "When to call: when the user wants a point gone (a clamp removed, or a point made on the wrong input). What it does: deletes the "
-      "point; its input becomes free. The supply point is not deleted (move it with move_point); a point with points inside it goes last.",
+      "point and erases its stored history; its input becomes free. The supply point is not deleted (move it with move_point); a point with points inside it goes last.",
       "{\"type\":\"object\",\"properties\":{\"channel\":{\"type\":\"string\",\"description\":\"id from list_channels\"}},\"required\":[\"channel\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"deleted\":{\"type\":\"boolean\"},\"channel\":{\"type\":\"string\"}}}",
       t_delete_point },
