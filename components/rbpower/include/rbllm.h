@@ -105,6 +105,10 @@ int rbllm_pair_pending(void);
 /** @brief Hub id: 12 hex of the base MAC (manifest, envelope, mDNS TXT `id`). @param[out] out 13 bytes. */
 void rbllm_hub_id(char out[13]);
 
+/** @brief A setup change outside config versions (module added / readdressed / moved, bus pins) for get_events
+ *  (type setup_changed). Safe before the LLM module starts (ignored). @param info Up to 39 bytes. */
+void rbllm_setup_event(const char *info);
+
 /** @brief Register the event-log reader (rbevlog_json in rbgrid_app). @param fn Reader. */
 void rbllm_register_events_reader(char *(*fn)(uint32_t since, uint32_t limit, int minlvl));
 /** @brief Register the I2C module action (rbi2c_action: op state|scan|add|address …) for the module-setup tools.
