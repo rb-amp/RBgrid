@@ -28,13 +28,15 @@
 - **Config versions.** The hub keeps eight configuration versions, and the first one, the state before any
   assistant change, always stays. The web app lists every change an assistant made, with a **Restore** button.
 - **What an assistant can change:**
-  - a point's name, its role among the load roles, and which point sits inside another;
+  - a point's name, short name, role among the load roles, phase, rated power, breaker current, and which point
+    sits inside another;
   - the CT model where the module lets you choose it;
+  - the hub's name and location, the time zone and the LED mode;
   - the peak cycle day;
-  - the tariff plan: name, provider, currency, taxes and fees, with the per-zone prices and time windows;
-  - the LED mode.
-- **What stays on the hub's own pages:** firmware updates, the factory reset, Wi-Fi, tokens, the supply roles, zone
-  priorities, price rules and the time zone.
+  - the tariff plan: name, provider, currency, taxes and fees, with the per-zone prices and time windows.
+- **What stays on the hub's own pages:** Wi-Fi, the admin password, assistant access, firmware updates, the factory
+  reset, backup and restore, the language pack, the MQTT broker's CA, and read-only mode
+  (`get_hub_info.hub_page_only` lists them).
 - **The event list** keeps restarts, configuration changes, setup changes (such as new bus pins),
   modules lost and back, the clock and prices across restarts.
 - **For developers.** The manifest carries a JSON Schema for the input and the output of every tool, and it is the
