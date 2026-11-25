@@ -89,12 +89,6 @@
 extern "C" void modfw_register_http(void);   // main/modfw.c — STD module firmware update over the hub
 extern "C" char *rbi2c_action(const cJSON *req, int *status);   // rbi2c_cmd.c — I2C fleet actions (HTTP + cmd channel)
 #include "rbled.h"   // status LEDs (green / red)
-/** Status-LED probe: what lives above rbpower (modules, ESP-NOW pairing window). */
-static void app_led_probe(rbled_app_state_t *o)
-{
-    rbamp_bridge_led_counts(&o->configured, &o->online, &o->missing, &o->module_ota);
-    o->espnow_pairing = esp_now_hub_pairing_open();
-}
 extern "C" void rbi2c_register_http(void);   // main/rbi2c_api.c — I2C buses / module address API
 #include "esp_system.h"
 #include "rbhome_types.h"          // rbpower_get_unit_200ms_data for the `unit` verb
@@ -213,6 +207,20 @@ extern "C" void add_cors_headers(httpd_req_t *req);  // rbwebserver CORS policy 
 #endif
 
 static const char* TAG = "RB-APP";
+/** A rename (hub page, LLM) updates the mDNS announce's TXT name, so discovery and the manifest agree. */
+static void app_mdns_rename(void)
+{
+    char nm[48];
+    rbgrid_core_hub_name(nm, sizeof(nm));
+    esp_err_t e = mdns_service_txt_item_set("_rbgrid", "_tcp", "name", nm);
+    ESP_LOGI(TAG, "mDNS name -> '%s': %s", nm, esp_err_to_name(e));
+}
+/** Status-LED probe: what lives above rbpower (modules, ESP-NOW pairing window). */
+static void app_led_probe(rbled_app_state_t *o)
+{
+    rbamp_bridge_led_counts(&o->configured, &o->online, &o->missing, &o->module_ota);
+    o->espnow_pairing = esp_now_hub_pairing_open();
+}
 
 /* AP password: the setup password from provisioning (ap_provision.h, RBGRID_AP_SETUP_PASSWORD)
  * until the USER sets their own (POST /api/system/ap → NVS rbwifi/ap_pw_user). The hub never generates or changes it
@@ -2095,9 +2103,8 @@ void wifi_event_callback(rbwifi_status_t status, void* user_data)
             mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
             const esp_app_desc_t *ad = esp_app_get_description();
             char hub_id[13]; rbllm_hub_id(hub_id);
-            rbgrid_json_context_t *jc = rbgrid_core_json_ctx();
-            char hub_name[33];
-            snprintf(hub_name, sizeof(hub_name), "%s", (jc && jc->device_info.device_name[0]) ? jc->device_info.device_name : "RBgrid");
+            char hub_name[48];
+            rbgrid_core_hub_name(hub_name, sizeof(hub_name));   /* the same name the LLM manifest and the pages show */
             mdns_txt_item_t txt[] = {
                 { "fw",    (ad && ad->version[0]) ? ad->version : "0.0.0" },
                 { "api",   "1" },      /* RBGRID_API_VERSION */
@@ -2915,9 +2922,9 @@ static rbpower_extended_config_t* app_core_init(void)
     ESP_LOGI(TAG, "Initializing JSON module early for storage tests...");
     static rbgrid_json_context_t json_ctx = {};
     rbgrid_json_device_info_t json_info = {
-        .device_id = "ESP32-RBGrid-001",
-        .device_name = "RBGrid Storage Test",
-        .location = "Test Location",
+        .device_id = "RBgrid",
+        .device_name = "RBgrid",
+        .location = "",
         .timezone = "UTC",
     };
     rbgrid_json_init(&json_ctx, &json_info);
@@ -3395,8 +3402,8 @@ static void app_ifaces_start(rbpower_extended_config_t* extended_config, bool wi
             // Update device info if needed
             g_json_ctx->device_info.device_id[0] = '\0';
             strlcpy(g_json_ctx->device_info.device_id, "rbgrid_main_001", sizeof(g_json_ctx->device_info.device_id));
-            strlcpy(g_json_ctx->device_info.device_name, "MainPowerUnit", sizeof(g_json_ctx->device_info.device_name));
-            strlcpy(g_json_ctx->device_info.location, "Main Panel", sizeof(g_json_ctx->device_info.location));
+            strlcpy(g_json_ctx->device_info.device_name, "RBgrid", sizeof(g_json_ctx->device_info.device_name));
+            g_json_ctx->device_info.location[0] = '\0';
         }
 /*
         // Save units configuration to Flash
@@ -3571,6 +3578,11 @@ static bool rbgrid_boot(bool hosted) {
     const bool wifi_initialized = app_net_init();
     rbpower_extended_config_t* extended_config = app_core_init();
     if (!extended_config) return false;
+    {   /* hubs set up before 1.3.0 saved the placeholder labels "Default" / "Unknown": they read as unset */
+        if (extended_config->home_name && !strcmp(extended_config->home_name, "Default")) extended_config->home_name = (char *)"RBgrid";
+        if (extended_config->location && !strcmp(extended_config->location, "Unknown")) extended_config->location = (char *)"";
+        rbgrid_core_set_rename_cb(app_mdns_rename);
+    }
     app_ifaces_start(extended_config, wifi_initialized);
     app_core_start();
     app_espnow_start();

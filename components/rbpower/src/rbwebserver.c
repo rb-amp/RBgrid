@@ -1681,6 +1681,7 @@ esp_err_t rbwebserver_system_config_handler(httpd_req_t *req)
             /* home_name / location are labels — live too (the UI used to ask for a reboot to rename) */
             if (local_config->home_name) { char* c = strdup(local_config->home_name); if (c) g_extended_config->home_name = c; }
             if (local_config->location)  { char* c = strdup(local_config->location);  if (c) g_extended_config->location = c; }
+            if (local_config->home_name) rbgrid_core_hub_renamed();   /* the mDNS announce follows */
         }
         /* every system-config field the API exposes now applies live (the restart-only ones were never read and
          * were removed from the API) */

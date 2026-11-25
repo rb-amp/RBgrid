@@ -3012,7 +3012,7 @@ static bool apply_more_last(const cJSON *norm, char *m, size_t n)
         esp_err_t se = pe == RBGRID_JSON_OK ? rbgrid_storage_save_system(lc) : ESP_FAIL;
         rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
         if (se == ESP_OK && ec) {   /* labels apply live, as on the hub page */
-            if (lc->home_name) { char *c = strdup(lc->home_name); if (c) ec->home_name = c; }
+            if (lc->home_name) { char *c = strdup(lc->home_name); if (c) { ec->home_name = c; rbgrid_core_hub_renamed(); } }
             if (lc->location)  { char *c = strdup(lc->location);  if (c) ec->location = c; }
             ec->grid_system = lc->grid_system;
         }

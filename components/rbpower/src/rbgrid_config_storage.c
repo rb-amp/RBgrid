@@ -266,8 +266,8 @@ esp_err_t rbgrid_storage_check_files(void)
         ESP_LOGI(TAG, "Creating default compact configuration...");
         rbpower_extended_config_t default_config = {
             .enable_home_network = false,
-            .home_name = "Default",
-            .location = "Unknown",
+            .home_name = "RBgrid",
+            .location = "",
             .base_hardware_config = NULL
         };
         
