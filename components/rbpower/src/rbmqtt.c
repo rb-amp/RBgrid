@@ -304,6 +304,8 @@ esp_err_t rbmqtt_init(const char *broker_uri, const char *client_id, const char 
     return ESP_OK;
 }
 
+bool rbmqtt_is_started(void) { return s_client != NULL; }
+
 bool rbmqtt_is_connected(void)
 {
     return s_connected;

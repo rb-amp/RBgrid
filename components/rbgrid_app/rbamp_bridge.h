@@ -316,6 +316,11 @@ bool rbamp_bridge_module_status(uint8_t m, uint8_t *addr, bool *has_vhw, uint8_t
  * @return Configured modules.
  */
 int rbamp_bridge_module_counts(int *online);
+/** @brief For the status LEDs: configured / answering / missing (absent and feeding a metering point) modules, and
+ *         whether a module firmware update is writing. Any pointer may be NULL. */
+void rbamp_bridge_led_counts(int *configured, int *online, int *missing, bool *ota);
+/** @brief true if @p g is an I2C bus line or a DRDY line in the fleet config. */
+bool rbamp_bridge_gpio_in_use(int g);
 /**
  * @brief Reboot-gap outcome of module @p m as one text line (for the `etstat` verb).
  * @param[in]  m    Fleet index.

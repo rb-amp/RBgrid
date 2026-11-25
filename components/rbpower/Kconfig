@@ -76,4 +76,19 @@ menu "RBPower Configuration"
             so a host that erases the default NVS cannot take it. The partition must exist in the partition
             table. Wi-Fi credentials and the Wi-Fi driver's own data stay in the default "nvs".
 
+    config RBGRID_LED_GREEN_GPIO
+        int "Status LED: green GPIO (-1 = none)"
+        range -1 48
+        default 4 if IDF_TARGET_ESP32S3
+        default -1
+        help
+            Green status LED (active high). The hub's state: setup, Wi-Fi, pairing windows, heartbeat.
+    config RBGRID_LED_RED_GPIO
+        int "Status LED: red GPIO (-1 = none)"
+        range -1 48
+        default 5 if IDF_TARGET_ESP32S3
+        default -1
+        help
+            Red status LED (active high). Faults, warnings and events as numbered flash groups.
+
 endmenu # RBPower Configuration

@@ -29,6 +29,7 @@ extern int rbpower_stats_flush_open_hours(void);   /* rbhome_types.h — open-ho
 #include <stdio.h>
 
 #include "rbgrid_core.h"
+#include "rbled.h"             /* P2: firmware update on both LEDs */
 #include "rbstorage_media.h"   /* stats_media */
 #include "rbextflash_operations.h"   /* history_slots */
 
@@ -68,9 +69,10 @@ bool rbwebserver_ota_in_progress(void) { return s_ota_busy; }
 
 esp_err_t rbwebserver_api_ota_handler(httpd_req_t *req)
 {
-    if (req->method == HTTP_POST) s_ota_busy = true;
+    if (req->method == HTTP_POST) { s_ota_busy = true; rbled_process(RBLED_PROC_OTA, true); }
     esp_err_t r = ota_upload(req);
-    s_ota_busy = false;   /* a successful upload restarts inside ota_upload; this runs on every failure path */
+    s_ota_busy = false;
+    rbled_process(RBLED_PROC_OTA, false);   /* a successful upload restarts inside ota_upload; this runs on every failure path */
     return r;
 }
 
