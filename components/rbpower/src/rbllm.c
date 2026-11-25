@@ -31,6 +31,7 @@
 #include "esp_ota_ops.h"
 #include "rbmqtt.h"                  /* broker state for get_config integrations */
 #include "rbgrid_config_api.h"     /* rbgrid_system_reboot */
+#include "rbled.h"                 /* status LEDs: get_health.leds, hub.led_mode, identify_hub */
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
@@ -1128,6 +1129,7 @@ static cJSON *t_get_health(const cJSON *a, rbllm_cx_t *cx)
         free(p);
     }
     if (tot > on) note(cx, "A module is missing: check its cable and power; its channels read no energy meanwhile.");
+    cJSON_AddItemToObject(r, "leds", rbled_status_json());   /* what the hub's own LEDs show now (registry ids G/R/P) */
     cx->as_of = now_s();
     return r;
 }
@@ -2363,6 +2365,7 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
         static const char *const GS[] = { "", "1P", "SPLIT", "3P" };
         int gs = ec ? ec->grid_system : 0;
         if (gs > 0 && gs < 4) cJSON_AddStringToObject(h, "grid_system", GS[gs]); else cJSON_AddNullToObject(h, "grid_system");
+        cJSON_AddStringToObject(h, "led_mode", rbled_mode_str(rbled_mode_get()));
     }
     if (all || !strcmp(sec, "integrations")) {
         cJSON *g = cJSON_AddObjectToObject(r, "integrations");
@@ -2852,7 +2855,17 @@ static bool check_more(rbllm_cx_t *cx, const cJSON *patch, cJSON *norm, cJSON *d
                 dadd(diff, "hub.grid_system", GS[wg < 4 ? wg : 0][0] ? GS[wg < 4 ? wg : 0] : "unset", v);
                 continue;
             }
-            if (strcmp(k->string, "name") && strcmp(k->string, "location")) { snprintf(m, sizeof(m), "hub.%.24s: name, location or grid_system", k->string); fail(cx, "invalid_args", m, NULL); return false; }
+            if (!strcmp(k->string, "led_mode")) {
+                int lm = rbled_mode_from_str(cJSON_GetStringValue(k));
+                if (lm < 0) { fail(cx, "invalid_args", "hub.led_mode: \"full\" (all signals), \"quiet\" (no heartbeat) or \"off\" (only a factory reset, a firmware update, identify and \"no module answers\")", NULL); return false; }
+                const char *wm = rbled_mode_str(rbled_mode_get());
+                if (!strcmp(wm, k->valuestring)) continue;
+                if (!nh) nh = cJSON_AddObjectToObject(norm, "hub");
+                cJSON_AddStringToObject(nh, "led_mode", k->valuestring);
+                dadd(diff, "hub.led_mode", wm, k->valuestring);
+                continue;
+            }
+            if (strcmp(k->string, "name") && strcmp(k->string, "location")) { snprintf(m, sizeof(m), "hub.%.24s: name, location, grid_system or led_mode", k->string); fail(cx, "invalid_args", m, NULL); return false; }
             if (!strcmp(k->string, "location") && (cJSON_IsNull(k) || (cJSON_IsString(k) && !k->valuestring[0]))) {   /* clear it */
                 const char *wl = ec && ec->location ? ec->location : "";
                 if (!wl[0]) continue;
@@ -2977,11 +2990,18 @@ static bool apply_more_last(const cJSON *norm, char *m, size_t n)
         if (!ok) return false;
     }
     const cJSON *hb = cJSON_GetObjectItem(norm, "hub");
+    const char *lmv = cJSON_GetStringValue(cJSON_GetObjectItem(hb, "led_mode"));
+    if (lmv) {   /* the LED mode lives in its own NVS key, not in the system section */
+        int lm = rbled_mode_from_str(lmv);
+        if (lm < 0 || rbled_mode_set((rbled_mode_t)lm) != ESP_OK) { snprintf(m, n, "hub.led_mode: not saved"); return false; }
+        if (cJSON_GetArraySize(hb) == 1) hb = NULL;
+    }
     if (hb) {
         rbpower_extended_config_t *lc = calloc(1, sizeof(*lc));
         if (!lc) { snprintf(m, n, "hub: out of memory"); return false; }
         (void)rbgrid_storage_load_system(lc);
         cJSON *sys = cJSON_Duplicate(hb, true);
+        cJSON_DeleteItemFromObject(sys, "led_mode");
         const cJSON *nm = cJSON_GetObjectItem(sys, "name");
         if (nm) cJSON_AddStringToObject(sys, "home_name", nm->valuestring);
         cJSON_DeleteItemFromObject(sys, "name");
@@ -3905,6 +3925,10 @@ static cJSON *t_get_config_schema(const cJSON *a, rbllm_cx_t *cx)
         cJSON *f = cJSON_AddObjectToObject(w, "grid_system"); cJSON_AddStringToObject(f, "type", "string"); cJSON *ge = cJSON_AddArrayToObject(f, "enum");
         cJSON_AddItemToArray(ge, cJSON_CreateString("1P")); cJSON_AddItemToArray(ge, cJSON_CreateString("SPLIT")); cJSON_AddItemToArray(ge, cJSON_CreateString("3P"));
         cJSON_AddStringToObject(f, "description", "patch.hub.grid_system: the site's supply: single phase, split phase (120/240 V) or three phase.");
+        f = cJSON_AddObjectToObject(w, "led_mode"); cJSON_AddStringToObject(f, "type", "string"); cJSON *le = cJSON_AddArrayToObject(f, "enum");
+        cJSON_AddItemToArray(le, cJSON_CreateString("full")); cJSON_AddItemToArray(le, cJSON_CreateString("quiet")); cJSON_AddItemToArray(le, cJSON_CreateString("off"));
+        cJSON_AddStringToObject(f, "description", "patch.hub.led_mode: the hub's status LEDs. full: every signal; quiet: no heartbeat flash in normal operation; "
+                                "off: only a factory reset, a firmware update, identify and \"no module answers\". Applies at once; not kept in config versions.");
     } else if (!strcmp(sec, "integrations")) {
         cJSON *f = cJSON_AddObjectToObject(w, "broker_uri"); cJSON_AddStringToObject(f, "type", "string"); cJSON_AddNumberToObject(f, "max_bytes", 159);
         cJSON_AddStringToObject(f, "description", "patch.mqtt.broker_uri: mqtt://host:1883 or mqtts://user:password@host:8883 (the Home Assistant MQTT broker). Applies after restart_hub.");
@@ -4636,6 +4660,25 @@ static cJSON *t_restart_hub(const cJSON *a, rbllm_cx_t *cx)
     return r;
 }
 
+static cJSON *t_identify_hub(const cJSON *a, rbllm_cx_t *cx)
+{
+    const cJSON *sv = cJSON_GetObjectItem(a, "seconds");
+    int secs = sv ? (int)cJSON_GetNumberValue(sv) : 10;
+    if (sv && (!cJSON_IsNumber(sv) || secs < 0 || secs > 300)) return fail(cx, "invalid_args", "seconds: 0..300 (0 stops)", NULL);
+    cJSON *st = rbled_status_json();
+    const bool has = cJSON_IsNumber(cJSON_GetObjectItem(cJSON_GetObjectItem(st, "leds"), "green_gpio")) ||
+                     cJSON_IsNumber(cJSON_GetObjectItem(cJSON_GetObjectItem(st, "leds"), "red_gpio"));
+    cJSON_Delete(st);
+    if (!has) return fail(cx, "not_found", "this hub has no status LEDs", "Identify it by its name or address instead (get_hub_info).");
+    rbled_identify((uint32_t)secs);
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "blinking", secs > 0);
+    cJSON_AddNumberToObject(r, "seconds", secs);
+    if (secs) note(cx, "Both LEDs on the hub blink fast together now; ask the user which hub is blinking.");
+    cx->as_of = now_s();
+    return r;
+}
+
 static cJSON *t_delete_point(const cJSON *a, rbllm_cx_t *cx)
 {
     const char *cid = cJSON_GetStringValue(cJSON_GetObjectItem(a, "channel"));
@@ -4898,9 +4941,10 @@ static const rbllm_tool_t TOOLS[] = {
       t_read_live },
     { "get_health", RBLLM_SCOPE_READ,
       "When to call: when data looks wrong or missing, or the user asks whether the hub is fine. What it returns: uptime, last reset reason, "
-      "clock sync, free memory, the metering modules with model, firmware and online/missing status, channels present.",
+      "clock sync, free memory, the metering modules with model, firmware and online/missing status, channels present, and leds: what the hub's green and red "
+      "LEDs show now (green = the hub's state, red = a numbered fault: flashes counts the red flashes; process = both LEDs).",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
-      "{\"type\":\"object\",\"properties\":{\"uptime_s\":{\"type\":\"number\"},\"modules\":{\"type\":\"array\"},\"modules_online\":{\"type\":\"integer\"}}}",
+      "{\"type\":\"object\",\"properties\":{\"uptime_s\":{\"type\":\"number\"},\"modules\":{\"type\":\"array\"},\"modules_online\":{\"type\":\"integer\"},\"leds\":{\"type\":\"object\"}}}",
       t_get_health },
     { "identify_channel", RBLLM_SCOPE_READ,
       "When to call: to find which channel an appliance is on (setting up, naming channels, checking a clamp). Two steps: action start "
@@ -4996,7 +5040,7 @@ static const rbllm_tool_t TOOLS[] = {
       "nothing; show the diff and ask the user.",
       "{\"type\":\"object\",\"properties\":{\"patch\":{\"type\":\"object\",\"description\":\"{channels:{<id>:{name?,short_name?,role?,inside?,ct_model?,phase?,rated_power_w?,max_current_a?,charge_threshold_w?,idle_timeout_min?}}, "
       "tariff:{plan_name?,provider?,currency?,vat_percent?,energy_tax_per_kwh?,grid_fee_per_kwh?,levy_per_kwh?,default_zone?,prices_from_bill?,zones?:{<zone>:{buy_per_kwh?,sell_per_kwh?,window?,days?,priority?,enabled?}}}, "
-      "peaks_cycle_day?, peaks_reset?, price_rules?:[...], price_signal?:{...}, region?:{timezone?,nominal_voltage?,nominal_frequency?}, hub?:{name?,location?,grid_system?}, mqtt?:{broker_uri}, telemetry?:{profile?,frame?}, dynamic_price?:{...}}; get_config_schema per section\"},"
+      "peaks_cycle_day?, peaks_reset?, price_rules?:[...], price_signal?:{...}, region?:{timezone?,nominal_voltage?,nominal_frequency?}, hub?:{name?,location?,grid_system?,led_mode?}, mqtt?:{broker_uri}, telemetry?:{profile?,frame?}, dynamic_price?:{...}}; get_config_schema per section\"},"
       "\"rollback_to\":{\"type\":\"integer\",\"description\":\"a version from list_config_versions\"}},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"diff\":{\"type\":\"array\"},\"warnings\":{\"type\":\"array\"},\"restart_required\":{\"type\":\"boolean\"},\"confirm_token\":{\"type\":\"string\"},\"expires_in\":{\"type\":\"integer\"},\"base_version\":{\"type\":\"integer\"}}}",
       t_propose_config },
@@ -5074,6 +5118,12 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"restarting\":{\"type\":\"boolean\"},\"back_in_s\":{\"type\":\"integer\"}}}",
       t_restart_hub },
+    { "identify_hub", RBLLM_SCOPE_READ,
+      "When to call: when the user has more than one hub, or needs to find this one (on a shelf, in a cabinet). What it does: blinks both "
+      "of the hub's status LEDs fast together for seconds (default 10; 0 stops). Changes no setting.",
+      "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":300}},\"additionalProperties\":false}",
+      "{\"type\":\"object\",\"properties\":{\"blinking\":{\"type\":\"boolean\"},\"seconds\":{\"type\":\"integer\"}}}",
+      t_identify_hub },
     { "delete_point", RBLLM_SCOPE_CONFIG,
       "When to call: when the user wants a point gone (a clamp removed, or a point made on the wrong input). What it does: deletes the "
       "point; its input becomes free. The supply point is not deleted (move it with move_point); a point with points inside it goes last.",

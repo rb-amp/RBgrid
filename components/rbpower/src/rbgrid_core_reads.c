@@ -607,6 +607,7 @@ char *rbgrid_build_schema_json(void)
         { "/api/v1/i2c/modules/{m}/bus","POST",     "n/a",       true,  false, "bus" },
         { "/api/v1/i2c/modules/{m}/drdy","POST",    "n/a",       true,  false, "gpio" },
         { "/api/v1/i2c/buses/{b}",      "POST",     "n/a",       true,  true,  "sda,scl | off (board pin profile checked; applied after a restart: reboot_pending)" },
+        { "/api/v1/led",                "GET,POST", "composite", true,  false, "status LEDs: GET what they show; POST mode(full|quiet|off), identify(seconds|true|false), ack(true)" },
         { "/api/v1/dynprice",           "GET,POST", "composite", true,  false, "dynamic price config, providers, live state" },
         { "/api/v1/price",              "GET,POST", "composite", true,  false, "price push (HA source) / resolved prices / log" },
         { "/api/v1/rules",              "GET,POST", "composite", true,  false, "cheap windows (threshold|cheapest|deadline)" },

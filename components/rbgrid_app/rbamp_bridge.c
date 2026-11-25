@@ -2990,6 +2990,36 @@ int rbamp_bridge_module_counts(int *online)
     return n;
 }
 
+void rbamp_bridge_led_counts(int *configured, int *online, int *missing, bool *ota)
+{
+    int on = 0, miss = 0, n = s_cfg.module_count;
+    bool busy = false;
+    for (int m = 0; m < n && m < RBAMP_MAX_MODULES; ++m) {
+        const bool up = s_dev[m] != NULL && s_poll_fail_n[m] < 3 &&
+                        !(s_poll_pause_until_us[m] && esp_timer_get_time() < s_poll_pause_until_us[m]);
+        if (up) { on++; } else {
+            int metering = 0;   /* placeholders (absent, no metering point) are not "missing" */
+            for (uint8_t e = 0; e < s_cfg.modules[m].entry_count && e < RBAMP_MAX_ENTRIES; ++e)
+                if (s_cfg.modules[m].entries[e].unit_id && s_cfg.modules[m].entries[e].source != RBAMP_ENTRY_VOLTAGE) metering++;
+            if (metering) miss++;
+        }
+        if (rbamp_bridge_module_ota_busy((uint8_t)m)) busy = true;
+    }
+    if (configured) *configured = n;
+    if (online) *online = on;
+    if (missing) *missing = miss;
+    if (ota) *ota = busy;
+}
+
+bool rbamp_bridge_gpio_in_use(int g)
+{
+    for (int b = 0; b < RBAMP_MAX_BUSES; ++b) if (g == bus_pin((uint8_t)b, false) || g == bus_pin((uint8_t)b, true)) return true;
+    if (s_cfg.drdy_gpio_p1 && g == (int)s_cfg.drdy_gpio_p1 - 1) return true;
+    for (uint8_t m = 0; m < s_cfg.module_count && m < RBAMP_MAX_MODULES; ++m)
+        if (s_cfg.modules[m].drdy_p1 && g == (int)s_cfg.modules[m].drdy_p1 - 1) return true;
+    return false;
+}
+
 bool rbamp_bridge_module_status(uint8_t m, uint8_t *addr, bool *has_vhw, uint8_t *energy_mode)
 {
     if (m >= RBAMP_MAX_MODULES || s_dev[m] == NULL) return false;
@@ -3598,9 +3628,10 @@ int rbamp_bridge_virt_cmd(int argc, char **argv, char *out, size_t cap)
 #if CONFIG_IDF_TARGET_ESP32S3
 /* ESP32-S3 module N16R8 (16 MB quad flash + 8 MB octal PSRAM, DevKitC-1 board): flash 26-32, octal PSRAM 33-37,
  * USB 19/20, UART0 43/44, straps 0/3/45/46, ext NOR 12-15, RGB LED 38 (DevKitC-1 v1.1) / 48 (v1.0). Default bus 8/9. */
-static const uint8_t BUS_PINS_OK[] = { 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 21, 39, 40, 41, 42, 47 };
+static const uint8_t BUS_PINS_OK[] = { 1, 2, 6, 7, 8, 9, 10, 11, 16, 17, 18, 21, 39, 40, 41, 42, 47 };   /* 4, 5: status LEDs */
 static const struct { uint8_t gpio; const char *use; } PIN_RSV[] = {
     { 0, "boot strap" }, { 3, "boot strap" },
+    { 4, "green status LED" }, { 5, "red status LED" },
     { 12, "external flash MISO" }, { 13, "external flash MOSI" }, { 14, "external flash CLK" }, { 15, "external flash CS" },
     { 19, "USB D-" }, { 20, "USB D+" },
     { 26, "SPI flash" }, { 27, "SPI flash" }, { 28, "SPI flash" }, { 29, "SPI flash" }, { 30, "SPI flash" },

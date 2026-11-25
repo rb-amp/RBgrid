@@ -32,6 +32,7 @@
 #include "esp_partition.h"
 #include "esp_attr.h"         /* RTC_NOINIT_ATTR — factory-reset marker */
 #include "esp_system.h"       /* esp_reset_reason */
+#include "rbled.h"
 #include "nvs_flash.h"        /* nvs_flash_erase — factory reset */
 #include "esp_https_server.h"  /* TLS server (httpd_ssl_start) */
 #include "littlefs_raw.h"      /* optional prod cert/key from storage + https-enable flag */
@@ -1906,6 +1907,7 @@ static esp_err_t rbwebserver_factory_reset_handler(httpd_req_t *req)
         }
     }
     rbgrid_core_factory_reset_arm(erase_history);
+    rbled_process(RBLED_PROC_FACTORY_RESET, true);   /* P1: both LEDs on until the restart */
     rbpower_diag_printf("factory reset requested (history: %s) — the hub restarts and erases its settings at boot",
                         erase_history ? "erase" : "keep");
     httpd_resp_set_type(req, "application/json");

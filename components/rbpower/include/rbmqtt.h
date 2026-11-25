@@ -46,6 +46,8 @@ esp_err_t rbmqtt_init(const char *broker_uri, const char *client_id, const char 
  * @brief Report whether the MQTT session is currently connected to the broker.
  * @return true if connected (flag maintained by the esp-mqtt event handler), false otherwise.
  */
+/** @brief A broker is configured and the client was started (connected or not). */
+bool rbmqtt_is_started(void);
 bool rbmqtt_is_connected(void);
 
 /**
@@ -152,6 +154,7 @@ bool rbmqtt_tls_custom_ca(void);
 typedef char* (*rbmqtt_cmd_handler_t)(const char *data, int data_len);
 typedef void (*rbmqtt_connect_cb_t)(void);
 static inline esp_err_t rbmqtt_init(const char *u, const char *c, const char *l) { (void)u; (void)c; (void)l; return ESP_ERR_NOT_SUPPORTED; }
+static inline bool rbmqtt_is_started(void) { return false; }
 static inline bool rbmqtt_is_connected(void) { return false; }
 static inline const char *rbmqtt_broker_uri(void) { return ""; }
 static inline esp_err_t rbmqtt_publish(const char *t, const char *p, int q, bool r) { (void)t; (void)p; (void)q; (void)r; return ESP_ERR_NOT_SUPPORTED; }

@@ -88,6 +88,13 @@
 #include "rbevlog.h"               // on-hub event log + remote console verbs (for OTA-only hubs)
 extern "C" void modfw_register_http(void);   // main/modfw.c — STD module firmware update over the hub
 extern "C" char *rbi2c_action(const cJSON *req, int *status);   // rbi2c_cmd.c — I2C fleet actions (HTTP + cmd channel)
+#include "rbled.h"   // status LEDs (green / red)
+/** Status-LED probe: what lives above rbpower (modules, ESP-NOW pairing window). */
+static void app_led_probe(rbled_app_state_t *o)
+{
+    rbamp_bridge_led_counts(&o->configured, &o->online, &o->missing, &o->module_ota);
+    o->espnow_pairing = esp_now_hub_pairing_open();
+}
 extern "C" void rbi2c_register_http(void);   // main/rbi2c_api.c — I2C buses / module address API
 #include "esp_system.h"
 #include "rbhome_types.h"          // rbpower_get_unit_200ms_data for the `unit` verb
@@ -2012,6 +2019,7 @@ static void ota_report_rollback(void)
         rbpower_diag_printf("FAIL ota: ROLLED BACK — image in '%s' (elf %s) did not confirm; running '%s'",
                             bad->label, sha, run ? run->label : "?");
         nvs_set_str(h, "rb_seen", sha);
+        rbled_flag_rollback();    /* R8 on the red LED until acknowledged (or 24 h) */
         nvs_commit(h);
     }
     nvs_close(h);
@@ -2387,6 +2395,7 @@ static void start_webserver(void)
         rbllm_register_modfw_status(rbamp_bridge_module_ota_status);   // LLM get_health: module firmware update progress
         modfw_register_http();    // STD module firmware update API (main/modfw.c)
         rbi2c_register_http();    // I2C buses / scan / module address API (main/rbi2c_api.c)
+        rbled_register_http();    // GET/POST /api/v1/led
     } else {
         ESP_LOGE(TAG, "Web server start error: %d", err);
     }
@@ -3515,6 +3524,7 @@ static void app_core_start(void)
 
         esp_err_t rbamp_err = rbamp_bridge_start(&rbamp_cfg);
         ESP_LOGI("MAIN", "rbAmp bridge start: %s", esp_err_to_name(rbamp_err));
+        rbled_start(app_led_probe, rbamp_bridge_gpio_in_use);   /* after the fleet config: an I2C pin keeps its LED undriven */
         /* Auto-collect rbAmp periods on the rbpower 15-min boundary (every build — energy statistics depend on it). */
         rbpower_register_period_boundary_cb(rbgrid_rbamp_period_cb);
         ESP_LOGI("MAIN", "rbAmp auto 15-min period collection armed");
@@ -3686,6 +3696,8 @@ static bool rbgrid_boot(bool hosted) {
         test_period_statistics_api();
 */
     (void)hosted;
+    rbled_start(app_led_probe, rbamp_bridge_gpio_in_use);   /* no-op when already started with the fleet */
+    rbled_boot_done();
     return true;
 }
 
