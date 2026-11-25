@@ -134,7 +134,7 @@
 - **Bus 1** stays off until its pins are set, so a hub with every module on bus 0 works as before.
 - **On an ESP32-S3 hub with the statistics chip,** history moves onto the chip on the first start of 1.3.0.
 
-## v1.2.2 — 2026-11-11
+## v1.2.2 — 2026-11-20
 
 ### Fixed
 - **Import peaks with one point per phase.** With a three-phase supply set up as one point per phase, each phase's
