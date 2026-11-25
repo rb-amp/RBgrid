@@ -1,17 +1,142 @@
 # Changelog
 
-## Unreleased
+## v1.3.0 — 2026-11-26
 
-### Added
-- **History for about 49 points with an external flash chip.** A W25Q128 (16 MB) wired to the hub's SPI pins
-  (MISO 12, MOSI 13, CLK 14, CS 15, 3.3 V) takes over the statistics; the internal flash keeps 12 points. On the
-  first start with the chip the hub copies the history it already has onto it (up to about a minute) and then uses the
-  chip from then on. The internal partition layout does not change, so no USB reflash is needed. If the chip is
-  later missing, the hub keeps measuring but stores no history until it is back (event log and `flashinfo` say so).
+### AI assistants
+- **The hub answers an AI assistant on your own network:**
+  - the manifest at `GET /api/llm/v1/manifest`;
+  - calls at `POST /api/llm/v1/call`;
+  - pairing under `/api/llm/v1/pair/*`.
+- **Turning it on.** The interface is off until you turn it on, and it needs an admin token on the hub first. A
+  read-only mode keeps every assistant to reading.
+- **Pairing.** An assistant pairs with a six-digit code shown on the *AI assistants* page, then uses its own token.
+  Each paired assistant is listed on that page and can be revoked there. Scopes: `read`, and `read` with `config`.
+- **What an assistant reads:**
+  - the installation, live values, health and the event log;
+  - energy and money per period and per point, load profiles, period comparisons and the import/export balance.
+  Resolutions go up to the hour, the open hour included.
+- **What an assistant checks:**
+  - installation findings;
+  - anomalies;
+  - *identify channel*: you switch a load on, and the hub says which channel saw the step.
+- **What an assistant sets up:** modules on either bus (add, readdress, set clamp models), points on their inputs,
+  and *identify hub*, which blinks the status LEDs of an ESP32-S3 hub.
+- **How an assistant changes a setting (three steps):**
+  1. it proposes the change;
+  2. the hub answers with the exact difference and its warnings;
+  3. the change is applied with a one-time token bound to that difference.
+- **Config versions.** The hub keeps eight configuration versions, and the first one, the state before any
+  assistant change, always stays. The web app lists every change an assistant made, with a **Restore** button.
+- **What an assistant can change:**
+  - a point's name, its role among the load roles, and which point sits inside another;
+  - the CT model where the module lets you choose it;
+  - the peak cycle day;
+  - the tariff plan: name, provider, currency, taxes and fees, with the per-zone prices and time windows;
+  - the LED mode.
+- **What stays on the hub's own pages:** firmware updates, the factory reset, Wi-Fi, tokens, the supply roles, zone
+  priorities, price rules and the time zone.
+- **The event list** keeps restarts, configuration changes, setup changes (a module added, readdressed or moved, bus
+  pins set), modules lost and back, the clock and prices across restarts.
+- **Clients in this release:**
+  - **Claude Desktop**, through the RBgrid extension;
+  - other **MCP clients**, through the local bridge `rbgrid-mcp` (`npx`).
+  The text to paste into each client is on the web app's *AI assistants* page.
+- **For developers.** The manifest carries a JSON Schema for the input and the output of every tool, and it is the
+  authority for what a hub offers. A period in a call is either a preset or `from` and `to`.
+
+### Two I²C buses
+- **Two buses.** The hub works with rbAmp modules on two I²C buses:
+  - bus 0 works from the start;
+  - bus 1 works once you give it its pins.
+- **Up to eight modules per hub,** on bus 0, bus 1 or both, in any split.
+- **Setting bus-1 pins.** Set them in the web app, or with `POST /api/v1/i2c/buses/1 {sda, scl}`.
+  - The hub checks the pair against the board's pin profile.
+  - `GET /api/v1/i2c` lists the pins the board offers and the pins it keeps for itself.
+  - New pins take effect at the next restart.
+  - On an ESP32 (WROVER) hub, GPIO 21 and GPIO 22 are such a pair.
+- **The same address once on each bus.** The same module address can be used once on bus 0 and once on bus 1,
+  and each module keeps its own readings.
+- **Points on bus 1** are created exactly as on bus 0. Point and telemetry data name the bus the channel is on.
+- **If one bus goes quiet,** the other keeps measuring. The hub re-probes missing modules every 10 seconds, and a
+  module that comes back rejoins on its own.
+
+### History on a statistics chip (ESP32-S3)
+- **RBgrid hub boards.** Every RBgrid hub board is an ESP32-S3 with a 16 MB statistics chip (W25Q128) on board, and
+  keeps history for **49 points**. Each point keeps the same depth per level as in the hub's own flash: the chip adds
+  points, not depth.
+- **A hub you build yourself on an ESP32-S3** takes an additional 16 MB W25Q128 chip:
+  - GPIO 12 (MISO), 13 (MOSI), 14 (CLK), 15 (CS);
+  - 3.3 V and GND.
+- **No setup.** The hub finds the chip at boot and moves the history from its own flash onto it once.
+- **The API names the storage:**
+  - `stats_media` in `GET /api/system/version`: `external` while history is on the chip, `internal` while it is in
+    the hub's own flash;
+  - `history_slots` in the same reply and in `GET /api/v1/schema`: the number of points with history, 12 in the
+    hub's own flash and 49 with the chip.
+- **ESP32 (WROVER) hubs,** and ESP32-S3 hubs without the chip, keep history for 12 points in their own flash, as
+  before.
+
+### Status LEDs (ESP32-S3)
+- **Green shows the hub's state:**
+  - starting;
+  - setup access point;
+  - connecting to Wi-Fi;
+  - a pairing window open;
+  - a heartbeat in normal operation.
+- **Red shows what needs attention, as a counted number of flashes:**
+  1. no module answers;
+  2. a set-up module missing;
+  3. the clock not set;
+  4. the statistics storage;
+  5. Wi-Fi out of reach;
+  6. the MQTT broker out of reach;
+  7. an unexpected restart;
+  8. a firmware update rolled back.
+- **Both LEDs together** show a firmware update, a factory reset, and *identify hub*.
+- **The API.** `GET /api/v1/led` says what the LEDs show. `POST /api/v1/led` sets the mode (`full`, `quiet`, `off`),
+  starts identify, or acknowledges an event.
+
+### Web app
+- **New screens with hub firmware 1.3.0:**
+  - the *AI assistants* page under *Set up*;
+  - bus choice when adding a module;
+  - the *I2C buses* block;
+  - the Overview layout kept on the hub;
+  - where history is kept, in *Settings → Device → Hub firmware*.
+- **With any hub:**
+  - the menu in three parts (Look, Watch, Set up);
+  - the Overview as a board of blocks with *Customise*;
+  - Settings in sections with one Save each, and a *Left to set up* checklist;
+  - quick search;
+  - a wall display;
+  - an appliance page;
+  - stepping back through closed periods;
+  - the Economics money views.
+- **The storage image.** The release adds a `storage` partition image with the web app, so a hub flashed from a
+  browser comes up with its pages.
+
+### Fixed
+- **A module that restarts inside a 15-min period no longer books that period twice.** A BASIC module that restarted
+  in the middle of a 15-min period reported its average since its own start. The hub multiplied that average by the
+  whole period, so the period was booked as if the load had run all 15 minutes. Such a period is now booked from the
+  hub's own readings of the module.
+- **One hub name.** The network announcement, the hub's pages and the assistant all use the name set on the hub, or
+  "RBgrid" when none is set.
+- **`GET /api/v1/summary`:** the lower bound of the window is exclusive on the record end, so `from` = local
+  midnight covers today, and the hour that closed at midnight stays with yesterday.
+- **ESP32 (WROVER) hubs with many points:**
+  - firmware updates over the network upload at a steady pace to the end;
+  - the hub keeps more free internal RAM after start, so the assistant service and the base-load estimate run with
+    two buses and seven or more points.
 
 ### Removed
-- **Flash chip authenticity check (OTP).** The source is open, so a check that only our prepared chips pass served
-  no purpose; any W25Q-class chip of 8 MB or more is used.
+- **Flash chip authenticity check (OTP).** Any W25Q-class chip of 8 MB or more is used.
+
+### Upgrade notes
+- **The firmware files:** `main_release.bin` for ESP32 (WROVER), `main_release_s3.bin` for ESP32-S3.
+- **What stays across the update:** configuration, tokens and history.
+- **Bus 1** stays off until its pins are set, so a hub with every module on bus 0 works as before.
+- **On an ESP32-S3 hub with the statistics chip,** history moves onto the chip on the first start of 1.3.0.
 
 ## v1.2.2 — 2026-11-11
 
