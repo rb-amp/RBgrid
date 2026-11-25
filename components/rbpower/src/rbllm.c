@@ -677,6 +677,17 @@ static int bucket_index(const sum_ctx_t *c, uint32_t ts)
 static uint32_t rec_end(const rbpower_period_statistics_t *s) { return (uint32_t)(s->period_start_us / 1000000LL); }
 static uint32_t rec_start(const rbpower_period_statistics_t *s, bool is_hour) { return local_floor(rec_end(s) - 1, is_hour ? 'h' : 'd'); }
 static uint32_t clamp_now(uint32_t t) { uint32_t n = now_s(); return t > n ? n : t; }
+/* The open hour's data reaches the end of the newest 15-min period booked into it. cov counts only the covered seconds (a
+ * point added or a hub restarted inside the hour covers less), so oh + cov can lag the booked boundary: take the newest
+ * 15-min boundary inside the hour that is past by more than the booking delay. */
+static uint32_t open_quarter_end(uint32_t oh, uint32_t cov)
+{
+    uint32_t n = now_s();
+    uint32_t q = (n > 5u) ? (n - 5u) - (n - 5u) % 900u : 0;
+    if (q > oh + 3600u) q = oh + 3600u;
+    uint32_t lo = clamp_now(oh + cov);
+    return (q > oh && q > lo) ? q : lo;
+}
 
 static void sum_emit(const rbpower_period_statistics_t *s, void *v, bool is_hour)
 {
@@ -760,7 +771,8 @@ static void sum_range(sum_ctx_t *c, uint16_t u, uint32_t from, uint32_t to)
             c->open_rev += oo / 1000.0 * tn.sell_rate;
             b->recs++;
             c->hour_secs += cov;
-            if (oh + cov > c->newest_end) c->newest_end = clamp_now(oh + cov);
+            uint32_t qe = open_quarter_end(oh, cov);
+            if (qe > c->newest_end) c->newest_end = qe;
             c->cx->open_hour = true;
         }
     }
@@ -1476,8 +1488,10 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddStringToObject(o, "role", role_class(p[i].role));
         double ti = 0, te = 0;
         cJSON *rows = (u == 't') ? NULL : cJSON_AddArrayToObject(o, "rows");
-        int empty = 0;
-        for (int k = 0; k < nb; k++) {
+        int empty = 0, live = nb;
+        uint32_t tnow = now_s();
+        if (u != 't') while (live > 0 && b[live - 1].from >= tnow) live--;   /* rows that have not started yet: left out */
+        for (int k = 0; k < live; k++) {
             ti += b[k].e_in; te += b[k].e_out;
             if (!b[k].recs) empty++;
             if (!rows) continue;
@@ -1486,15 +1500,21 @@ static cJSON *t_get_energy_summary(const cJSON *a, rbllm_cx_t *cx)
             if (b[k].recs) {
                 cJSON_AddNumberToObject(row, "energy_kwh", r4(b[k].e_in / 1000.0));
                 cJSON_AddNumberToObject(row, "export_kwh", r4(b[k].e_out / 1000.0));
-            } else { cJSON_AddNullToObject(row, "energy_kwh"); cJSON_AddNullToObject(row, "export_kwh"); }
+            } else {   /* a run of rows without a record is one row {from, to, null} */
+                int j = k;
+                while (j + 1 < live && !b[j + 1].recs) j++;
+                if (j > k) { add_time(row, "to", (j + 1 < nb) ? b[j + 1].from : local_add(b[j].from, u, 1)); empty += j - k; k = j; }
+                cJSON_AddNullToObject(row, "energy_kwh"); cJSON_AddNullToObject(row, "export_kwh");
+            }
             cJSON_AddItemToArray(rows, row);
         }
+        nb = live;
         cJSON *tot = cJSON_AddObjectToObject(o, "total");
         if (empty < nb) {
             cJSON_AddNumberToObject(tot, "energy_kwh", r4(ti / 1000.0));
             cJSON_AddNumberToObject(tot, "export_kwh", r4(te / 1000.0));
         } else { cJSON_AddNullToObject(tot, "energy_kwh"); cJSON_AddNullToObject(tot, "export_kwh"); }
-        if (empty) { cx->gaps = true; note(cx, "Rows with null have no stored record (hub off, point added later, or beyond the history depth)."); }
+        if (empty) { cx->gaps = true; note(cx, "Rows with null have no stored record (hub off, point added later, or beyond the history depth); consecutive such rows come as one row with from and to."); }
         if (!c.hour_secs && !c.day_secs) cx->gaps = true;
         else if (!empty && sum_partial(&c)) { cx->gaps = true; note(cx, PARTIAL_NOTE); }
         if (c.newest_end > newest) newest = c.newest_end;
@@ -1765,7 +1785,8 @@ static cJSON *t_get_load_profile(const cJSON *a, rbllm_cx_t *cx)
             memmove(&c->mn[1], &c->mn[0], c->n * sizeof(c->mn[0])); memmove(&c->mx[1], &c->mx[0], c->n * sizeof(c->mx[0]));
             memmove(&c->ext[1], &c->ext[0], c->n * sizeof(c->ext[0]));
             c->ts[0] = oh; c->avg[0] = oi * 3600.0 / cov; c->ext[0] = false; c->n++; c->no_ext = true;
-            if (oh + cov > c->newest) c->newest = clamp_now(oh + cov);
+            uint32_t qe = open_quarter_end(oh, cov);
+            if (qe > c->newest) c->newest = qe;
             cx->open_hour = true;
         }
     }
@@ -4438,6 +4459,7 @@ static cJSON *t_list_module_inputs(const cJSON *a, rbllm_cx_t *cx)
         if (!strcmp(ck, "selectable")) any_sel = true;
         cJSON *ins = cJSON_AddArrayToObject(o, "inputs");
         const cJSON *e;
+        bool has_vin = false;
         cJSON_ArrayForEach(e, cJSON_GetObjectItem(sl, "sensors")) {
             const char *ifc = cJSON_GetStringValue(cJSON_GetObjectItem(e, "iface"));
             if (!ifc || strcmp(ifc, "i2c") || (int)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "module")) != m) continue;
@@ -4455,6 +4477,17 @@ static cJSON *t_list_module_inputs(const cJSON *a, rbllm_cx_t *cx)
             if (cn && !volt) { char sh[24]; ct_short(cn, sh); cJSON_AddStringToObject(io, "ct_model", sh); }
             double ra = cJSON_GetNumberValue(cJSON_GetObjectItem(e, "ct_rated_a"));
             if (ra > 0 && !volt) cJSON_AddNumberToObject(io, "ct_rating_a", ra);
+            cJSON_AddItemToArray(ins, io);
+            if (volt) has_vin = true;
+        }
+        if (!has_vin && cJSON_GetNumberValue(cJSON_GetObjectItem(mo, "n_v")) >= 1) {
+            /* sensors lists one V row (the hub's voltage point); every other module with a voltage input measures its own
+             * channels' power with it, so the input is in use for that module's channels */
+            cJSON *io = cJSON_CreateObject();
+            cJSON_AddStringToObject(io, "input", "V");
+            cJSON_AddStringToObject(io, "kind", "voltage");
+            cJSON_AddNullToObject(io, "point");
+            cJSON_AddBoolToObject(io, "voltage_reference", true);
             cJSON_AddItemToArray(ins, io);
         }
         cJSON_AddItemToArray(mods, o);
@@ -4983,7 +5016,8 @@ static const rbllm_tool_t TOOLS[] = {
       t_get_events },
     { "get_energy_summary", RBLLM_SCOPE_READ,
       "When to call: for how much energy was used or exported in a period, per channel, as a table. What it returns: per channel rows of "
-      "{from, energy_kwh (import/consumption), export_kwh} at the resolution used, and totals. Hourly data is kept 60 days, daily 400 days.",
+      "{from, energy_kwh (import/consumption), export_kwh} at the resolution used, and totals. Rows that have not started yet are left out; "
+      "consecutive rows without a stored record come as one row {from, to, energy_kwh: null}. Hourly data is kept 60 days, daily 400 days.",
       "{\"type\":\"object\",\"properties\":{\"period\":" S_PERIOD ",\"resolution\":{\"type\":\"string\",\"enum\":[\"hour\",\"day\",\"week\",\"month\",\"year\",\"total\"]},"
       "\"channels\":" S_CHANNELS "},\"required\":[\"period\"],\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"resolution\":{\"type\":\"string\"},\"channels\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"rows\":{\"type\":\"array\"},\"total\":{\"type\":\"object\"}}}}}}",
