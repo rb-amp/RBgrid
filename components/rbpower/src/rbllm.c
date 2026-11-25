@@ -1015,7 +1015,8 @@ static cJSON *t_read_live(const cJSON *a, rbllm_cx_t *cx)
     }
     free(p);
     if (stale_n || !any_fresh) note(cx, "null = no live data (the channel's source is missing or silent for over 30 s) - not zero.");
-    (void)fresh_n;
+    /* 25.11: the assistant multiplied current x voltage, found it 1-7 % off power_w and reported a measurement error */
+    if (fresh_n) note(cx, "current_a and voltage_v are RMS values and power_w is the real power, each averaged by the module on its own: current x voltage does not reproduce power_w exactly, and that is normal. Do not cross-check them or report the difference.");
     cx->as_of = now_s();
     cx->resolution = "live";
     return r;
@@ -1159,7 +1160,7 @@ static void utf8_clean(const char *in, char *out, size_t n)
 #define EV_FILE   "/llm_events.bin"
 #define EV_N      64
 #define EV_MAGIC  0x31564552u   /* "REV1" */
-enum { EV_REBOOT = 1, EV_CONFIG, EV_MODULE_LOST, EV_MODULE_BACK, EV_CLOCK, EV_PRICE };
+enum { EV_REBOOT = 1, EV_CONFIG, EV_MODULE_LOST, EV_MODULE_BACK, EV_CLOCK, EV_PRICE, EV_SETUP };
 enum { SEV_INFO = 0, SEV_WARNING, SEV_CRITICAL };
 typedef struct __attribute__((packed)) {
     uint32_t seq, ts, up_s;
@@ -1180,6 +1181,7 @@ static const char *ev_type_name(uint8_t t)
     switch (t) {
     case EV_REBOOT: return "reboot"; case EV_CONFIG: return "config_changed"; case EV_MODULE_LOST: return "module_lost";
     case EV_MODULE_BACK: return "module_back"; case EV_CLOCK: return "clock_unsynced"; case EV_PRICE: return "price_missing";
+    case EV_SETUP: return "setup_changed";
     default: return "other";
     }
 }
@@ -1205,6 +1207,8 @@ static void ev_add(uint8_t type, uint8_t sev, uint16_t chan, const char *info)
     ev_save();
     xSemaphoreGive(s_ev_mx);
 }
+
+void rbllm_setup_event(const char *info) { ev_add(EV_SETUP, SEV_INFO, 0, info ? info : ""); }
 
 static void ev_boot(void)
 {
@@ -1317,6 +1321,7 @@ static cJSON *events_typed(uint32_t since, uint32_t lim, rbllm_cx_t *cx)
         case EV_MODULE_LOST: cJSON_AddStringToObject(d, "name", e->info); snprintf(msg, sizeof(msg), "No data from channel \"%s\"", e->info); break;
         case EV_MODULE_BACK: cJSON_AddStringToObject(d, "name", e->info); snprintf(msg, sizeof(msg), "Channel \"%s\" reports again", e->info); break;
         case EV_CLOCK: snprintf(msg, sizeof(msg), "Clock not set: %s", e->info); break;
+        case EV_SETUP: cJSON_AddStringToObject(d, "change", e->info); snprintf(msg, sizeof(msg), "Setup: %s", e->info); break;
         case EV_PRICE: cJSON_AddStringToObject(d, "state", e->info); snprintf(msg, sizeof(msg), "Dynamic prices missing (state %s); the plan price is used", e->info); break;
         default: snprintf(msg, sizeof(msg), "%s", e->info); break;
         }
@@ -1887,7 +1892,10 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
             snprintf(ev, sizeof(ev), "A load point reads %.0f W (negative) right now.", p[i].p_w);
             finding(f, "ct_reversed", "warning", h, ev, "Turn the clamp round so its arrow points to the load. A software sign flip is not the fix.");
         }
-        if (p[i].inside && p[i].inside == main_id) { loads_w += p[i].p_w; loads_in_main++; }
+        /* a load without a parent hangs off the main supply too (the default topology): the 25.11 bench had five loads
+         * at 1100 W under a 219 W supply and no finding, because none of the created points carried inside */
+        if ((p[i].inside && p[i].inside == main_id) ||
+            (!p[i].inside && main_id && p[i].unit_id != main_id && !strcmp(role_class(p[i].role), "load"))) { loads_w += p[i].p_w; loads_in_main++; }
         const cJSON *e;
         cJSON_ArrayForEach(e, cJSON_GetObjectItem(sl, "sensors")) {
             const char *uid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
@@ -1966,7 +1974,8 @@ static cJSON *t_check_installation(const cJSON *a, rbllm_cx_t *cx)
         cJSON *is = i2c_do("state", -1, -1, -1, &ist);
         const cJSON *im;
         cJSON_ArrayForEach(im, cJSON_GetObjectItem(is, "modules")) {
-            if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "addr")) != 0x50) continue;
+            /* only a module that answers: a bare hub lists its factory placeholder (module 0 at 0x50) with nothing on the bus */
+            if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "addr")) != 0x50 || !cJSON_IsTrue(cJSON_GetObjectItem(im, "present"))) continue;
             int mm = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "module")), bb = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(im, "bus"));
             snprintf(ev, sizeof(ev), "Module %d on bus %d sits at 0x50, the address every new module arrives with.", mm, bb);
             finding(f, "module_on_factory_address", "info", NULL, ev,
@@ -2391,12 +2400,12 @@ static cJSON *t_get_config(const cJSON *a, rbllm_cx_t *cx)
 
 /* ============================================================================================ config writes (stage 2) */
 /* Writable over LLM (v1): per channel name / role (supply roles allowed with a warning, operator 23.11) /
- * inside; notifications.peaks_cycle_day. Versions: /llm_cfgver.json keeps the last 5 states of exactly these fields.
+ * inside; notifications.peaks_cycle_day. Versions: /llm_cfgver.json keeps 8 states of exactly these fields (the first, before any LLM change, is kept; the newest 7 roll).
  * A change made elsewhere (hub page, REST, HA) is noticed by its hash and recorded as source "hub" at the next config
  * call, so every path gets a version (§1.8). */
 static bool s_cfg_changed;   /* set by apply for the call log (worker task only) */
 #define CFGVER_FILE  "/llm_cfgver.json"
-#define CFGVER_N     5
+#define CFGVER_N     8   /* the first (state before any LLM change) is kept; the newest 7 roll */
 #define PROP_N       4
 #define PROP_TTL_S   600
 
@@ -2544,7 +2553,7 @@ static cJSON *ver_load(void)
 {
     size_t sz = 0;
     cJSON *v = NULL;
-    if (littlefs_raw_size(CFGVER_FILE, &sz) == ESP_OK && sz > 0 && sz < 32768) {
+    if (littlefs_raw_size(CFGVER_FILE, &sz) == ESP_OK && sz > 0 && sz < 131072) {
         char *b = malloc(sz + 1); size_t got = 0;
         if (b && littlefs_raw_read(CFGVER_FILE, b, sz, &got) == ESP_OK) { b[got] = '\0'; v = cJSON_Parse(b); }
         free(b);
@@ -2603,7 +2612,13 @@ static int ver_sync(const char *source, const char *summary)
         cJSON_AddStringToObject(e, "hash", h);
         cJSON_AddItemToObject(e, "state", cap); cap = NULL;
         cJSON_AddItemToArray(arr, e);
-        while (cJSON_GetArraySize(arr) > CFGVER_N) cJSON_DeleteItemFromArray(arr, 0);
+        {   /* keep the baseline (the state when the LLM API first read the config): a first setup makes many versions
+             * in a row and used to push "before the assistant" out (25.11: six points, five slots) */
+            const cJSON *f0 = cJSON_GetArrayItem(arr, 0);
+            const char *s0 = f0 ? cJSON_GetStringValue(cJSON_GetObjectItem(f0, "summary")) : NULL;
+            const int keep0 = s0 && !strncmp(s0, "state when the LLM API first read", 33) ? 1 : 0;
+            while (cJSON_GetArraySize(arr) > CFGVER_N) cJSON_DeleteItemFromArray(arr, keep0);
+        }
         cJSON_ReplaceItemInObject(v, "next", cJSON_CreateNumber(next + 1));
         ver_save(v);
         num = next;
@@ -3590,7 +3605,7 @@ static cJSON *t_propose_config(const cJSON *a, rbllm_cx_t *cx)
         cJSON *v = ver_load();
         const cJSON *e, *hit = NULL;
         cJSON_ArrayForEach(e, cJSON_GetObjectItem(v, "versions")) if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "version")) == (int)rb->valuedouble) hit = e;
-        if (!hit) { cJSON_Delete(v); cJSON_Delete(cur); return fail(cx, "not_found", "no such version (the hub keeps the last 5)", "Call list_config_versions."); }
+        if (!hit) { cJSON_Delete(v); cJSON_Delete(cur); return fail(cx, "not_found", "no such version (the hub keeps the first and the newest 7)", "Call list_config_versions."); }
         own = patch_between(cur, cJSON_GetObjectItem(hit, "state"));
         snprintf(summary, sizeof(summary), "rollback to version %d", (int)rb->valuedouble);
         cJSON_Delete(v);
@@ -3848,7 +3863,7 @@ static cJSON *t_list_config_versions(const cJSON *a, rbllm_cx_t *cx)
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_Delete(v);
-    note(cx, "Versions cover channel names, short names, roles, inside, clamp models, phases, rated power, breaker current, EV thresholds, the tariff prices/VAT/fees, the peaks cycle day, the time zone and the hub's name and location. Price rules, telemetry, integrations, the dynamic price, the mains voltage/frequency and the grid system are not versioned either. Modules, module addresses, points made or moved and bus pins are not versioned: a rollback does not undo them.");
+    note(cx, "Versions cover channel names, short names, roles, inside, clamp models, phases, rated power, breaker current, EV thresholds, the tariff prices/VAT/fees, the peaks cycle day, the time zone and the hub's name and location. Price rules, telemetry, integrations, the dynamic price, the mains voltage/frequency and the grid system are not versioned either. Creating, moving or deleting a point records a version (the point's name, role and clamp are then restorable), but a rollback never creates, deletes or moves points; modules, module addresses and bus pins are outside versions. The first version (the state before any LLM change) is kept; the newest 7 roll.");
     cx->as_of = now_s();
     return r;
 }
@@ -4478,8 +4493,9 @@ static cJSON *t_create_point(const cJSON *a, rbllm_cx_t *cx)
     const cJSON *e = sl_input(sl, m, in), *mo = sl_module(sl, m);
     char msg[160];
     if (!e) { snprintf(msg, sizeof(msg), "module %d has no input '%.8s'", m, in ? in : ""); cJSON_Delete(sl); return fail(cx, "not_found", msg, "list_module_inputs shows the inputs."); }
-    const char *lb = cJSON_GetStringValue(cJSON_GetObjectItem(e, "ch_label"));
-    if (lb && !strcmp(lb, "V")) { cJSON_Delete(sl); return fail(cx, "invalid_args", "the voltage input feeds the hub's voltage; points go on current inputs", NULL); }
+    /* copy: the label lives inside sl, which is freed before the version summary and the reply use it */
+    char lb[12]; strlcpy(lb, cJSON_GetStringValue(cJSON_GetObjectItem(e, "ch_label")) ? cJSON_GetStringValue(cJSON_GetObjectItem(e, "ch_label")) : "", sizeof(lb));
+    if (!strcmp(lb, "V")) { cJSON_Delete(sl); return fail(cx, "invalid_args", "the voltage input feeds the hub's voltage; points go on current inputs", NULL); }
     const char *bound = cJSON_GetStringValue(cJSON_GetObjectItem(e, "unit_id"));
     if (bound) { snprintf(msg, sizeof(msg), "input %s of module %d already carries point %s", lb, m, bound); cJSON_Delete(sl); return fail(cx, "conflict", msg, "Rename that point with propose_config, or pick a free input."); }
     int code = -1;
@@ -4527,7 +4543,7 @@ static cJSON *t_create_point(const cJSON *a, rbllm_cx_t *cx)
         ct_ok = s2 == 200;
     }
     char src[48]; llm_source(cx, src, sizeof(src));
-    char sm[120]; snprintf(sm, sizeof(sm), "point %s created: %.40s (module %d %s)", id, name, m, lb ? lb : "");
+    char sm[120]; snprintf(sm, sizeof(sm), "point %s created: %.40s (module %d %s)", id, name, m, lb);
     int v = ver_sync(src, sm);
     s_cfg_changed = true;
     rbpower_diag_printf("llm: %s by '%s'", sm, cx->client ? cx->client : "?");
@@ -4542,7 +4558,7 @@ static cJSON *t_create_point(const cJSON *a, rbllm_cx_t *cx)
     }
     cJSON_AddStringToObject(c, "role", role_name((uint8_t)role));
     cJSON_AddNumberToObject(c, "module", m);
-    cJSON_AddStringToObject(c, "input", lb ? lb : "");
+    cJSON_AddStringToObject(c, "input", lb);
     if (code >= 0 && ct_ok) cJSON_AddStringToObject(c, "ct_model", ctm);
     cJSON_AddNumberToObject(r, "version", v);
     if (!ct_ok) note(cx, "The point was created, but the module did not take the clamp model: set it with propose_config {channels:{<id>:{ct_model}}}.");
@@ -4957,8 +4973,9 @@ static const rbllm_tool_t TOOLS[] = {
       t_identify_channel },
     { "get_events", RBLLM_SCOPE_READ,
       "When to call: to explain a gap, a missing module, a restart or a warning, or to see what changed since you last looked. What it "
-      "returns: typed events kept across restarts (reboot, config_changed, module_lost, module_back, clock_unsynced, price_missing), oldest "
-      "first, with a cursor (next) to pass as since next time. source \"log\" gives the hub's raw log lines of this boot instead.",
+      "returns: typed events kept across restarts (reboot, config_changed, setup_changed, module_lost, module_back, clock_unsynced, price_missing), oldest "
+      "first, with a cursor (next) to pass as since next time. setup_changed: a module added, readdressed or moved, or bus pins set; what a "
+      "config version changed is in list_config_versions. source \"log\" gives the hub's raw log lines of this boot instead.",
       "{\"type\":\"object\",\"properties\":{\"since\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"next from the previous call; omit for the oldest kept\"},"
       "\"source\":{\"type\":\"string\",\"enum\":[\"events\",\"log\"],\"description\":\"default events\"},"
       "\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":50}},\"additionalProperties\":false}",
@@ -5052,7 +5069,7 @@ static const rbllm_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"version\":{\"type\":[\"integer\",\"null\"]},\"versioned\":{\"type\":\"boolean\"},\"applied\":{\"type\":\"boolean\"},\"restart_required\":{\"type\":\"boolean\"}}}",
       t_apply_config },
     { "list_config_versions", RBLLM_SCOPE_CONFIG,
-      "When to call: when the user asks what changed, or before a rollback. What it returns: the last 5 versions, newest first, with time, "
+      "When to call: when the user asks what changed, or before a rollback. What it returns: up to 8 versions (the first, before any LLM change, is kept; the newest 7 roll), newest first, with time, "
       "source (hub, llm:<client>) and a summary.",
       "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
       "{\"type\":\"object\",\"properties\":{\"versions\":{\"type\":\"array\"}}}",

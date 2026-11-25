@@ -24,6 +24,7 @@
 
 #include "rbgrid_core.h"   /* rbgrid_nvs_open: RBgrid data in its NVS partition */
 #include "rbamp_bridge.h"
+#include "rbllm.h"   // setup events (module added / readdressed / moved, bus pins) for get_events
 #include "esp_heap_caps.h"
 #include "rbstats_v4_types.h"
 #include "rbfault.h"   /* test builds: simulated long outage */
@@ -926,6 +927,39 @@ static double diag_int_to_now(uint8_t m)
     int64_t now = esp_timer_get_time();
     double extra = (s_diag_last_us[m] && s_has_vhw[m]) ? s_diag_last_p[m] * ((double)(now - s_diag_last_us[m]) / 3.6e9) : 0.0;
     return s_diag_int_wh[m] + extra;
+}
+
+/* Quarter poll integral per channel (always on, BASIC with a voltage input): the hub's own observation of the quarter.
+ * Used when the module restarted inside the quarter: its average then covers only the time since its boot, and
+ * avg x the hub's full window booked a full quarter at the post-restart power (25.11: bus-0 modules reset at load
+ * switch-on, +100 % in those quarters). Holes longer than 5 polls are not extended (counted). Guarded by s_qi_mux. */
+EXT_RAM_BSS_ATTR static double s_qi_wh[RBAMP_MAX_MODULES][RBAMP_MAX_CHANNELS];
+static int64_t      s_qi_last_us[RBAMP_MAX_MODULES];
+static uint8_t      s_qi_holes[RBAMP_MAX_MODULES];
+static portMUX_TYPE s_qi_mux = portMUX_INITIALIZER_UNLOCKED;
+static void qi_feed(uint8_t m, const rbamp_snapshot_t *s)
+{
+    if (!s_has_vhw[m] || s_line[m] != 0) return;
+    int64_t now = esp_timer_get_time();
+    taskENTER_CRITICAL(&s_qi_mux);
+    int64_t dt_us = s_qi_last_us[m] ? now - s_qi_last_us[m] : 0;
+    if (dt_us > (int64_t)s_cfg.poll_period_ms * 5000LL) { dt_us = 0; if (s_qi_holes[m] < 255) s_qi_holes[m]++; }
+    if (dt_us > 0)
+        for (uint8_t c = 0; c < RBAMP_MAX_CHANNELS && c < ch_n(s); ++c) {
+            float pc = ch_p(m, s, c);
+            if (!isnan(pc)) s_qi_wh[m][c] += (double)pc * ((double)dt_us / 3.6e9);
+        }
+    s_qi_last_us[m] = now;
+    taskEXIT_CRITICAL(&s_qi_mux);
+}
+/** Take the quarter's poll integral (channel @p ch, Wh) and the hole count; restart the window at now (all channels). */
+static void qi_take(uint8_t m, double out[RBAMP_MAX_CHANNELS], uint8_t *holes)
+{
+    taskENTER_CRITICAL(&s_qi_mux);
+    for (uint8_t c = 0; c < RBAMP_MAX_CHANNELS; ++c) { out[c] = s_qi_wh[m][c]; s_qi_wh[m][c] = 0.0; }
+    *holes = s_qi_holes[m]; s_qi_holes[m] = 0;
+    if (s_qi_last_us[m]) s_qi_last_us[m] = esp_timer_get_time();
+    taskEXIT_CRITICAL(&s_qi_mux);
 }
 
 static double diag_cnt_wh(const rbamp_std_energy_t *d)
@@ -2034,6 +2068,7 @@ static void rbamp_bridge_poll_task(void *arg)
                 s_env_skip[m] = 2;
             }
             diag_poll(m, &s);                                   /* reconciliation trace */
+            qi_feed(m, &s);                                     /* quarter poll integral (module restart inside a quarter) */
             ct_limit_check(m, &s);                              /* CT nominal / clipping */
             if (s_env_skip[m]) s_env_skip[m]--;
             else pmin_feed(m, &s);                              /* 10-s rolling minimum for the period record */
@@ -3276,6 +3311,12 @@ esp_err_t rbamp_bridge_collect_period(uint8_t module, rbpower_stat_period_type_t
         return err != ESP_OK ? err : ESP_ERR_INVALID_RESPONSE;
     }
     s_last_collect_ok_us[module] = esp_timer_get_time();
+    double qi[RBAMP_MAX_CHANNELS]; uint8_t qi_holes = 0;
+    qi_take(module, qi, &qi_holes);
+    /* the module restarted inside this quarter: its average covers only module_window_ms (since its boot), not the
+     * hub's master window. Not a resume (there master_dt == module_window by design). */
+    const bool mid_restart = s_line[module] == 0 && !virt_is(module) && snap.window_from_boot && snap.module_window_ms &&
+                             snap.module_window_ms + 5000u < snap.master_dt_ms;
     rbpower_stats_stage("collect: inject");
     /* BASIC resume window: rbamp-esp-idf 1.7.2-rc5 infers the commit period (100 ms on firmware >= v1.2, 200 before)
      * per snapshot — no hub-side ×100/×200 correction is needed. */
@@ -3441,6 +3482,23 @@ esp_err_t rbamp_bridge_collect_period(uint8_t module, rbpower_stat_period_type_t
         float max_p = (ch == 0 && !isnan(snap.max_p)) ? snap.max_p * cg : avg_p;
         float wh    = avg_p * dt_h;                            /* Wh over the actual window */
         uint32_t dt_ms = snap.master_dt_ms;
+        if (mid_restart) {
+            /* module part = its average over its own window; the time before its restart is the hub's poll integral.
+             * The poll integral observed the whole quarter, so it is booked when it is complete (no holes); otherwise
+             * only the module part (the time before the restart is then not measured). */
+            float wmod = avg_p * ((float)snap.module_window_ms / 3600000.0f);
+            double qint = 0.0;
+            if (en->source == RBAMP_ENTRY_PHASES) { for (uint8_t c = 0; c < 3 && c < s_nc[module]; ++c) qint += qi[c]; }
+            else if (ch < RBAMP_MAX_CHANNELS) qint = qi[ch];
+            qint *= cg;
+            const bool use_int = qi_holes == 0 && s_has_vhw[module] && fabs(qint) >= fabsf(wmod) * 0.9;
+            wh = use_int ? (float)qint : wmod;
+            avg_p = wh / dt_h;
+            if (fabsf(avg_p) > fabsf(max_p)) max_p = avg_p;
+            rbpower_diag_printf("m%u ch%u module restarted inside the quarter (window %lus of %lus): module %.3fWh, hub polls %.3fWh -> %.3fWh booked (%s)",
+                                module, ch, (unsigned long)(snap.module_window_ms / 1000u), (unsigned long)(snap.master_dt_ms / 1000u),
+                                (double)wmod, qint, (double)wh, use_int ? "hub polls" : qi_holes ? "poll holes: module part only" : "module part");
+        }
         if (tail_gap_s && e < RBAMP_MAX_ENTRIES && tail_wh[e] != 0.0) {   /* fold the reboot gap in */
             wh    = tail_spans_quarter ? (float)tail_wh[e] : wh + (float)tail_wh[e];   /* a deferred tail replaces the quarter */
             /* Coverage: only the part of the gap inside the CURRENT hour is this hour's covered time.
@@ -3898,6 +3956,7 @@ esp_err_t rbamp_bridge_i2c_add(uint8_t b, uint8_t addr, int *m_out, char *why, s
     bool up = probe_module(m);
     classify_energy_modes(); publish_presence();
     rbpower_diag_printf("m%u added: bus %u 0x%02X (%s), /rbamp.json: %s", m, b, addr, up ? "joined" : "not joined yet", esp_err_to_name(se));
+    { char ei[40]; snprintf(ei, sizeof(ei), "module %u added on bus %u at 0x%02X", m, b, addr); rbllm_setup_event(ei); }
     if (m_out) *m_out = m;
     return se;
 }
@@ -3946,6 +4005,7 @@ esp_err_t rbamp_bridge_i2c_set_addr(uint8_t m, uint8_t addr, char *why, size_t w
     drdy_attach(m);
     provision_module(m, &s_cfg.modules[m]);
     rbpower_diag_printf("m%u address 0x%02X -> 0x%02X on bus %u (UID kept), /rbamp.json: %s", m, old, addr, b, esp_err_to_name(se));
+    { char ei[40]; snprintf(ei, sizeof(ei), "module %u address 0x%02X->0x%02X bus %u", m, old, addr, b); rbllm_setup_event(ei); }
     rbpower_hw_rev_bump();
     return se;
 }
@@ -3971,6 +4031,7 @@ esp_err_t rbamp_bridge_i2c_set_bus(uint8_t m, uint8_t b, char *why, size_t wn)
     classify_energy_modes(); publish_presence();
     rbpower_diag_printf("m%u moved to bus %u at 0x%02X (%s), /rbamp.json: %s", m, b, s_cfg.modules[m].addr,
                         up ? "joined" : "not answering there yet — healer re-probes", esp_err_to_name(se));
+    { char ei[40]; snprintf(ei, sizeof(ei), "module %u moved to bus %u", m, b); rbllm_setup_event(ei); }
     return se;
 }
 
@@ -3994,6 +4055,7 @@ esp_err_t rbamp_bridge_i2c_set_pins(uint8_t b, int sda, int scl, char *why, size
     esp_err_t se = save_cfg();
     if (se == ESP_OK) s_i2c_reboot_pending = true;
     rbpower_diag_printf("I2C bus %u pins -> SDA%d/SCL%d (applies after restart), /rbamp.json: %s", b, sda, scl, esp_err_to_name(se));
+    if (se == ESP_OK) { char ei[48]; if (sda < 0) snprintf(ei, sizeof(ei), "bus %u off (after restart)", (unsigned)b); else snprintf(ei, sizeof(ei), "bus %u pins SDA%d SCL%d", (unsigned)b, sda & 0xFF, scl & 0xFF); rbllm_setup_event(ei); }
     return se;
 }
 
