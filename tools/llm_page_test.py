@@ -118,8 +118,13 @@ def main():
         c, vj = h.page("list_config_versions")
         top = (vj or {}).get("result", {}).get("versions", [{}])[0]
         check(top.get("version") == ver and top.get("source") == "web", f"version {ver} has source \"web\" ({top.get('source')})")
-        c, ej = h.page("get_events", {"limit": 50})
-        evs = (ej or {}).get("result", {}).get("events", [])
+        evs, since = [], None   # the event list pages oldest first, 50 at a time: follow `next` to the newest
+        for _ in range(40):
+            c, ej = h.page("get_events", {"limit": 50, **({"since": since} if since is not None else {})})
+            res = (ej or {}).get("result", {})
+            evs += res.get("events", [])
+            if not res.get("more"): break
+            since = res.get("next")
         check(any(e["type"] == "config_changed" and e["data"].get("version") == ver and e["data"].get("source") == "web" for e in evs),
               "config_changed event with source web")
         # rollback to the version before
