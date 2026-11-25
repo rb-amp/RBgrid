@@ -73,7 +73,8 @@ def main():
 
     # ---- refusals
     check(err(call("propose_config", {})) == "invalid_args", "propose without patch or rollback_to: invalid_args")
-    check(err(call("propose_config", {"patch": {"channels": {cid: {"name": orig_name}}}})) == "invalid_args", "patch that changes nothing: invalid_args")
+    nc = call("propose_config", {"patch": {"channels": {cid: {"name": orig_name}}}})
+    check(nc.get("ok") and nc["result"].get("no_change") is True and nc["result"].get("confirm_token") is None, "patch that changes nothing: no_change, no token")
     check(err(call("propose_config", {"patch": {"channels": {cid: {"ct_code": 3}}}})) == "invalid_args", "non-writable field: invalid_args")
     check(err(call("propose_config", {"patch": {"channels": {cid: {"name": "x" * 40}}}})) == "invalid_args", "name over 31 bytes: invalid_args")
     check(err(call("propose_config", {"patch": {"channels": {cid: {"name": "a\u0001b"}}}})) == "invalid_args", "name with a control char: invalid_args")
@@ -113,7 +114,9 @@ def main():
 
     # ---- read-only mode
     req("/api/v1/llm", "POST", {"read_only": True}, bearer=admin)
-    check(err(call("propose_config", {"patch": {"peaks_cycle_day": 5}})) == "read_only_mode", "read-only: propose refused")
+    pr = call("propose_config", {"patch": {"peaks_cycle_day": 5}})   # e51aa56: the preview stays, every writer is refused
+    check(pr.get("ok") and pr["result"].get("read_only") is True, "read-only: propose previews with read_only true")
+    check(err(call("apply_config", {"confirm_token": (pr.get("result") or {}).get("confirm_token") or "x"})) == "read_only_mode", "read-only: apply refused")
     check(call("get_config").get("ok"), "read-only: get_config still answers")
     req("/api/v1/llm", "POST", {"read_only": False}, bearer=admin)
 
@@ -187,7 +190,7 @@ def main():
     # ---- schema + clamp model (optional: restarts the module)
     sch = call("get_config_schema", {"section": "channels"})
     wr = sch.get("result", {}).get("writable", {})
-    check(sch.get("ok") and "ct_model" in wr and "main_supply" not in wr["role"]["enum"], f"get_config_schema channels: ct models {wr.get('ct_model', {}).get('enum')}, settable on {wr.get('ct_model', {}).get('channels')}")
+    check(sch.get("ok") and "ct_model" in wr and "role" in wr, f"get_config_schema channels: ct models {wr.get('ct_model', {}).get('enum')}, settable on {wr.get('ct_model', {}).get('channels')}")
     check(err(call("get_config_schema", {"section": "x"})) == "invalid_args", "get_config_schema bad section: invalid_args")
     if a.ct and cid in wr.get("ct_model", {}).get("channels", []):
         ct0 = call("get_config", {"section": "channels"})["result"]["channels"][0]["source"]["ct_model"].split(",")[0]

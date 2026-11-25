@@ -130,7 +130,8 @@ def main():
         names = [t["name"] for t in man["tools"]]
         print("tools:", ", ".join(names))
         for t in man["tools"]:
-            writes = t["name"] in ("apply_config", "rollback_config")
+            n = t["name"]   # the hub's rule: read scope, get_*, propose_config and list_config_versions change nothing (forget_me revokes)
+            writes = n == "forget_me" or not (t.get("scope") == "read" or n.startswith("get_") or n in ("propose_config", "list_config_versions"))
             ok = isinstance(t.get("input_schema"), dict) and t["input_schema"].get("type") == "object" and t.get("annotations", {}).get("readOnlyHint") is (not writes)
             check(ok, f"tool {t['name']}: object input_schema, readOnlyHint {not writes}")
         code, man2, _, _ = h.req("/api/llm/v1/manifest", bearer=tok)
@@ -220,7 +221,7 @@ def main():
             for sec in (None, "channels", "tariff", "notifications", "region"):
                 body = {"tool": "get_config", "args": {"section": sec} if sec else {}, "request_id": "cfg"}
                 code, j, nb, ms = h.req("/api/llm/v1/call", "POST", body, bearer=tok2)
-                ok = j and j.get("ok") and len(j["result"].get("version", "")) == 8
+                ok = j and j.get("ok") and isinstance(j["result"].get("version"), int)
                 check(ok and nb <= maxb, f"get_config {sec or 'all'}: ok, version, {nb} B, {ms:.0f} ms")
                 if not ok:
                     print("   ", json.dumps(j)[:300])
