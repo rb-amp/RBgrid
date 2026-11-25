@@ -51,6 +51,13 @@ extern "C" {
 void rbgrid_core_set_context(rbpower_extended_config_t *ext_cfg, rbgrid_json_context_t *json_ctx);
 /** @brief Extended configuration set by rbgrid_core_set_context(). @return Pointer, or NULL before. */
 rbpower_extended_config_t *rbgrid_core_ext_cfg(void);
+/** @brief The hub's one name (system section home_name; "RBgrid" when unset). The LLM manifest, the mDNS announce
+ *         and the pages read this. @param[out] out buffer @param[in] n size */
+void rbgrid_core_hub_name(char *out, size_t n);
+/** @brief The application's callback for a rename (the mDNS announce follows the name). */
+void rbgrid_core_set_rename_cb(void (*cb)(void));
+/** @brief Call after home_name changed live (hub page, LLM apply_config). */
+void rbgrid_core_hub_renamed(void);
 /** @brief JSON device context set by rbgrid_core_set_context(). @return Pointer, or NULL before. */
 rbgrid_json_context_t *rbgrid_core_json_ctx(void);
 

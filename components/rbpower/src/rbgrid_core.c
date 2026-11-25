@@ -199,3 +199,15 @@ const char *rbgrid_core_running_image_md5(void)
     s_done = true;
     return s_md5;
 }
+
+/* ---- The hub's name ---- */
+static void (*s_rename_cb)(void);
+void rbgrid_core_hub_name(char *out, size_t n)
+{
+    if (!out || !n) return;
+    const rbpower_extended_config_t *ec = rbgrid_core_ext_cfg();
+    const char *h = ec && ec->home_name ? ec->home_name : "";
+    snprintf(out, n, "%s", h[0] ? h : "RBgrid");
+}
+void rbgrid_core_set_rename_cb(void (*cb)(void)) { s_rename_cb = cb; }
+void rbgrid_core_hub_renamed(void) { if (s_rename_cb) s_rename_cb(); }
