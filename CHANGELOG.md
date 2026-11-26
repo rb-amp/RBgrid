@@ -41,8 +41,9 @@
 - **The event list** keeps restarts, configuration changes, setup changes (such as new bus pins),
   modules lost and back, the clock and prices across restarts.
 - **For developers.** The manifest is the authority for what a hub offers, and it carries a JSON Schema for
-  every tool's input. Output shapes: in 1.3.0 every tool but `list_nodes` declares one, and the next firmware
-  release adds the last. A period in a call is either a preset or `from` and `to`.
+  every tool's input. Output shapes: in 1.3.0 every tool declares one, and `list_nodes` declares only that the
+  reply is an object — the next firmware release gives it a shape. A period in a call is either a preset or
+  `from` and `to`.
 - **The bridge, released separately.** An assistant reaches the hub through a bridge that runs on your own
   computer, in one file: **[`rbgrid-mcp.mcpb`](https://github.com/rb-amp/RBgrid/releases/download/mcp-v0.2.0/rbgrid-mcp.mcpb)**
   (bridge **0.2.0**, 2.7 MB, `sha256 c979c255de52baf8e6a15d020de730f16051e92900cb2ea539c3a63e351054e4`). The bundle
