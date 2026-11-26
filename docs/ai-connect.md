@@ -26,8 +26,8 @@ The admin password and the app's "API token" are one value: set it in either pla
 *You should see:* the interface on, and no assistant paired yet.
 
 **2. Install the bridge** on the computer that will run your AI assistant — it is one file:
-**[rbgrid-mcp.mcpb](https://github.com/rb-amp/RBgrid/releases/download/mcp-v0.2.0/rbgrid-mcp.mcpb)**, about 2.7 MB. Add that file in your AI assistant's app; what it needs on the
-computer, and the one app we have walked ourselves, are on the pages below. Do this **before** step 3: the pairing
+**[rbgrid-mcp.mcpb](https://github.com/rb-amp/RBgrid/releases/download/mcp-v0.2.0/rbgrid-mcp.mcpb)**. Add that file in your AI assistant's app; what it
+needs on the computer, and the one app we have walked ourselves, are on the pages below. Do this **before** step 3: the pairing
 code appears only once an assistant asks for it, it works once, and it expires in ten minutes — so installing
 the bridge while a code is counting down means starting over. → [Where an AI assistant runs](ai-clients.md)
 

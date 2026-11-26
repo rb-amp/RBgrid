@@ -178,32 +178,36 @@ The buttons **Access-point password** and **API token** take you to the panel th
 
 Without an API token, the hub doesn't tell the app whether its access point still has the setup password. So the warning stays until **both** are set: an API token and your own access-point password.
 
-## Status and Connection
+## Wi-Fi
 
-![Network: Status + Connection](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-network.webp)
+![Settings: the Wi-Fi panel in Network & time](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-network.webp)
 
-Always shown, as two cards.
+Always shown, and it is **one** card. Up to v1.2.x it was two, **Status** and **Connection**; from v1.3.0 the
+two are one panel, and neither of those names appears on screen any more.
 
-**Status** (read-only):
+The top of the card shows the connection the hub has now, read-only. Until the hub has answered, each row
+reads **—**.
 
-| Field | What it shows |
+| Row | What it shows |
 |---|---|
 | **Mode** | **connected to Wi-Fi**, **own access point**, or **Wi-Fi + own access point**. |
 | **Network** | The Wi-Fi network the hub is on. |
 | **Address** | The hub's IP address. |
-| **Signal** | Signal strength in dBm, with **good** (−60 dBm or better), **fair** (down to −72 dBm) or **weak**. |
+| **Signal** | The signal in dBm with a word beside it — **good**, **fair** or **weak**. |
 
-**Connection** sets the Wi-Fi network the hub joins:
+**Scan networks** is in the card's heading, on the right; while it is searching it reads **Scanning…**. What it
+finds appears under **Join another network**, each network with its security and channel and a signal badge; one
+that does not announce its name is marked **(hidden)**. Click a network and its name goes into **SSID**.
 
-| Field | What it does |
-|---|---|
-| **Scan networks** | Lists the networks the hub can see, with their security, channel and signal. Click one to fill in its name. |
-| **SSID** | The network's name. Required. |
-| **Password** | The network's password. |
+**Join another network** is a subheading, not a disclosure — it is always there, with **SSID** and **Password**
+under it. Fill them in and press **Save and reboot**.
 
-Press **Save and reboot**. The app asks you to confirm, then the hub restarts at once to join the new network. If it gets a new IP address there, connect to it again from the app's start screen.
+The app asks first: *"Save Wi-Fi network "<name>"? The device will reboot to apply it."* This button saves on
+its own, apart from the section's **Cancel · Save** bar. The hub then restarts at once and joins the new
+network; if it gets a new IP address there, connect to it again from the app's start screen.
 
-The hub's own access point stays on after it joins your network, so you can always reach the hub at `192.168.4.1` through it.
+The hub's own access point stays on after it joins your network, so you can always reach the hub at
+`192.168.4.1` through it.
 
 ## Status lights
 
@@ -429,3 +433,4 @@ Always shown.
   that flash has stopped, the hub has stopped — unless its lights are set to **quiet** or **off**, which hide
   exactly that flash and nothing else.
 - A red light counts out what needs attention; the codes are in *Status lights* above.
+

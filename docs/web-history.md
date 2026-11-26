@@ -251,3 +251,4 @@ The **As a table** link on a point's page uses this: an hourly trend opens **Tod
 - [How cost is calculated](web-cost-calculation.md) — why a period costs what it costs, and what a flagged period means for the money.
 - [Economics](web-economics.md) — the same records as totals, by zone and against the input.
 - [Events](web-events.md) — what the hub reported at the time a record looks odd.
+

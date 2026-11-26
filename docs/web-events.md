@@ -97,7 +97,7 @@ the place to look when a cost figure is not what you expected:
 ![Events · Log with the price lines: a configuration change, a failed fetch, a successful fetch storing periods, a state change back to the primary provider, and a window opening](https://www.rbgrid.io/assets/img/webapp-docs/wa-events-price-lines.webp)
 
 The failure reasons are the hub's own codes — `fetch_failed`, `http_status`, `parse`, `auth`, `no_data_for_zone`,
-`rate_limited` — and which one it is decides what to do about it. The Prices page puts the same reason in plain
+`rate_limited` — and which one it is decides what to do about it. **Dynamic prices** puts the same reason in plain
 words, and [Where your price comes from](hub-dynamic-prices.md) lists what each one means for you.
 
 Times in these lines are written as the hub writes them, in Unix seconds.
@@ -137,3 +137,4 @@ One load reaches back a fixed stretch of the log; **Show earlier** loads more.
 | No records. | the log is empty for this filter |
 
 A failed module firmware update has a **Hub log →** link (see [Sensors and modules](web-sensors.md#module-firmware-update)). It opens Events on the **Active** tab; switch to **Log** to see why.
+

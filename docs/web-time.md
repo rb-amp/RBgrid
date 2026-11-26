@@ -1,4 +1,4 @@
-# Time
+# Time Configuration
 
 ## Overview
 
@@ -84,7 +84,7 @@ SNTP uses **UDP port 123**, outbound, to the servers you set. If your network bl
 ## Troubleshooting
 
 **The status never shows "synchronized"**
-- Check that the hub is on a network with internet access (the **Status** card in Settings).
+- Check that the hub is on a network with internet access (**Settings → Network & time**, the **Wi-Fi** card).
 - Check that outbound UDP port 123 is allowed.
 - Try another server, or a server's IP address instead of its name (a DNS problem).
 - On a network without internet, use **Use this device's time**.

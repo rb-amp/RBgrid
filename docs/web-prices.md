@@ -10,7 +10,7 @@ address leads there). The tab is there only when the hub reports that it can do 
 **It needs a direct connection to the hub.** Reached another way, the page says: *"Dynamic prices are set over
 a direct connection to the hub."*
 
-![The Prices page at 13:10: the heading «Dynamic prices», the lead, the «Price now» block and the start of the day's chart with a midday dip](https://www.rbgrid.io/assets/img/webapp-docs/wa-prices-page.webp)
+![The Dynamic prices tab at 13:10: the heading «Dynamic prices», the lead, the «Price now» block and the start of the day's chart with a midday dip](https://www.rbgrid.io/assets/img/webapp-docs/wa-prices-page.webp)
 
 How the price is actually arrived at — the provider, the backup, your plan as the fallback, and what your
 contract does to a market price — is one page across:

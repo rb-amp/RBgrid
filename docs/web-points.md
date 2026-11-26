@@ -90,7 +90,7 @@ At the bottom: "Home Assistant entities for the new point appear after the hub r
 Two things that do go wrong:
 
 - **`invert_sign` left over from an older firmware.** Before v1.1.5 a Generation point needed it to read production at all. After updating, clear it (`POST /api/v1/units/<id> {"invert_sign": false}`) or the point reads consumption again: `invert_sign` still flips the result on top of the role.
-- **The wrong kind of channel.** A BASIC module's channels count **consumption only** — they don't see export — which is why **Generation** and **Storage** aren't offered on them. Production needs a channel that measures direction. Which modules measure direction: [the rbAmp module guide](https://www.rbamp.com/products/modules/which-one?utm_source=github&utm_medium=referral&utm_campaign=rbgrid).
+- **The wrong kind of channel.** A BASIC module's channels count **consumption only** — they don't see export — which is why **Generation** and **Storage** aren't offered on them. Production needs a channel that measures direction. Which modules measure direction: [the rbAmp module guide](https://www.rbamp.com/products/modules/which-one).
 
 ### Phase
 
@@ -267,6 +267,9 @@ It works on an **ESP32-S3** hub, from firmware **v1.3.0**. An ESP32 hub keeps it
 **12 points is its limit**; the firmware there does not look for a chip at all, and fitting one to an ESP32
 changes nothing.
 
+**A ready-made RBgrid Mini Hub has the chip fitted**, so 49 is its number and there is nothing to add. On a
+hub you built yourself it is a part you fit.
+
 **The hub moves your history onto the chip by itself.** This happens during a start-up, the first time an
 ESP32-S3 hub finds a chip with more room than its own history area: on a new hub board's first start, when you
 add the module to a hub you built yourself, or when a hub that already has one comes up on the new firmware.
@@ -318,3 +321,4 @@ keeping history, and the app shows its *chip not answering* warning.
 
 **I can't set «Measured inside»**
 - The target must be an existing point, not this one, not the input, and the chain must not loop back. The field appears only from firmware v1.1.8.
+

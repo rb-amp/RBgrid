@@ -2,7 +2,16 @@
 
 This page takes the shortest path: one hub and one rbAmp **STD-UI1** energy meter on your supply (or an **STD-U3I3** for a three-phase supply). Each step links to the full description. The whole walk-through with explanations is in [Scenario: one main meter](web-scenario-main-meter.md).
 
-**You need:** an **ESP32** or **ESP32-S3** board with PSRAM and **16 MB** flash. Both matter, so check a board you already have with `esptool.py -p <PORT> flash_id` before you erase it · an rbAmp STD-UI1 or STD-U3I3 with its sensors · a USB cable · a computer with Python (for esptool) and `curl` · your home Wi-Fi name and password.
+**You need:** a hub · an rbAmp STD-UI1 or STD-U3I3 with its sensors · a USB cable · your home Wi-Fi name and password.
+
+**Two kinds of hub, and they start differently.**
+
+| The hub you have | What step 2 is for you |
+|---|---|
+| **A board of your own** — an **ESP32** or **ESP32-S3** with PSRAM and **16 MB** flash. Both matter, so check a board you already have with `esptool.py -p <PORT> flash_id` before you erase it. You also need a computer with Python (for esptool) and `curl`. | You flash the firmware yourself. |
+| **An RBgrid hub board**, which comes with the firmware already on it. | **Skip step 2.** Power it over USB and go to step 3. |
+
+> 🔴 **If your hub came with the firmware on it, do not flash it.** Step 2 erases the board, and on a ready hub there is nothing to gain by it — the image it ships with is the release image, and later versions arrive over the air.
 
 > For any work inside an electrical panel, call a qualified electrician.
 
@@ -15,9 +24,11 @@ This page takes the shortest path: one hub and one rbAmp **STD-UI1** energy mete
 
 Details: [Hardware](https://www.rbgrid.io/hardware), the rbAmp STD wiring guide.
 
-## 2. Flash the firmware
+## 2. Flash the firmware — only on a board of your own
 
 Download the four files from the [latest release](https://github.com/rb-amp/RBgrid/releases/latest) and run the esptool command from the release notes. → [Build & flash](https://www.rbgrid.io/source/build)
+
+An RBgrid hub board arrives flashed: power it over USB and go on to step 3.
 
 ## 3. Put the hub on your Wi-Fi
 
@@ -25,7 +36,6 @@ Join the hub's own Wi-Fi `rbgrid-xxxx` with the setup password **`RBGRID123`** �
 
 Find its new address. Join `rbgrid-xxxx` again and open `http://192.168.4.1`: the page shows the address the hub took on your home network. Your router's list of devices shows it too. Many computers can also reach the hub by name, at `http://rbgrid-xxxx.local/` — the same four characters as its Wi-Fi name — but that depends on the name service running on the computer you are using, so write the address down.
 **On an ESP32-S3 board, the green light says where the hub is in all this.** A slow blink means it is running its own Wi-Fi and waiting for your settings, a fast blink means it is joining your network, and a short flash every few seconds means it is up and running. A red light counting out groups of flashes means something needs attention. → [Status lights](web-settings.md#status-lights)
-
 
 ## 4. Open the web app
 

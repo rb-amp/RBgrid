@@ -138,7 +138,12 @@ The dialog works out where you are from the hub's state, so you can close it to 
 A hub drives **two** module buses — on an ESP32 and on an ESP32-S3 alike: it starts with the first one on
 its default pins, and the second is off until you give it a pair of pins of its own.
 
-- **Up to eight modules in all**, on the first bus, the second, or split between them.
+- **Up to eight modules in all.** On a hub you wired yourself they can sit on the first bus, on the second,
+  or be split between them however you like.
+- **On a ready-made RBgrid Mini Hub the split is already decided.** Its modules go into sockets on the board
+  instead of onto wires: four sockets on each bus, three of them for an rbAmp Basic and the fourth for either
+  an STD or a Basic. That gives one STD per bus, two on the hub. Its bus pins are wired to those sockets and
+  set for you, so choosing pins is something you do only on a hub you wired yourself.
 - **An address has to be unique on its bus, not on the hub.** Two modules at the same address are fine as long
   as they sit on different buses — which is why a second bus is worth having when you have run out of free
   addresses.
@@ -155,7 +160,7 @@ its default pins, and the second is off until you give it a pair of pins of its 
 - With up to three modules, leave the modules' pull-ups as they are: no cutting, no extra resistors.
 - With four or more modules, cut the pull-ups on all but one module (or fit one external pair).
 
-See the rbAmp [wiring guide](https://www.rbamp.com/docs/modules/basic/hardware-connection?utm_source=github&utm_medium=referral&utm_campaign=rbgrid) for longer cables.
+See the rbAmp [wiring guide](https://www.rbamp.com/docs/modules/basic/hardware-connection) for longer cables.
 
 ### If something goes wrong
 
@@ -248,3 +253,4 @@ Module firmware updates work from hub firmware v1.1.0, on STD modules only.
 ## Chart refresh
 
 Charts refresh themselves: the hour view once a minute, the day view once every 5 minutes, and longer ranges once every 15 minutes.
+

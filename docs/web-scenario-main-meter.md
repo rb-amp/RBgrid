@@ -23,7 +23,7 @@ Both measure in both directions (import and export), so the input stays right if
 
 ## What you need
 
-- An **ESP32** or **ESP32-S3** board with PSRAM and 16 MB flash: this is the hub.
+- A hub: either an **ESP32** or **ESP32-S3** board of your own with PSRAM and 16 MB flash, which you flash in step 2, or an **RBgrid hub board**, which comes flashed and skips that step.
 - The rbAmp STD-UI1 or STD-U3I3 with its current sensors.
 - A USB cable and a computer with Python (for `esptool`) and `curl`.
 - Your home Wi-Fi name and password. The hub uses **2.4 GHz** Wi-Fi only.
@@ -38,11 +38,14 @@ Both measure in both directions (import and export), so the input stays right if
 3. **Connect the voltage input** through a fuse: L and N on an STD-UI1; L1, L2, L3 and N on an STD-U3I3.
 4. **Connect the module to the hub** with four wires: the module's **VIN to the board's 5 V/VIN pin** (4.5–5.5 V; not 3.3 V), GND, and the two bus wires to the hub's first-bus pins: **SDA 25 / SCL 26** on an ESP32, **SDA 8 / SCL 9** on an ESP32-S3. Those are the defaults, which you can change in the hub's settings. VIN only feeds the module's own regulator; its SDA/SCL work at 3.3 V and connect to the ESP32 directly, with no level shifter. Keep the cable up to 15 cm. Leave the module's pull-up resistors as they are: one module needs them. With four or more modules on one bus, they're cut on all but one module; see [Sensors and modules](web-sensors.md#cables-and-pull-ups).
 
-The module leaves the factory at I²C address **0x50**. Leave it there. On first start, a new hub finds the module at 0x50 and creates two points by itself: the **grid input** (the module's first channel) and the **voltage**. If the module answers at another address, no grid input is created, so keep the factory address for this scenario.
+The module leaves the factory at I²C address **0x50**. Leave it there. On first start, a new hub finds the module at 0x50 and creates two points by itself: the **grid input** (the module's first channel) and the **voltage**. If the module answers at another address, no grid input is created, so keep the factory address for this scenario. 
 
 More: [Hardware](https://www.rbgrid.io/hardware) and the rbAmp STD wiring guide.
 
-## Step 2. Flash the hub
+## Step 2. Flash the hub — only on a board of your own
+
+> 🔴 **An RBgrid hub board comes with the firmware already on it.** Skip this step: power it over USB and go
+> to step 3. Flashing it would erase a board that is already ready, and new versions arrive over the air.
 
 Download the four firmware files from the [latest release](https://github.com/rb-amp/RBgrid/releases/latest): `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin` and `main_release.bin`. Connect the board over USB and run the `esptool` command from the release notes. It writes all four files at their addresses. → [Build & flash](https://www.rbgrid.io/source/build)
 

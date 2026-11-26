@@ -183,3 +183,4 @@ A summary of the setup, with a **Fix** button next to anything that isn't done y
 
 **I already had a full tariff plan and pressed Replace in the quick tariff**
 - The quick tariff has replaced it. If you saved a restore point before, use **Settings → Device → Restore point → Restore and restart**. Otherwise enter the taxes, fees and other zones again on the **Tariffs** page.
+

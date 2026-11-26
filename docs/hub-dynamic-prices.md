@@ -81,7 +81,7 @@ wrong is the most common way a cost figure comes out too high.
 
 ### Attribution is shown, and that is on purpose
 Each source carries the wording its own licence asks for — for example `Bundesnetzagentur | SMARD.de /
-Energy-Charts (CC BY 4.0)` — and the hub displays it on the Prices page. It is not decoration: it is the condition
+Energy-Charts (CC BY 4.0)` — and the hub displays it on **Dynamic prices**. It is not decoration: it is the condition
 on which the data may be used, and it tells you what you are looking at. Energy-Charts is served only for the zones
 published under CC BY 4.0.
 
@@ -209,14 +209,14 @@ FAIL price: <provider> <zone> fetch failed (<reason>), retry in N min
 
 The reason is one of `fetch_failed`, `http_status`, `parse`, `auth`, `no_data_for_zone` or `rate_limited` — and
 which one it is decides what to do about it (see below). The live state and how far prices are known are on the
-Prices page, and in the API as `price_state` and `valid_until`.
+**Dynamic prices**, and in the API as `price_state` and `valid_until`.
 
 ---
 
 ## The record: which price was used, for every period
 
 Every 15-minute period's applied price is logged with its source, and kept for **40 days** — including when
-dynamic prices are off, where the entry simply reads `plan`. Download it as CSV from the Prices page.
+dynamic prices are off, where the entry simply reads `plan`. Download it as CSV from **Dynamic prices**.
 
 | `prov` | the price came from |
 |---|---|

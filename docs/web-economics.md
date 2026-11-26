@@ -196,3 +196,4 @@ Amounts use the currency of the hub's active tariff plan and the number of decim
 - [How cost is calculated](web-cost-calculation.md) — why a period costs what it costs.
 - [Tariffs](web-tariffs.md) — zones, charges, VAT, export prices, the kWh credit.
 - [History](web-history.md) — the records behind these totals, and the quality of each one.
+

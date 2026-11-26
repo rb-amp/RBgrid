@@ -18,7 +18,7 @@ From **v1.2.0** the hub can take the price for each 15-minute period from a prov
 - **It supplies the charges.** On a *spot* provider, this plan's per-kWh energy tax, grid fee and renewable levy, and its VAT, are applied on top of the market price. (On an *all-in* provider nothing of the plan is added — that is what stops the taxes being counted twice.)
 - **Its currency is the money currency.** A price zone trading in another currency is refused by the hub, which converts nothing. Set the currency here first.
 
-Export is priced by the plan too, unless you choose otherwise on the Prices page.
+Export is priced by the plan too, unless you choose otherwise on **Dynamic prices**.
 
 → [Where your price comes from](hub-dynamic-prices.md) · [Dynamic prices](web-prices.md)
 
@@ -32,7 +32,7 @@ Changes are kept in the page until you save. A bar stays at the top: *No unsaved
 
 **From firmware v1.1.7 the new plan is applied in one step.** The costing never sees a half-loaded plan, so no 15-minute period is ever priced at a mixture of your old and new rates — which matters most at the moment you press **Save**, because a period may be closing just then. A plan carrying more zones than the hub can hold is **refused** outright rather than loaded in part, so a bad plan leaves the working one in place.
 
-> ⚠️ **Updating from v1.1.4? Open this page once afterwards.** On firmware **v1.1.4** a restart — a power cut, a reboot or a firmware update — left the hub running its built-in placeholder plan, **Test Day/Night** (0.20 / 0.30): your plan stayed safe in storage but wasn't the one in use until you opened Tariffs and pressed **Save** again, and energy measured in between was costed at the placeholder's prices and stored like any other cost. **Fixed in v1.1.5.** After the update, open **Tariffs**: if it still shows *Test Day/Night*, press **Save** once more and it stays from then on. (A v1.1.4 boot could overwrite the stored plan with its own default, so the new firmware keeps the placeholder rather than guess at an unknown plan.)
+> ⚠️ **Updating from v1.1.4? Open this page once afterwards.** On firmware **v1.1.4** a restart — a power cut, a reboot or a firmware update — left the hub running its built-in placeholder plan, **Test Day/Night** (0.20 / 0.30): your plan stayed safe in storage but wasn't the one in use until you opened Tariffs and pressed **Save** again, and energy measured in between was costed at the placeholder's prices and stored like any other cost. **Fixed in v1.1.5.** After the update, open **Tariffs**: if it still shows *Test Day/Night*, press **Save** once more and it stays from then on. (A v1.1.4 boot could overwrite the stored plan with its own default, so the new firmware keeps the placeholder rather than guess at an unknown plan.) 
 
 **Save** stays disabled while:
 - nothing has changed;

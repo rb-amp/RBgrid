@@ -1,4 +1,4 @@
-# Overview
+# The Overview (dashboard)
 
 The **Overview** is the first page of the RBgrid app. It shows what your hub measures right now and today: the power at your grid input, the power on each metered line, the phases, the day's energy and, once you've set a tariff, what that energy costs at your rates.
 

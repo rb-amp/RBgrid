@@ -25,6 +25,18 @@ A demo with sample sites, so you can look around without a hub. It can't connect
 
 ## Setup
 
+**Which board do I need?**
+Three ways in, and they differ in what the board itself can do, not in the app or in what you can measure.
+- **An ESP32 of your own**, with PSRAM and **16 MB** flash. Both matter, so check a board you already have
+  before you erase it. Its stored history covers **12** points, and it has no status lights.
+- **An ESP32-S3 of your own** (an N16R8 module). Fit it with an SPI flash chip for statistics and the stored
+  history covers **49** points instead of 12; from firmware **v1.3.0** the two status lights work on this chip.
+- **A ready-made RBgrid Mini Hub.** It comes with the firmware on it, so there is no flashing step at all; it
+  has the statistics chip and the status lights, and its modules go into sockets on the board instead of onto
+  wires. → [Sensors and modules](web-sensors.md#the-two-module-buses)
+
+→ [Quick start](web-quick-start.md) · [The statistics chip](web-points.md#the-statistics-chip)
+
 **Can I leave the wizard half-way?**
 Yes. Nothing is blocked: skip optional steps and come back later from **Set up → Setup wizard** (in the menu until the hub is set up; after that it starts from **Set up → Settings → Device**). **Done** lists what's left. → [Setup wizard](web-setup-wizard.md)
 
@@ -41,7 +53,7 @@ The hub's time zone differs from where you are. Set it in **Settings → Network
 Settings has a bar at the top: *Unsaved changes: n*. Choose **Apply**. Some settings apply only after a restart: then the button reads **Save and restart**. A few panels (Security, Browser access, Hub access point, MQTT broker) save with their own button. → [Settings](web-settings.md)
 
 **I changed my home Wi-Fi. How do I move the hub?**
-In **Settings**, the **Connection** card: scan, choose the network, enter its password, **Save and reboot**. If the hub gets a new address, open the app at the new one.
+In **Settings → Network & time**, the **Wi-Fi** card: press **Scan networks**, pick your network under **Join another network**, enter its password and press **Save and reboot**. The app asks to confirm, then the hub restarts and joins. If it gets a new address, open the app at the new one. → [Settings](web-settings.md#wi-fi)
 
 ## Tariff and money
 
@@ -70,7 +82,7 @@ An all-in price is being treated as a spot one, so your plan's taxes and VAT are
 No — the market price was negative and your contract passes that through, so the hub booked a negative cost. If yours doesn't pass negative prices through, set a **Lowest buy price**.
 
 **My provider failed and the hub carried on. What was I charged for those hours?**
-Whatever came next in the chain: the backup provider, or your tariff plan's zone rate. Every 15-minute period's applied price and its source are kept for 40 days on the Prices page, and the failure itself is a `FAIL price:` line in the Hub log. → [Events](web-events.md)
+Whatever came next in the chain: the backup provider, or your tariff plan's zone rate. Every 15-minute period's applied price and its source are kept for 40 days on **Dynamic prices**, and the failure itself is a `FAIL price:` line in the Hub log. → [Events](web-events.md)
 
 ## Points and modules
 

@@ -44,7 +44,7 @@ This needs the hub's clock to be set: a cycle is a span of local days. See [Time
 ## The billing cycle
 
 A cycle starts on a **day of the month between 1 and 28** — day 1 by default — at local midnight, and is set on
-the Prices page in the app, or over the API.
+**Dynamic prices** in the app, or over the API.
 
 The limit of 28 is not an oversight: a cycle starting on the 30th would skip February, and a figure that
 silently has no cycle in some months is worse than one you set to the 28th on purpose.
