@@ -35,7 +35,7 @@ good for ten minutes and tied to that one change, and writes nothing until that 
 
 **Setup actions** — adding a module, moving it to another address, creating, moving or deleting a point, turning
 the second bus on, restarting the hub — happen when they are asked for. The hub does not show a diff first and
-does not wait for a second call. → [What an AI assistant reads and changes](web-ai-tools.md)
+does not wait for a second call. → [What an AI assistant reads and changes](ai-tools.md)
 
 | What the hub guarantees | What depends on the assistant and its app |
 |---|---|
@@ -62,7 +62,7 @@ knowing before you start.
 | **AI assistant** | The program you talk to. Never «assistant» on its own: on this site that word means Home Assistant. |
 | **The hub's page** | `http://<your hub>/ai`, served by the hub itself. It works whether or not the web app is installed. |
 | **The app** | The RBgrid web app, at `http://<your hub>/#/ai`. Where a page says "your app", it means the program your AI assistant runs in, which is a different thing. |
-| **The bridge** | A small **program** on your own computer that connects your AI assistant to the hub. Not a wire and not a link between terminals. → [Where an AI assistant runs](web-ai-clients.md) |
+| **The bridge** | A small **program** on your own computer that connects your AI assistant to the hub. Not a wire and not a link between terminals. → [Where an AI assistant runs](ai-clients.md) |
 | **MCP** | The agreed way AI assistants talk to tools like this hub. You never type it anywhere; it is the word to look for in your own app's documentation. |
 
 Four more are ordinary English words that mean something narrow here, and three of them mean something else
@@ -121,7 +121,7 @@ Use it when you want answers and no changes: when someone else is using the assi
 what a new one is like on a hub that is already working.
 
 > **Not while you are setting a hub up.** Connecting modules and creating points are exactly what read-only
-> refuses, so a first setup is done with it off. → [Set up a hub by talking to it](web-ai-first-setup.md)
+> refuses, so a first setup is done with it off. → [Set up a hub by talking to it](ai-first-setup.md)
 
 ## What stays on the hub's own pages
 
@@ -143,7 +143,7 @@ supply like any other.
 
 Everything else about your installation — names, roles, clamp models, the tariff, the time zone, the hub's own
 name, modules and points — an assistant can change, under the rules on
-[What an AI assistant reads and changes](web-ai-tools.md).
+[What an AI assistant reads and changes](ai-tools.md).
 
 ## Where your readings go
 
@@ -164,15 +164,15 @@ The hub serves the AI interface under `/api/llm/v1/…`, and it is off until you
 > the second one will not reach the AI interface.
 
 The list of what the hub offers is not in this document: the hub publishes it as an MCP manifest, and the manifest
-grows with firmware. → [What an AI assistant reads and changes](web-ai-tools.md)
+grows with firmware. → [What an AI assistant reads and changes](ai-tools.md)
 
 ## Where to go next
 
-- Set up a hub that has nothing on it yet, by talking to it → [Set up a hub by talking to it](web-ai-first-setup.md)
-- Pair an AI assistant, step by step → [Connect an AI assistant](web-ai-connect.md)
-- What must run on your own computer → [Where an AI assistant runs](web-ai-clients.md)
-- What the hub offers and what it will let an AI assistant change → [What an AI assistant reads and changes](web-ai-tools.md)
-- Installing the bridge in one particular app, as we walked it → [Claude Desktop](web-ai-client-claude-desktop.md) — so far the only app we have walked ourselves, on Windows
+- Set up a hub that has nothing on it yet, by talking to it → [Set up a hub by talking to it](ai-first-setup.md)
+- Pair an AI assistant, step by step → [Connect an AI assistant](ai-connect.md)
+- What must run on your own computer → [Where an AI assistant runs](ai-clients.md)
+- What the hub offers and what it will let an AI assistant change → [What an AI assistant reads and changes](ai-tools.md)
+- Installing the bridge in one particular app, as we walked it → [Claude Desktop](ai-client-claude-desktop.md) — so far the only app we have walked ourselves, on Windows
 
 ## Troubleshooting
 

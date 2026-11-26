@@ -12,9 +12,9 @@ behave the same there, and we are not going to tell you it does until someone ha
 
 | | |
 |---|---|
-| The bridge, downloaded | One file. → [Where an AI assistant runs](web-ai-clients.md#getting-the-bridge) |
+| The bridge, downloaded | One file. → [Where an AI assistant runs](ai-clients.md#getting-the-bridge) |
 | Node | The bridge runs on **Node 20.3.0 or newer**. This app's own documentation says it brings a Node with it, so there is usually nothing for you to install — that is their statement about their app, not a measurement of ours, and app makers change their rules. **If the extension does not start, install Node 20.3.0 or newer on the computer yourself.** |
-| The hub's AI interface switched on | It is off until you switch it on, and that needs the admin password. → [Connect an AI assistant](web-ai-connect.md) |
+| The hub's AI interface switched on | It is off until you switch it on, and that needs the admin password. → [Connect an AI assistant](ai-connect.md) |
 
 ## Installing it
 
@@ -49,7 +49,7 @@ do not start the pairing.** You ask the assistant to connect, it asks the hub, t
 and you type that code into the chat as an ordinary message. Typing it **is** the approval — there is no second
 "allow" step.
 
-The code is good for **ten minutes** and works once. → [Connect an AI assistant](web-ai-connect.md)
+The code is good for **ten minutes** and works once. → [Connect an AI assistant](ai-connect.md)
 
 ## A check that works even on an empty hub
 
@@ -60,20 +60,20 @@ bridge, hub — without needing a single clamp fitted.
 On a hub that is already measuring, ask *"Which circuits do you see on my hub?"* and the answer comes back with
 your own point names.
 
-→ Set the hub up by talking to it: [Set up a hub by talking to it](web-ai-first-setup.md)
+→ Set the hub up by talking to it: [Set up a hub by talking to it](ai-first-setup.md)
 
 ## If something is not working
 
 **The assistant says it has no such tool.** If you paired read-only, that is the expected answer: the changing
 tools are not in the list it was given at all. Widening what it may do needs a second pairing code, not a
-retry. → [What an AI assistant reads and changes](web-ai-tools.md#what-it-changes)
+retry. → [What an AI assistant reads and changes](ai-tools.md#what-it-changes)
 
 **The assistant cannot see the hub at all after pairing.** The restart above, done properly — from the
 notification area too.
 
 **A terminal says "node is not recognized" when you run the bridge's self-check.** That says nothing about the
 bridge. The self-check starts Node yourself and so needs Node on your PATH; the Node this app brings is its
-own. → [Where an AI assistant runs](web-ai-clients.md#when-something-is-not-working)
+own. → [Where an AI assistant runs](ai-clients.md#when-something-is-not-working)
 
 ## Where your readings go
 

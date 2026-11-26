@@ -128,12 +128,12 @@ version and goes on pointing at this exact file.
 
 The bridge is licensed **MIT**, which covers that package and not the hub firmware.
 
-**The guide.** [AI assistants](docs/web-ai-assistants.md) is the overview; beside it,
-[Connect an AI assistant](docs/web-ai-connect.md) is the numbered route,
-[Where an AI assistant runs](docs/web-ai-clients.md) covers the bridge on your computer,
-[What an AI assistant reads and changes](docs/web-ai-tools.md) is the list of what it may touch, and
-[Set up a hub by talking to it](docs/web-ai-first-setup.md) does a first setup from a chat. One app is written up
-as we installed it ourselves: [Claude Desktop](docs/web-ai-client-claude-desktop.md).
+**The guide.** [AI assistants](docs/ai-assistants.md) is the overview; beside it,
+[Connect an AI assistant](docs/ai-connect.md) is the numbered route,
+[Where an AI assistant runs](docs/ai-clients.md) covers the bridge on your computer,
+[What an AI assistant reads and changes](docs/ai-tools.md) is the list of what it may touch, and
+[Set up a hub by talking to it](docs/ai-first-setup.md) does a first setup from a chat. One app is written up
+as we installed it ourselves: [Claude Desktop](docs/ai-client-claude-desktop.md).
 
 <!-- LINK PLACEHOLDER (operator 26.11: the SITE copies of these pages are not published yet, fix on GitHub after
      the site update): /webapp/docs/ai-assistants and the four beside it. When they are live, add them here with

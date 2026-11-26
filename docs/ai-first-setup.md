@@ -12,7 +12,7 @@ tariff, and checks the result.
 > ⚠️ **For any work inside an electrical panel, call a qualified electrician.**
 
 **Before you start you need two things.** An AI assistant already paired with the hub →
-[Connect an AI assistant](web-ai-connect.md). And the wiring itself: which four wires go from a module to
+[Connect an AI assistant](ai-connect.md). And the wiring itself: which four wires go from a module to
 the hub and to which pins, how a clamp goes round a single conductor and which way it faces, and where the
 voltage input connects. None of that is in this chat, and none of it is on this page →
 [Sensors and modules](web-sensors.md)
@@ -136,7 +136,7 @@ with what is printed on the clamp.
 | "Updated every 15 minutes" | Energy and cost for the hour in progress are behind by up to that much, and there is no breakdown finer than an hour. Live readings do not lag |
 | "0.21 kWh, which is 0.07 EUR" | Both came out of stored records. That session is on a hub that has been running; a point with no history yet answers empty, not zero |
 
-→ The rules in full: [What an AI assistant reads and changes](web-ai-tools.md)
+→ The rules in full: [What an AI assistant reads and changes](ai-tools.md)
 
 ## The second bus
 
@@ -169,4 +169,4 @@ mistake, and correcting it later applies from that moment on — what was alread
 
 **A point ended up on the wrong input.**
 Ask to move it: the point keeps its name, its role and everything it has recorded, and only the input changes.
-Deleting it instead would erase its history. → [What an AI assistant reads and changes](web-ai-tools.md)
+Deleting it instead would erase its history. → [What an AI assistant reads and changes](ai-tools.md)

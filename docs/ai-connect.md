@@ -5,7 +5,7 @@ answer you can check.
 
 > You need a **bridge** running on the computer where your AI assistant runs — a small local program that carries
 > the conversation to the hub. Your assistant's own documentation may call it an *MCP server*: MCP is the agreed
-> way AI assistants talk to tools like this hub. → [Where an AI assistant runs](web-ai-clients.md)
+> way AI assistants talk to tools like this hub. → [Where an AI assistant runs](ai-clients.md)
 
 ## From nothing to the first answer
 
@@ -28,7 +28,7 @@ The admin password and the app's "API token" are one value: set it in either pla
 **2. Install the bridge** on the computer that will run your AI assistant — it is one file, and the page below
 has the download and what it needs. Do this **before** step 3: the pairing
 code appears only once an assistant asks for it, it works once, and it expires in ten minutes — so installing
-the bridge while a code is counting down means starting over. → [Where an AI assistant runs](web-ai-clients.md)
+the bridge while a code is counting down means starting over. → [Where an AI assistant runs](ai-clients.md)
 
 **3. Ask your AI assistant to connect**, naming your hub's address and how much you want it to be able to do.
 Something like *"Connect to my RBgrid hub at http://192.168.1.50 — read only"*, or *"…and I want you to be able
@@ -52,7 +52,7 @@ asks, the hub shows a six-digit code together with **who is asking and what it i
 
 > **"Propose changes" is the narrower half of what you are agreeing to.** With it, an assistant also adds and
 > deletes points, readdresses modules and restarts the hub, and those happen as soon as it asks — no proposal,
-> no confirmation. → [What an AI assistant reads and changes](web-ai-tools.md)
+> no confirmation. → [What an AI assistant reads and changes](ai-tools.md)
 
 > ⚠️ **The bar on top of the app does not show the scopes.** They are on the hub's page and on the AI assistants
 > page. If you are about to type a code you read off the bar, open the AI assistants page first and see what you
@@ -76,7 +76,7 @@ the answer comes back with your own point names.
 
 On a hub with nothing on it yet, that question has no answer, and that is not a failure. Ask *"What do you see on
 my hub?"* instead: you should get the firmware version and that there are no modules and no points. From there,
-→ [Set up a hub by talking to it](web-ai-first-setup.md)
+→ [Set up a hub by talking to it](ai-first-setup.md)
 
 ## How many at the same time
 

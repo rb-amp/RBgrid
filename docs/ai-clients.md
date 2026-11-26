@@ -52,7 +52,7 @@ get a row here — not even when we are fairly sure it works.
 
 | App | What was walked, and when | |
 |---|---|---|
-| **Claude Desktop** | Install, a full restart, pairing by code and the first answers with numbers — by hand, on **Windows**, 23 and 25 November 2026. **macOS was not walked.** | → [Claude Desktop](web-ai-client-claude-desktop.md) |
+| **Claude Desktop** | Install, a full restart, pairing by code and the first answers with numbers — by hand, on **Windows**, 23 and 25 November 2026. **macOS was not walked.** | → [Claude Desktop](ai-client-claude-desktop.md) |
 
 Every client page carries the same things in the same order, so that once you have read one you know where to
 look on the next: what was checked and when, what you need, where your readings go, the exact install path, the
@@ -97,7 +97,7 @@ needs, so it settles that question for you rather than leaving you to check.
 
 **The assistant cannot see the hub right after pairing.** Quit the app completely and open it again. The bridge
 tells the app that its tool list changed; some apps do not re-read it inside a running session. →
-[Connect an AI assistant](web-ai-connect.md)
+[Connect an AI assistant](ai-connect.md)
 
 **More than one hub answers.** Your AI assistant can list what it found — a name, an address and an id for each —
 and ask which one you mean. On firmware **v1.3.0** the announced name follows the name you gave the hub, so the
@@ -106,8 +106,8 @@ the same one; there, choose by address and open each one's page in a browser to 
 
 ## Once it is running
 
-Pair your AI assistant with the hub → [Connect an AI assistant](web-ai-connect.md), then set the hub up or
-start asking it questions → [Set up a hub by talking to it](web-ai-first-setup.md)
+Pair your AI assistant with the hub → [Connect an AI assistant](ai-connect.md), then set the hub up or
+start asking it questions → [Set up a hub by talking to it](ai-first-setup.md)
 
 ## Where your readings go
 

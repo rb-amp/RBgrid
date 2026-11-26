@@ -39,7 +39,7 @@ something wrong. But they do not cover everything, and the difference matters.
 **In read mode your assistant does not have these tools at all.** They are not offered to it and then refused —
 they are not in the list it was given, so it answers that it has no such tool. That is the expected answer, not
 a fault: widening what an assistant may do needs a second pairing code, not a retry. →
-[Connect an AI assistant](web-ai-connect.md)
+[Connect an AI assistant](ai-connect.md)
 
 ### Settings — proposed first, written after you agree
 
@@ -154,7 +154,7 @@ An assistant with `read` will answer the first two groups and tell you it cannot
 ## Not paired yet?
 
 Nothing on this page works until an AI assistant is paired with your hub.
-→ [Connect an AI assistant](web-ai-connect.md)
+→ [Connect an AI assistant](ai-connect.md)
 
 ## Where your readings go
 
@@ -172,7 +172,7 @@ one.
 The hub is in read-only mode, which overrides the scope of every paired assistant and covers everything an
 assistant would write — settings, setup actions, a restart and its own rollback. It still answers with the diff,
 marked as refused, so you can see what the change would have been. →
-[AI assistants](web-ai-assistants.md)
+[AI assistants](ai-assistants.md)
 
 **It says a proposal would change nothing.**
 The value is already what you asked for. That is an answer, not an error.
