@@ -108,6 +108,15 @@ Generated from the hub's own `GET /api/v1/schema`. Do not edit by hand.
 | `inputAggregate` | true |
 | `wsTicket` | true |
 
+> ⚠️ **The `https` flag above is not accurate in 1.3.0.** The hub serves plain **HTTP**: the release
+> builds do not enable an HTTPS server, and this flag has been hard-coded `true` since v1.1.0. Do not
+> rely on it. From the next release the flag follows the build.
+
+<!-- PERIMETER: the `https` capability row is what the hub REPORTS, and it is wrong; the visible
+     warning above states what the hub actually serves. This note belongs in the GENERATOR
+     (tools/gen_api_reference.py) — a regeneration wipes a hand edit silently. Remove both once the
+     firmware fix (rbgrid-extflash d088ee8) makes the flag follow the build. -->
+
 ## Hub fields
 
 Top-level fields of this schema (also in `GET /api/system/version` for the storage ones). `stats_media`: `external` = history on the statistics chip, `internal` = in the hub's own flash, `none` = statistics kept in memory only. `history_slots`: how many points on this hub can keep history.

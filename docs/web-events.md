@@ -1,6 +1,6 @@
 # Events
 
-**Events** tells you when something needs a look: a sensor that stopped responding, a hub restart, or a lost connection to the hub. It also shows the hub's own log. Open it from the app's left navigation: **Monitoring → Events**.
+**Events** tells you when something needs a look: a sensor that stopped responding, a hub restart, or a lost connection to the hub. It also shows the hub's own log. Open it from the app's left navigation: **Watch → Events**, which carries the number of active ones.
 
 ![Events · Active (home with solar: one module not answering)](https://www.rbgrid.io/assets/img/webapp-docs/wa-events-overview.webp)
 
@@ -67,7 +67,7 @@ While any sensor is silent, the app re-reads the hub log every minute.
 **What to check**
 
 1. The rbAmp module's power and the I2C cable to the hub (the card's own advice).
-2. **Points → rbAmp modules (n)**: does the module card say **not found**? Does the page show a bus warning ("A module bus line is held low…" or "The module bus is stuck…")? See [Points](web-points.md#bus-warnings).
+2. **Points → the Hardware tab → rbAmp modules (n)**: does the module card say **not found**? Does the page show a bus warning ("A module bus line is held low…" or "The module bus is stuck…")? See [Points](web-points.md#bus-warnings).
 3. If the hub didn't find the module at start-up, check the module's connection. The hub keeps looking for it.
 4. If that doesn't help, open the **Hub log**, press **Copy** and contact your installer or support.
 

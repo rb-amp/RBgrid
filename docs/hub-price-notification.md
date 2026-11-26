@@ -35,7 +35,7 @@ The rules need the hub's clock to be set, and they use the hub's own time zone t
 Up to **eight** rules, each with a name you choose, and each switchable on and off on its own. A name is at most **23 bytes** as the hub stores it — the app says so plainly, and a Cyrillic letter counts as two.
 
 ### Price below a level
-The app calls it **Price below a level**. You give a price to switch on at or below, and a price to switch off at or above.
+The app calls it **Price below a level**. You give a price at or below which the window **opens**, and a price at or above which it **closes** — the window is a signal, and what to do with it stays with whatever reads it.
 
 | Parameter | |
 |---|---|

@@ -3,9 +3,9 @@
 Your supplier's price changes every 15 minutes; this page is where you see what it is now, where it came
 from, and what it was for every period the hub has already booked.
 
-**Where it is:** **Management → Prices** in the menu, after Points and Tariffs. The page is there only when
-the hub reports that it can do dynamic prices — hub firmware 1.2.0 or later. On an older hub the menu item is
-absent, and opening the address directly says so rather than asking the hub anything.
+**Where it is:** **Set up → Tariffs & prices**, the **Dynamic prices** tab next to **Tariffs** (the old Prices
+address leads there). The tab is there only when the hub reports that it can do dynamic prices — hub firmware
+1.2.0 or later. On an older hub the tab is absent, and the old address opens the **Tariffs** tab.
 
 **It needs a direct connection to the hub.** Reached another way, the page says: *"Dynamic prices are set over
 a direct connection to the hub."*
@@ -229,9 +229,9 @@ Long days are paged: the hub sends up to 400 periods at a time, and the table sa
 
 ## What to check when something looks wrong
 
-**The Prices menu item isn't there.**
+**There is no Dynamic prices tab.**
 The hub doesn't report dynamic prices, which means firmware older than 1.2.0. The
-[Tariffs](web-tariffs.md) page is what prices energy on that hub.
+[Tariffs](web-tariffs.md) tab is what prices energy on that hub.
 
 **The page says it needs a direct connection.**
 It is reached through something that isn't a direct connection to the hub. Open the hub by its own address.

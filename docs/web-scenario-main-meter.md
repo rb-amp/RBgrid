@@ -23,7 +23,7 @@ Both measure in both directions (import and export), so the input stays right if
 
 ## What you need
 
-- An ESP32 board with PSRAM and 16 MB flash: this is the hub — an ESP32-WROVER, or from v1.1.8 an ESP32-S3 (N16R8). The bus pins below are the WROVER's; on an S3 they are SDA 8 / SCL 9.
+- An **ESP32** or **ESP32-S3** board with PSRAM and 16 MB flash: this is the hub.
 - The rbAmp STD-UI1 or STD-U3I3 with its current sensors.
 - A USB cable and a computer with Python (for `esptool`) and `curl`.
 - Your home Wi-Fi name and password. The hub uses **2.4 GHz** Wi-Fi only.
@@ -36,7 +36,7 @@ Both measure in both directions (import and export), so the input stays right if
 1. **Set the module to I²C.** The hub talks to the module over I²C. Set the module's interface switch to I²C before you power it: the module reads the switch only at power-on.
 2. **Fit the current sensors.** Clamp each sensor around the supply conductor of its channel, after the utility meter and before the main breaker. The arrow on the sensor points in the import direction (from the grid into the home). On an STD-U3I3, each current sensor must sit on the conductor whose voltage goes to the matching input: sensor 1 on L1, 2 on L2, 3 on L3. The module works out each phase's power from that pair, so a swap gives wrong per-phase power and power factor.
 3. **Connect the voltage input** through a fuse: L and N on an STD-UI1; L1, L2, L3 and N on an STD-U3I3.
-4. **Connect the module to the hub** with four wires: the module's **VIN to the board's 5 V/VIN pin** (4.5–5.5 V; not 3.3 V), GND, SDA to GPIO25, SCL to GPIO26. VIN only feeds the module's own regulator; its SDA/SCL work at 3.3 V and connect to the ESP32 directly, with no level shifter. Keep the cable up to 15 cm. Leave the module's pull-up resistors as they are: one module needs them. With four or more modules on one bus, they're cut on all but one module; see [Sensors and modules](web-sensors.md#cables-and-pull-ups).
+4. **Connect the module to the hub** with four wires: the module's **VIN to the board's 5 V/VIN pin** (4.5–5.5 V; not 3.3 V), GND, and the two bus wires to the hub's first-bus pins: **SDA 25 / SCL 26** on an ESP32, **SDA 8 / SCL 9** on an ESP32-S3. Those are the defaults, which you can change in the hub's settings. VIN only feeds the module's own regulator; its SDA/SCL work at 3.3 V and connect to the ESP32 directly, with no level shifter. Keep the cable up to 15 cm. Leave the module's pull-up resistors as they are: one module needs them. With four or more modules on one bus, they're cut on all but one module; see [Sensors and modules](web-sensors.md#cables-and-pull-ups).
 
 The module leaves the factory at I²C address **0x50**. Leave it there. On first start, a new hub finds the module at 0x50 and creates two points by itself: the **grid input** (the module's first channel) and the **voltage**. If the module answers at another address, no grid input is created, so keep the factory address for this scenario.
 
@@ -47,6 +47,7 @@ More: [Hardware](https://www.rbgrid.io/hardware) and the rbAmp STD wiring guide.
 Download the four firmware files from the [latest release](https://github.com/rb-amp/RBgrid/releases/latest): `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin` and `main_release.bin`. Connect the board over USB and run the `esptool` command from the release notes. It writes all four files at their addresses. → [Build & flash](https://www.rbgrid.io/source/build)
 
 After flashing, the hub restarts and opens its own Wi-Fi network for setup.
+**On an ESP32-S3 board, the green light says where the hub is in all this.** A slow blink means it is running its own Wi-Fi and waiting for your settings, a fast blink means it is joining your network, and a short flash every few seconds means it is up and running. A red light counting out groups of flashes means something needs attention. → [Status lights](web-settings.md#status-lights)
 
 ## Step 3. Put the hub on your Wi-Fi
 
@@ -54,9 +55,9 @@ After flashing, the hub restarts and opens its own Wi-Fi network for setup.
 2. Open `http://192.168.4.1`.
 3. Choose your home Wi-Fi, enter its password and save. The hub restarts and joins your network.
 4. Find the hub's new address, one of three ways:
-   - open `http://rbgrid-xxxx.local/`, with the same four characters as the hub's Wi-Fi name (for example `rbgrid-bfac.local`). This works on Windows, macOS and iOS, not reliably on Android;
    - join `rbgrid-xxxx` again and open `http://192.168.4.1`: the page shows the hub's address on your home network and a link to the app;
-   - look in your router's list of devices.
+   - look in your router's list of devices;
+   - or try the hub by name, at `http://rbgrid-xxxx.local/`, with the same four characters as the hub's Wi-Fi name (for example `rbgrid-bfac.local`). Whether that name resolves depends on the name service on the computer you are using, so treat it as a convenience and keep the address.
 
 The hub keeps its own access point on as well. You'll set your own password for it in step 6.
 
@@ -67,7 +68,7 @@ The web app isn't part of the firmware file. Open it one of two ways (→ [Openi
 - **At webapp.rbgrid.io**, nothing to install: on a computer on the same network, open [webapp.rbgrid.io](https://webapp.rbgrid.io/) in Chrome or Edge, enter the hub's address in **Device IP or URL** and choose **Connect**. When the browser asks to allow access to devices on your local network, allow it.
 - **From the hub:** install `rbgrid-ui_<version>.zip` from the same release once, as described in [Opening the app](web-opening-the-app.md#install-the-app-on-your-hub), then open `http://<hub address>/`.
 
-The app opens on the Overview with a banner: *The hub still has its factory settings*. Choose **Set up →** to start the wizard. It's also in the menu under **System → Setup wizard**.
+The app opens on the Overview with the checklist **Left to set up**. Choose **Step-by-step wizard** to start the wizard. It's also in the menu under **Set up → Setup wizard** until the hub is set up.
 
 ![The Overview: the first screen once the app is connected to a hub](https://www.rbgrid.io/assets/img/webapp-docs/wa-open-overview-first.webp)
 
@@ -87,7 +88,6 @@ Type a token, choose **Set** and **write it down**. The app keeps it in this bro
 
 ### 5.3 Site & time
 
-- **Site scenario:** choose **Home**. It decides what the Overview shows; you can change it later and nothing restarts.
 - **Site:** give it a **Name** (for example "My home") and optionally **Where it is**. Up to 31 characters each. Choose **Save**.
 - **Time:** choose your **Time zone** and **Save**. The zone applies at once.
 - Check the status chip: it must read **synchronized**. The hub sets its clock from the internet (NTP). If it doesn't sync, choose **Sync with NTP**. On a network without internet, choose **Use this device's time**: the hub's clock is set from your browser's clock.
@@ -102,7 +102,7 @@ The other channels of the module (if any) show as **free**. Leave them free for 
 
 **STD-U3I3 only: measure all three phases.**
 
-1. Recommended first: open **Settings → Mains** and set **Mains system** to **Three phase**. This applies at once.
+1. Recommended first: open **Settings → Site → Mains** and set **Mains system** to **Three phase**. This applies at once.
 2. Open **Points**. On the module card, choose **Use as the three-phase input** and confirm.
 3. Choose **Restart now**. After the restart, the input measures all three phases: the Overview shows the total, and the input's page shows each phase (voltage, current, power, power factor). The input's history is kept.
 
@@ -146,7 +146,7 @@ When all the required rows are green, the title reads **All set**. Otherwise it 
 
 The hub keeps its access point `rbgrid-xxxx`, still with the setup password. Until you change it, anyone nearby can join it. The Overview and Settings show a warning until you've changed this password **and** set an API token (without a token the hub doesn't tell the app the password's state).
 
-Open **Settings → Hub access point**, enter a new password (8–63 characters: Latin letters, digits and symbols) and choose **Change password**. Devices connected to the access point reconnect. → [Settings](web-settings.md)
+Open **Settings → Network & time → Hub access point**, enter a new password (8–63 characters: Latin letters, digits and symbols) and choose **Change password**. Devices connected to the access point reconnect. → [Settings](web-settings.md)
 
 ## Step 7. Check that it works
 
@@ -163,7 +163,7 @@ Open the **Overview**:
 ## What next
 
 - **Measure single circuits:** add rbAmp Basic or STD modules, one at a time, from **Points → Add a module**. The hub moves modules off the factory address for you. Up to 8 modules, on hub firmware v1.1.2 and later. → [Sensors and modules](web-sensors.md)
-- **Bind the free channels** as points (water heater, kitchen, heat pump). Restart the hub after adding points so they start keeping history. The hub keeps history for up to 12 points; more points show live values only. → [Points](web-points.md)
+- **Bind the free channels** as points (water heater, kitchen, heat pump). Restart the hub after adding points so they start keeping history. The hub keeps history for the number of points it reports; points beyond that show live values only. → [Points](web-points.md)
 - **Refine the tariff:** more zones, energy tax, grid fee, VAT, a feed-in price. → [Tariffs](web-tariffs.md)
 - **Home Assistant:** connect a broker. → [MQTT broker](hub-mqtt.md)
 - **Questions:** [FAQ](web-faq.md)

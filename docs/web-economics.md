@@ -1,6 +1,6 @@
 # Economics
 
-**Economics** puts money next to energy for one point at a time: what it imported and exported, what that cost at your tariff, and what the export was worth. Open it from the app's left navigation: **Monitoring → Economics**.
+**Economics** puts money next to energy for one point at a time: what it imported and exported, what that cost at your tariff, and what the export was worth. Open it from the app's left navigation: **Look → Economics**.
 
 The prices come from your tariff plan (see [Tariffs](web-tariffs.md)). Economics only shows figures; it doesn't change anything on the hub.
 
@@ -86,7 +86,7 @@ Shown when an input exists and at least one **line** is metered. A line here is 
 
 The unmetered part is the consumption at the input that none of your points measures, for example circuits without a sensor.
 
-**Unmetered is a subtraction, so a load counted twice distorts it.** If you meter a sub-panel *and* a circuit inside that sub-panel, both are lines, both are added to **Metered lines**, and the same energy is subtracted from the input twice: unmetered reads lower than it is, and on a well-metered board it can go negative.
+**Unmetered is a subtraction, so a load counted twice distorts it.** If you meter a sub-panel *and* a circuit inside that sub-panel, both count as lines and both are added to **Metered lines**, so the same energy is subtracted from the input twice. Unmetered then reads lower than it is, and on a well-metered board it can go negative.
 
 From firmware **v1.1.8** that is what the **inside** setting is for: a point can be marked as measured inside another one, and then it is not added again here. The hub's own totals don't change — they are taken at the input — but this block stops double-counting. Mark the inner point, not the sub-panel. → [Points](web-points.md)
 
@@ -139,7 +139,7 @@ Shown when **Net metering (monthly kWh credit)** is on in your tariff plan; hidd
 | **Credit earned since net metering was on** | all credit earned so far |
 | **Credit used since net metering was on** | all credit used so far |
 
-The billing period is the calendar month. At each boundary the hub nets that month's import against its export: a surplus is **added** to the credit, at the plan's **selling ratio**; a shortfall is **paid out of** the credit first, and only what is left is billable. The credit then carries into the next month, up to **1,000 kWh**, while the month's import and export counters start again. Carry-over and that ceiling are **fields of the plan**, not properties of the firmware: a plan built in the app takes the defaults (carry-over on, 1,000 kWh) and the app shows no control for either, so only a plan sent over the REST API can turn the carry-over off — and then the bank is cleared at each settlement instead of carrying. The values are in kWh, as the hub reports them; the credit doesn't change the money figures.
+The billing period is the calendar month. At each boundary the hub nets that month's import against its export: a surplus is **added** to the credit, at the plan's **selling ratio**; a shortfall is **paid out of** the credit first, and only what is left is billable. The credit then carries into the next month, up to **1000 kWh**, while the month's import and export counters start again. Carry-over and that ceiling are **fields of the plan**, not properties of the firmware: a plan built in the app takes the defaults (carry-over on, 1000 kWh) and the app shows no control for either, so only a plan sent over the REST API can turn the carry-over off — and then the bank is cleared at each settlement instead of carrying. The values are in kWh, as the hub reports them; the credit doesn't change the money figures.
 
 Switching net metering off and on again doesn't clear the credit: it is the hub's own state, and on a plan that carries over it is cleared only when the point is deleted.
 
@@ -189,7 +189,7 @@ Amounts use the currency of the hub's active tariff plan and the number of decim
 - For the input, "today" includes the running hour (the hub's day counters). For any other point it is closed hours only. The footnote under **Totals** says which rule produced the figure you are reading.
 
 **Nothing at all: "No data for this point."**
-- The point has no records for that period — a point beyond the hub's 12 history slots shows live values only and never appears here. → [Points](web-points.md)
+- The point has no records for that period — a point beyond the hub's history slots shows live values only and never appears here. → [Points](web-points.md)
 
 ## Where next
 

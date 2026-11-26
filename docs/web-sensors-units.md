@@ -42,7 +42,7 @@ Two units are special **supply** units — the **main supply** (the grid connect
 
 Everything is configured on the running hub. Nothing is set in C code.
 
-**Web app** — *Points → Free sensors → Bind* turns a free channel into a unit; the unit's fields are edited in its settings.
+**Web app** — *Points → the Points tab → Free sensors → Bind* turns a free channel into a unit; the unit's fields are edited in its settings.
 
 **REST** — the same operations are available over HTTP:
 
@@ -88,7 +88,7 @@ On a channel whose module takes a clamp-on CT of your choice (SCT series), set t
 
 ## Statistics
 
-Each unit keeps 3-second and 15-minute data in RAM only; they have no stored history. Stored history starts at the hourly level: the hub keeps hourly records on its own flash, which survive a reboot, and builds days, weeks, months and years from them. This is the same for every unit, whatever its `stat_class`. History is kept for up to 12 units; units beyond twelve show live values only. A unit added while the hub runs starts its history after the next restart. Lifetime energy totals are kept separately from the history.
+Each unit keeps 3-second and 15-minute data in RAM only; they have no stored history. Stored history starts at the hourly level: the hub keeps hourly records on the hub itself — in its own flash, or on the statistics chip when the board has one — and they survive a reboot, and builds days, weeks, months and years from them. This is the same for every unit, whatever its `stat_class`. History is kept for the number of units the hub reports (12 in its own flash, 49 with the chip); units beyond that show live values only. A unit added while the hub runs starts its history after the next restart. Lifetime energy totals are kept separately from the history.
 
 ## When a channel is near its limit
 

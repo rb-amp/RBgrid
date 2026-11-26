@@ -1,6 +1,6 @@
 # RBgrid documentation
 
-Everything about RBgrid in one place: the web app you look at, the hub you flash, and the remote nodes. Current for hub firmware **v1.2.1** and web app 1.2.0 — what changed in each release is in [CHANGELOG.md](../CHANGELOG.md).
+Everything about RBgrid in one place: the web app you look at, the hub you flash, and the remote nodes. Current for hub firmware **v1.3.0** and web app 1.3.0 — what changed in each release is in [CHANGELOG.md](../CHANGELOG.md).
 
 The same pages, with search, are on [rbgrid.io](https://www.rbgrid.io/webapp/docs).
 
@@ -68,7 +68,7 @@ New hub, nothing set up yet? → [Quick start](web-quick-start.md), then [the se
 
 ## The hub
 
-- [Flashing the hub](hub-flashing.md) — USB install for ESP32-WROVER and ESP32-S3, over-the-air updates, the partition layout.
+- [Flashing the hub](hub-flashing.md) — USB install for the ESP32-S3, over-the-air updates, the partition layout.
 - [MQTT broker](hub-mqtt.md) — topics, Home Assistant discovery, commands, TLS.
 - [API reference](hub-api-schema.md) — every public route, generated from the hub's own `GET /api/v1/schema`.
 

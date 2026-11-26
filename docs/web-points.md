@@ -16,7 +16,7 @@ The modules themselves, and how to add one, are on the [Sensors and modules](web
 
 ## The Points page
 
-Open **Management → Points**. The page lists your rbAmp modules, your points and the free channels. At the top are **Add a module** (see [Adding modules](web-sensors.md#adding-modules)) and **Refresh**.
+Open **Set up → Points**. The page has two tabs: **Points** — your points and the free channels (**Free sensors**) — and **Hardware** — your rbAmp modules, the I2C buses and the remote nodes. At the top, on both tabs, are **Add a module** (see [Adding modules](web-sensors.md#adding-modules)) and **Refresh**.
 
 ![Points: modules and bound points](https://www.rbgrid.io/assets/img/webapp-docs/wa-points-page.webp)
 
@@ -24,7 +24,7 @@ While the page loads you may see "Device is initializing — retrying…" (the h
 
 ### Bus warnings
 
-The modules share one I2C bus. If something on it goes wrong, a warning appears at the top:
+The modules sit on the hub's module buses. If something goes wrong on one bus, a warning appears at the top, and the modules on the other bus keep working:
 
 | Warning | What to do |
 |---|---|
@@ -90,7 +90,7 @@ At the bottom: "Home Assistant entities for the new point appear after the hub r
 Two things that do go wrong:
 
 - **`invert_sign` left over from an older firmware.** Before v1.1.5 a Generation point needed it to read production at all. After updating, clear it (`POST /api/v1/units/<id> {"invert_sign": false}`) or the point reads consumption again: `invert_sign` still flips the result on top of the role.
-- **The wrong kind of channel.** A BASIC module's channels count **consumption only** — they don't see export — which is why **Generation** and **Storage** aren't offered on them. Production needs a channel that measures direction. Which modules measure direction: [the rbAmp module guide](https://www.rbamp.com/products/configuration?utm_source=github&utm_medium=referral&utm_campaign=rbgrid).
+- **The wrong kind of channel.** A BASIC module's channels count **consumption only** — they don't see export — which is why **Generation** and **Storage** aren't offered on them. Production needs a channel that measures direction. Which modules measure direction: [the rbAmp module guide](https://www.rbamp.com/products/modules/which-one?utm_source=github&utm_medium=referral&utm_campaign=rbgrid).
 
 ### Phase
 
@@ -110,7 +110,7 @@ If you pick the ID of a removed point, the dialog warns that Home Assistant and 
 
 ### Messages
 
-- "This point will show live values only: the hub keeps history for 12 points." — all 12 history slots are taken. The point still shows live values.
+- "This point will show live values only: the hub keeps history for *n* points." — every history slot is taken (*n* is your hub's own number). The point still shows live values.
 - "ID «*id*» is already used by another point." — choose another ID.
 - "Could not bind" / "Bind request failed (device unreachable?)" — check the connection to the hub and try again.
 
@@ -194,8 +194,8 @@ At the bottom, **Point setup** opens the point's settings (see [Point settings](
 | **Input limit, kW** (input) / **Line rating, kW** (others) | all but the voltage bus | The input's permitted power (the basis for "headroom"), or the line's rating for its load bar. |
 | **Input breaker, A** / **Line breaker, A** | all but the voltage bus | The breaker's rated current. Empty = not set. |
 | **Current sensor** | SCT channels | The clamp model on the channel, with its accurate range. See below. |
-| **This station's «charging» threshold, W** / **idle after a session, min** | Charging station points, when the hub offers them | Empty or 0 uses the hub-wide values from [Settings → Charging stations](web-settings.md#charging-stations). |
-| **Group** and **Group trunk meter** | regular points | The group is a tab on the energy-flow diagram; create groups in [Settings → Consumer groups](web-settings.md#consumer-groups). A trunk meter measures the whole group; the group's other points are its breakdown and don't add on top. |
+| **This station's «charging» threshold, W** / **idle after a session, min** | Charging station points, when the hub offers them | Empty or 0 uses the hub-wide values from [Settings → Site → Charging stations](web-settings.md#charging-stations). |
+| **Group** and **Group trunk meter** | regular points | The group is a tab on the energy-flow diagram; create groups in [Settings → Site → Consumer groups](web-settings.md#consumer-groups). A trunk meter measures the whole group; the group's other points are its breakdown and don't add on top. |
 | **Measured inside** | regular points, from firmware **v1.1.8** | Names the point that already measures this one — a charger inside a metered sub-panel. It must be an existing point other than this one, it can't be the input, and it can't make a loop. See *Points inside other points* below. |
 
 ### Points inside other points
@@ -250,13 +250,36 @@ Each record holds:
 | Month | 3 years |
 | Year | 10 years |
 
-All of it is in the hub's own flash; no storage module is needed.
+The records live on the hub itself: in its own flash, or on the statistics chip when the board has one.
 
 ### How many points keep history
 
-**Up to 12 points** keep history (the first twelve you added). Points beyond twelve show live values but keep no history.
+**The hub keeps history for 12 points in its own flash, and for 49 when the board has a statistics chip** — every RBgrid hub board has one, and on an **ESP32-S3** hub you built yourself it is an additional **SPI flash chip of 16 MB (128 Mbit)**. The app shows your hub's own number. The points that keep history are the ones you added first; the rest show live values.
 
 A point you bind while the hub is running starts keeping history after the next restart: the app reminds you ("Restart the hub to start its history").
+
+### The statistics chip
+
+The chip is what lifts stored history from 12 points to 49. It adds **points, not depth**: each point is kept
+for the same time with the chip as without it (see the table above).
+
+It works on an **ESP32-S3** hub, from firmware **v1.3.0**. An ESP32 hub keeps its history in its own flash, so
+**12 points is its limit**; the firmware there does not look for a chip at all, and fitting one to an ESP32
+changes nothing.
+
+**The hub moves your history onto the chip by itself.** This happens during a start-up, the first time an
+ESP32-S3 hub finds a chip with more room than its own history area: on a new hub board's first start, when you
+add the module to a hub you built yourself, or when a hub that already has one comes up on the new firmware.
+The records keep the same format, so nothing is converted — they are copied.
+
+- There is nothing to press and nothing to set.
+- The hub takes a little longer to start that one time. Leave it be until its pages come up.
+- **A power cut in the middle loses nothing.** The hub counts the chip as its own only once the copy has
+  finished; until then your history sits untouched where it was, and the next start begins the copy again.
+- If the copy cannot be finished, the hub keeps the history in its own flash and carries on with 12 points.
+
+**If a chip the hub was using stops answering**, the hub holds statistics in memory only, reports no points as
+keeping history, and the app shows its *chip not answering* warning.
 
 ## Reading the data
 
@@ -267,7 +290,7 @@ A point you bind while the hub is running starts keeping history after the next 
 ## Troubleshooting
 
 **A point shows no data**
-- Check that the module is connected and its card shows in **Points → rbAmp modules** (see [Sensors and modules](web-sensors.md)).
+- Check that the module is connected and its card shows in **Points → the Hardware tab → rbAmp modules** (see [Sensors and modules](web-sensors.md)).
 - Check that the point is bound to the channel the clamp is on.
 - If the page shows a bus warning, see [Bus warnings](#bus-warnings).
 
@@ -280,7 +303,7 @@ A point you bind while the hub is running starts keeping history after the next 
 
 **A point has live values but no history**
 - If you added it while the hub was running, restart the hub.
-- It may be the thirteenth point or later: only twelve points keep history, the hub's own and its nodes' together.
+- The hub's history slots may already be full: the hub's own points and its nodes' points share them.
 - Check that the hub's clock is set (see [Time](web-time.md)). Records without a real date are skipped.
 
 **The unmetered figure is negative, or far too small**

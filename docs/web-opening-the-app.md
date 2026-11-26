@@ -34,7 +34,7 @@ The browser remembers the last address, so next time the app opens on your hub.
 
 If you said no, or the app says *No hub answers at this address*, allow it in the browser's site settings (**Local network access**) and connect again. Check the address too: it's the hub's address on your home network, not `192.168.4.1`.
 
-From hub firmware v1.1.3, the hub always accepts the RBgrid app at `https://webapp.rbgrid.io` and `https://demo.rbgrid.io`; there's nothing to set. A hub on v1.1.2 or older accepts any site, unless you limited it in **Settings → Browser access (CORS)**: then add `https://webapp.rbgrid.io` there. → [Settings: Browser access](web-settings.md#browser-access-cors)
+From hub firmware v1.1.3, the hub always accepts the RBgrid app at `https://webapp.rbgrid.io` and `https://demo.rbgrid.io`; there's nothing to set. A hub on v1.1.2 or older accepts any site, unless you limited it in **Settings → Security → Browser access (CORS)**: then add `https://webapp.rbgrid.io` there. → [Settings: Browser access](web-settings.md#browser-access-cors)
 
 ## Install the app on your hub
 
@@ -55,14 +55,48 @@ Install the new package the same way; it replaces the old one. The app and the f
 
 The app talks to the hub over plain HTTP on your home network, in both ways. Changes to the hub are protected once you set an **API token** (Settings → Security). On hub firmware v1.1.2 and later, the app warns you while there's no token or the hub's own Wi-Fi still has its setup password; the warning goes away when both are done.
 
-The hub answers browser requests only from its own pages and from the RBgrid app. Other websites can't use your hub from a visitor's browser unless you add them in **Settings → Browser access (CORS)**.
+The hub answers browser requests only from its own pages and from the RBgrid app. Other websites can't use your hub from a visitor's browser unless you add them in **Settings → Security → Browser access (CORS)**.
+
+## Getting around the app
+
+From firmware **v1.3.0** the left-hand menu comes in three parts:
+
+| Part | What is in it |
+|---|---|
+| **Look** | Overview · History · Economics |
+| **Watch** | Events, carrying the number of active ones |
+| **Set up** | Points · Tariffs & prices · Settings, and AI assistants on a hub that offers them |
+
+**Setup wizard** is in the menu while the hub is still unset; afterwards you start it from
+**Settings → Device**. Prices are no longer a menu item of their own: they are the **Dynamic prices** tab of
+**Tariffs & prices**.
+
+On a phone the bottom bar carries **Overview · Economics · History · Points · More**, and events are the bell
+with a number in the header.
+
+### Finding things by typing
+
+**Ctrl K** (**⌘K** on a Mac) opens a search box — it is the **Find…** field at the top of the menu, and the
+search icon on a phone. A touch screen shows no "Ctrl K" label; the icon is the way in.
+
+It searches:
+
+- **pages**;
+- **your points**, by their name and by their role;
+- **settings panels** — and the answer names the section the setting lives in, so you learn where it is as
+  well as getting there.
+
+Type in your own language: the search understands words in the app's other languages, not only English.
+
+This is part of the app, so it works with any hub. Things that only newer firmware has — the AI assistants
+page, the status lights — show up in the search only on a hub that offers them.
 
 ## Several hubs
 
 In the sidebar, choose **Switch**. Enter the other hub's address (**Device IP or URL**) and **Connect**. **Open demo mode** shows the app with sample data instead.
 
 - At webapp.rbgrid.io, you can connect to any of your hubs this way, with nothing to set on them.
-- In the app served by one hub, the other hub must accept the first hub's address. Hubs on v1.1.3 and later accept only listed sites, so add `http://<first hub's address>` in **Settings → Browser access (CORS)** on the other hub.
+- In the app served by one hub, the other hub must accept the first hub's address. Hubs on v1.1.3 and later accept only listed sites, so add `http://<first hub's address>` in **Settings → Security → Browser access (CORS)** on the other hub.
 
 ## Try it without a hub
 

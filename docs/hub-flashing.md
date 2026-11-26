@@ -1,6 +1,6 @@
 # RBgrid Firmware Flashing Guide
 
-Complete guide for flashing RBgrid firmware to the hub (an ESP32-WROVER or an ESP32-S3, 16 MB flash, PSRAM) using esptool.
+Complete guide for flashing RBgrid firmware to the hub (an ESP32-S3 with 16 MB flash and PSRAM) using esptool.
 
 > Layout note (2026-10-19): the firmware uses a **16 MB** partition table with **two application slots** (`ota_0`, `ota_1`) since the partition revision of 2026-10-17; there is no `factory` slot any more. Boards flashed with an earlier 4 MB layout need a full flash with the commands below once (the 4 MB layout and flash size are not compatible with this firmware). Source of truth for the layout: `partitions.csv` in the repository root.
 
@@ -24,7 +24,7 @@ On Windows, if `esptool.py` is not recognized, use `python -m esptool` in place 
 
 Download the latest firmware from [GitHub Releases](https://github.com/rb-amp/RBgrid/releases).
 
-The binaries are individual assets on the release page — there is no archive to extract. For a USB flash of a blank **ESP32-WROVER** hub, download all four:
+The binaries are individual assets on the release page — there is no archive to extract. For a USB flash of a blank **ESP32** hub, download all four:
 - `bootloader.bin`
 - `partition-table.bin`
 - `ota_data_initial.bin`
@@ -36,13 +36,15 @@ Each release lists the SHA-256 of every file, so you can check a download before
 
 The release page also carries `rbgrid-ui_vX.Y.Z.zip`. That is the **web app** for the hub, not firmware: don't flash it. Installing it is described in the README.
 
+It also carries `rbgrid-ui-storage_vX.Y.Z.bin`, the web app **as a flashable image** of the storage partition, written at `0xA20000`. Use it only when you are flashing over USB — a first install, or a flash from the browser — where it saves you installing the web app afterwards. An over-the-air update never uses it.
+
 ### Hardware
 
-The hub is an **ESP32 board with PSRAM and 16 MB flash** — either an **ESP32-WROVER module**, or, from v1.1.8, an **ESP32-S3 on the N16R8 module** (16 MB flash, octal PSRAM). Boards without PSRAM, or with 4 MB / 8 MB flash, are not supported on either chip: the firmware requires PSRAM and the partition table needs 16 MB.
+The hub is an **ESP32** or **ESP32-S3** board with PSRAM and **16 MB flash** — on the S3, the N16R8 module (16 MB flash, octal PSRAM). Boards without PSRAM, or with 4 MB / 8 MB flash, are not supported on either chip: the firmware requires PSRAM and the partition table needs 16 MB.
 
 The two boards run **different application images**, and an S3 needs its own boot loader. Everything else is shared: the partition table and the OTA selector are the same files on both, so the layout below describes both boards.
 
-**Check the board before you buy it, and again before you erase it.** ESP32-WROVER modules are sold with different flash sizes, and **16 MB with PSRAM is the less common variant** — a board you already own is more likely to be a 4 MB one, and its label doesn't always say. One command answers it, and it changes nothing on the board:
+**Check the board before you buy it, and again before you erase it.** ESP32 boards are sold with different flash sizes, and **16 MB with PSRAM is the less common variant** — a board you already own is more likely to be a 4 MB one, and its label doesn't always say. One command answers it, and it changes nothing on the board:
 
 ```bash
 esptool.py --chip esp32 --port COM3 flash_id
@@ -50,7 +52,7 @@ esptool.py --chip esp32 --port COM3 flash_id
 
 It prints the chip and the detected flash size. **4 MB or 8 MB cannot run this firmware** — stop there, before Step 2 erases whatever the board is running now. On an S3, use `--chip esp32s3`.
 
-The rbAmp bus pins differ with the chip: SDA 25 / SCL 26 on the ESP32-WROVER, SDA 8 / SCL 9 on the ESP32-S3 (the S3 has no GPIO25, and its GPIO26 belongs to the flash/PSRAM bus). Both are defaults you can change in the hub's settings.
+The rbAmp bus pins are SDA 8 / SCL 9 (the S3 has no GPIO25, and its GPIO26 belongs to the flash/PSRAM bus). Both are defaults you can change in the hub's settings.
 
 ## Flashing Instructions
 
@@ -221,7 +223,7 @@ A module that reports 4 MB or 8 MB cannot run this firmware. `flash_id` also pri
 
 ### Boots, then reboots in a loop
 
-PSRAM not detected (wrong module), a partially written flash, or the other chip's image: erase and write all the images again, from the ESP32 set on an ESP32-WROVER and from the S3 zip on an ESP32-S3.
+PSRAM not detected (wrong module), a partially written flash, or the other chip's image: erase and write all the images again, from the ESP32 set on an ESP32 and from the S3 zip on an ESP32-S3.
 
 ### The hub keeps booting the old firmware after an app-only reflash
 
@@ -248,7 +250,11 @@ On an S3 the firmware logs on UART0 (GPIO 43 / 44), which on a dev board is its 
 
 ## OTA Updates
 
-After the initial USB flash, updates are installed over the air (`POST /api/system/ota` with the new application image). An ESP32-WROVER hub takes `main_release.bin` and an ESP32-S3 hub takes `main_release_s3.bin`; never the other chip's image. The hub writes the image into the slot it is not running from, restarts, and confirms the new image one minute after it has joined Wi-Fi; an image that fails before that is rolled back by the bootloader. Give the hub about a minute after an update before you restart it yourself, so it can confirm the image. See the *Updating* page of the user documentation for the procedure and the checks (`image_md5`, event log).
+After the initial USB flash, updates are installed over the air (`POST /api/system/ota` with the new application image). An ESP32 hub takes `main_release.bin` and an ESP32-S3 hub takes `main_release_s3.bin`; never the other chip's image.
+
+**The application image is the whole firmware update, and your settings and history stay as they are.**
+
+The **web app is a separate piece.** An over-the-air update does not replace it, so the hub goes on serving the web app it already has. Install the new one from `rbgrid-ui_vX.Y.Z.zip`. The storage image is not used in an update. The hub writes the image into the slot it is not running from, restarts, and confirms the new image one minute after it has joined Wi-Fi; an image that fails before that is rolled back by the bootloader. Give the hub about a minute after an update before you restart it yourself, so it can confirm the image. See the *Updating* page of the user documentation for the procedure and the checks (`image_md5`, event log).
 
 ## Remote nodes
 

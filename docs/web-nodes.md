@@ -19,7 +19,7 @@ A node is a sender. It has no display, no web page and no history you can read, 
 | **A voltage input on the node** | On v1.1.7 a node records energy only when one of its modules measures voltage. A current-only module on a node gives live current, but no 15-minute periods, so no history and no cost. Fit a **single-phase rbAmp set with a voltage input**. |
 | **Phases** | On v1.1.7 a node measures single-phase points only. There is no phase grouping on a node and no "use as the three-phase input": that is for a module on the hub. An STD-U3I3 on a node is untested. |
 | **The hub** | Firmware v1.1.7 or later, connected to your Wi-Fi. The hub's radio for nodes runs on the same channel as your router; a hub with no Wi-Fi can't run nodes. One hub takes up to **six** nodes. |
-| **History slots** | Node points share the hub's existing **12 history slots** with the hub's own points; they don't add to them. The Nodes section shows "History: *used* of 12 points in use" before you pair. |
+| **History slots** | Node points share the hub's history slots with the hub's own points; they don't add to them. The Nodes section shows "History: *used* of *n* points in use" before you pair. |
 | **A computer with USB** | For flashing the node, and for every later update of the node firmware. |
 | **Current clamps** | As for a module on the hub; the clamp model is set per channel from the hub (see [Node settings](#node-settings)). |
 
@@ -66,7 +66,7 @@ The rbAmp library is fetched at build time (`dependencies.lock` pins its version
 
 ## Pair a node
 
-Nodes are managed on **Management → Points**, in the **Remote nodes (ESP-NOW)** section. The header shows "*n* of 6 nodes" and the state of the radio for nodes, "radio on" or "radio off". On a hub that can run nodes the section sits at the top of the page, above **rbAmp modules**, and the setup wizard gets an optional **ESP-NOW nodes** step ("Step 5 of 8", after Sensors and before Tariff).
+Nodes are managed on **Set up → Points**, on the **Hardware** tab, in the **Remote nodes (ESP-NOW)** section. The header shows "*n* of 6 nodes" and the state of the radio for nodes, "radio on" or "radio off". On a hub that can run nodes the section sits at the top of the page, above **rbAmp modules**, and the setup wizard gets an optional **ESP-NOW nodes** step ("Step 5 of 8", after Sensors and before Tariff).
 
 1. Place the node where it will live, with its modules and clamps fitted, but leave it unpowered.
 2. In the app, choose the **Pairing time** (in minutes) and press **Pair a node**. The section says: "Power the node up now. It shows up below in a few seconds." and counts down: "Waiting for a node… *time* left". **Stop pairing** closes the window early.
@@ -78,7 +78,7 @@ Nodes are managed on **Management → Points**, in the **Remote nodes (ESP-NOW)*
 
 The keys are kept on the node and on the hub. After a restart, or after the radio was off, the node reconnects by itself; you pair it once.
 
-Before you pair, check the two capacity lines in the section: "*n* of 6 nodes" (when the hub is full the button is replaced by "The hub takes up to 6 nodes. Remove one to pair another.") and "History: *used* of 12 points in use. Points beyond 12 show live values only." (or "History: all 12 points are in use. A new node's points will show live values only."). If the radio is off, the section says "Turn the radio for nodes on to pair one."
+Before you pair, check the two capacity lines in the section: "*n* of 6 nodes" (when the hub is full the button is replaced by "The hub takes up to 6 nodes. Remove one to pair another.") and "History: *used* of *n* points in use. Points beyond that show live values only." (or "History: all *n* points are in use. A new node's points will show live values only."). If the radio is off, the section says "Turn the radio for nodes on to pair one."
 
 Each node brings up to four points. They are named after the node and its channels; rename them and give them roles on their own pages, like any other point (see [Points](web-points.md)). Node points can't be bound or unbound by hand: a channel turned off in the node's settings stops measuring, and removing the node removes its points.
 
@@ -201,7 +201,7 @@ The **unmetered** remainder on the Overview can. It is the input minus the sum o
 
 **From firmware v1.1.8 you can tell the hub about it:** mark the inner point as measured **inside** the outer one, and it stops being subtracted a second time. That is the right answer for a workshop or garage sub-feed metered on a node with its loads metered behind it — you keep both figures and the remainder still means something. It changes nothing in the measurement and nothing in the house total.
 
-The setting is **Management → Points** → the point → **Point setup** → **Point settings** → **Measured inside**, where **None: a line of its own** is the default. The list leaves out the input, the voltage bus, the point itself and anything already inside it; a choice the hub refuses reads *"The hub refused that choice: the point is gone, is an input, or is already inside this one. Pick another."* → [Points](web-points.md)
+The setting is **Set up → Points** → the point → **Point setup** → **Point settings** → **Measured inside**, where **None: a line of its own** is the default. The list leaves out the input, the voltage bus, the point itself and anything already inside it; a choice the hub refuses reads *"The hub refused that choice: the point is gone, is an input, or is already inside this one. Pick another."* → [Points](web-points.md)
 
 > ⚠️ **It holds for one level.** B inside A is counted once. Where a chain goes deeper — C inside B inside A — and the middle point is not shown, some views can still count the innermost point twice.
 
@@ -210,7 +210,7 @@ The setting is **Management → Points** → the point → **Point setup** → *
 ## Where nodes appear elsewhere
 
 - **Points:** a node's channels are points like any other, with their own pages, roles and names (see [Points](web-points.md)).
-- **History and Economics:** by point, as for any point; node points share the 12 history slots (see [History](web-history.md)).
+- **History and Economics:** by point, as for any point; node points share the hub's history slots (see [History](web-history.md)).
 - **Events:** the Hub log records a node's pairing, the settings it confirms, and `FAIL` lines for frames or records the hub could not count. A node going offline or coming back is **not** in the log — it is published on MQTT and shown on the node card (see [Events](web-events.md)).
 - **MQTT:** the hub publishes a retained status per node on `rbgrid/<mac>/node/<NODEMAC>/status` (`online`, signal, lost packets, last heard), refreshed every minute, and node events on `rbgrid/<mac>/event`; the same node actions are available over the command channel (see [MQTT broker](hub-mqtt.md)).
 - **Home Assistant:** one device per node, with an **Online** sensor and a **Signal** sensor, by discovery. The node's points appear like local ones.
@@ -281,7 +281,7 @@ Errors come back as `{ "ok": false, "error": "BAD_REQUEST" | "ESPNOW_DISABLED" |
 - The node has not been heard since the hub started ("Last heard: not heard since the hub started"). The rows appear with its first frame.
 
 **The node's points show live values but no history**
-- The hub's 12 history slots were already in use when the node was paired: "Points beyond 12 show live values only." Remove a point you don't need, then re-pair the node, or accept live-only points.
+- The hub's history slots were already in use when the node was paired: "Points beyond that show live values only." Remove a point you don't need, then re-pair the node, or accept live-only points.
 - A node records energy only with a module that measures voltage. A current-only module gives live current **and an estimated live power** (your nominal voltage × current, 230 V if none is set) — but no periods, no history and no cost. From **v1.1.8** the hub books no energy for such an input at all rather than inventing it from the nominal voltage.
 
 **Every node reads offline although they are powered and paired**

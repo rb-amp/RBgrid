@@ -32,7 +32,7 @@ Every setting in the wizard can also be changed later in **Settings**, **Points*
 
 This step only confirms that the app has found the hub: "Connected to the hub. The app is working with the hub at …". When the app is served by the hub itself, the line ends with **this device**. A hub address appears only when you opened the app at webapp.rbgrid.io or switched to another hub with **Switch**. There's nothing to fill in.
 
-You can change the hub's Wi-Fi network later in **Settings → Connection**. If the hub then gets a new IP address, connect to it again from the app's start screen.
+You can change the hub's Wi-Fi network later in **Settings → Network & time → Wi-Fi**. If the hub then gets a new IP address, connect to it again from the app's start screen.
 
 ## 2. Security (optional)
 
@@ -52,11 +52,9 @@ Later: **Settings → Security** (see [Settings](web-settings.md#security)).
 
 ![The setup wizard, step 3: Site & time](https://www.rbgrid.io/assets/img/webapp-docs/wa-wizard-3-site-time.webp)
 
-This step has three parts. It counts as finished when the site has a name and the hub's clock is synchronized.
+This step has two parts, each with its own **Save**: the site's name, and the time. It counts as finished when the site has a name and the hub's clock is synchronized.
 
-### Site scenario
-
-Choose the kind of site: **Home**, **Business** or **Charging stations**. The scenario sets what the **Overview** shows, for everyone who opens this hub. It applies at once, with no restart. **Just preview** shows the scenario in this browser only, without saving it. See [Settings → Site scenario](web-settings.md#site-scenario).
+Up to v1.2.x it had a third part, **Site scenario** — Home, Business or Charging stations. From v1.3.0 there is no such choice anywhere: the Overview reads your hardware instead of asking.
 
 ### Site
 
@@ -86,7 +84,7 @@ Two buttons set the clock:
 - **Sync with NTP** asks the hub to get the time from a time server now. This needs internet access.
 - **Use this device's time** sets the hub's clock from your browser's clock. Use it on a network without internet.
 
-The time servers and the resync interval aren't in the wizard; they're in **Settings → Time** (see [Time](web-time.md)).
+The time servers and the resync interval aren't in the wizard; they're in **Settings → Network & time → Time** (see [Time](web-time.md)).
 
 If a change needs a restart, the panel says "Some settings take effect after a restart." and shows a restart button.
 
@@ -113,7 +111,7 @@ Press **Create point** on a free channel to open **Bind sensor as a point**:
 
 After you bind, the app reminds you: "Home Assistant entities for the new point appear after the hub restarts."
 
-The hub keeps history for up to 12 points. If all 12 history places are taken, a new point shows live values only, and the dialog says so.
+The hub keeps history for the number of points it reports. When every history place is taken, a new point shows live values only, and the dialog says so.
 
 Later: the **Points** page (see [Points](web-points.md)).
 
@@ -121,7 +119,7 @@ Later: the **Points** page (see [Points](web-points.md)).
 
 ![The setup wizard, step 5: Tariff](https://www.rbgrid.io/assets/img/webapp-docs/wa-wizard-5-tariff.webp)
 
-A quick way to give a new hub a simple price plan: one price for the whole day, or a day and a night price. The hub uses it to compute cost per point.
+A quick way to give a new hub a simple price plan: one price for the whole day, or a day and a night price. The hub uses it to compute cost per point. The step appears on a hub running the full firmware, and it counts as finished once the hub has a plan of your own rather than the example one.
 
 > **Warning: the quick tariff always replaces the whole tariff plan.** Saving here rebuilds the hub's plan from scratch. The energy tax, grid fee and renewable levy are set to 0, fixed charges are cleared, net metering and the progressive tariff are turned off, and the zones are replaced. When the hub's plan is fuller (taxes and levies, net metering, fixed payments or more zones), the app asks first: **Replace the hub's tariff?** Press **Replace** to go on. On a new hub with the factory example plan, app v1.1.4 replaces it without asking; app v1.1.3 asks here too. To change an existing plan of your own, edit it on the **Tariffs** page instead.
 
@@ -151,7 +149,7 @@ The hub can send its data to Home Assistant and other smart-home systems over MQ
 
 **Open MQTT / Home Assistant settings** opens the **Home Assistant** panel in Settings, which holds the broker form. There are no fields in this step.
 
-See [Settings → Home Assistant](web-settings.md#home-assistant) and [MQTT broker](hub-mqtt.md).
+See [Settings → Integrations → Home Assistant](web-settings.md#home-assistant) and [MQTT broker](hub-mqtt.md).
 
 ## 7. Done
 
@@ -181,6 +179,7 @@ A summary of the setup, with a **Fix** button next to anything that isn't done y
 
 **The Sensors step shows "No sensors detected."**
 - Check the module wiring and power, then open the step again.
+- An ESP32-S3 board says the same thing: a red light repeating **one** flash means no module answers. → [Status lights](web-settings.md#status-lights)
 
 **I already had a full tariff plan and pressed Replace in the quick tariff**
-- The quick tariff has replaced it. If you saved a restore point before, use **Settings → Restore point → Restore and restart**. Otherwise enter the taxes, fees and other zones again on the **Tariffs** page.
+- The quick tariff has replaced it. If you saved a restore point before, use **Settings → Device → Restore point → Restore and restart**. Otherwise enter the taxes, fees and other zones again on the **Tariffs** page.

@@ -1,14 +1,16 @@
 # History
 
-**History** shows what the hub has recorded for your points: energy, power, voltage, reactive power and money, by hour, day or month. Open it from the app's left navigation: **Monitoring → History**.
+**History** shows what the hub has recorded for your points: energy, power, voltage, reactive power and money, by hour, day or month. Open it from the app's left navigation: **Look → History**.
 
-Everything on this page comes from the records stored on the hub. The hub keeps history for up to **12 points** (see [Points](web-points.md)); points of remote nodes count among them (see [Remote nodes](web-nodes.md)). A three-phase input **metered per phase** is three points here, each with its own chart, table and CSV; this page never sums them. The whole input, summed, is what the Overview and Economics show from firmware **v1.1.6**.
+Everything on this page comes from the records stored on the hub. The hub keeps history for the number of points it reports — **12** in its own flash, **49** with a statistics chip (see [Points](web-points.md)); points of remote nodes count among them (see [Remote nodes](web-nodes.md)). A three-phase input **metered per phase** is three points here, each with its own chart, table and CSV; this page never sums them. The whole input, summed, is what the Overview and Economics show from firmware **v1.1.6**.
 
 ![History · 7 days · Money](https://www.rbgrid.io/assets/img/webapp-docs/wa-history-overview.webp)
 
 ## Periods and bucket sizes
 
-Pick a period with the buttons at the top. There is no custom date range: you choose one of the preset periods, then step back and forward with the **‹ ›** arrows, one whole period at a time. **›** is greyed out while you are on the current period. The label between the arrows shows the period on screen, for example "16 Oct", "10 Oct – 16 Oct", "September 2026" or "2025".
+Pick a period with the buttons at the top. There is no custom date range: you choose one of the preset periods, then step back and forward with the **‹ ›** arrows, one whole period at a time — their tooltips read *Previous period* and *Next period*. **›** is greyed out while you are on the current period, and **‹** stops when there is nothing recorded further back. The label between the arrows shows the period on screen, for example "16 Oct", "10 Nov – 16 Nov", "October 2026" or "2025".
+
+From firmware **v1.3.0** the period you choose is **shared with Economics**: both pages show the same period and the same step, so moving back a month on one moves it on the other. The arrows are also on a point's own page and on a device's page. The choice lasts while the browser tab stays open.
 
 | Button | Period | One bar or step = | Compared with |
 |---|---|---|---|
@@ -17,11 +19,12 @@ Pick a period with the buttons at the top. There is no custom date range: you ch
 | **7 days** | the last 7 days, including today | 1 day | the previous 7 days |
 | **This month** | the 1st of the month to now | 1 day | last month, up to the same day |
 | **Last month** | the whole previous month | 1 day | the month before |
-| **This year** | 1 January to now | 1 month | last year, the same months ("last year to this date") |
+| **Year** | 1 January to now | 1 month | last year, the same months ("last year to this date") |
 
 After you step back with **‹**, the comparison is always "the period before".
 
 - Periods follow the **hub's** clock and time zone, not your phone's or computer's (see [Time](web-time.md)).
+- On a hub whose history lives on a **statistics chip**, if that chip stops answering, this page, Economics and a point's own page all say that there is no history and that none is being recorded until the chip is back. → [The statistics chip](web-points.md#the-statistics-chip)
 - **Today** and **Yesterday** always show the full 0–24 h axis.
 - History has no week step. For a by-week view of one point, use the trend card on the point's own page (see [Points](web-points.md)).
 - The app remembers your period, metric, view and comparison choices while the browser tab stays open.
@@ -34,7 +37,8 @@ After you step back with **‹**, the comparison is always "the period before".
 | **Power** | line | average power |
 | **Voltage** | line, with dashed lines 10 % above and below the nominal voltage; with one point selected, a shaded band from the lowest to the highest voltage | average voltage, and its minimum and maximum |
 | **Reactive · PF** | a line of reactive power, with a separate power factor (cos φ) strip below it | reactive power and power factor |
-| **Money** | bars: cost up, export value down | cost and export value at your tariff |
+
+From firmware **v1.3.0** money is not in that list: **Money** is a tab of its own next to the metrics, drawn as bars with cost up and export value down, at your tariff.
 
 The power factor strip shows when the records carry a power factor. Its scale is at least 0.5–1.0 and widens when the data falls outside it. Its caption: "cos φ (power factor): 1 — all power is useful; below 0.9 — a noticeable reactive load".
 
@@ -44,15 +48,18 @@ Hourly lines are drawn as steps; daily and monthly lines, and voltage, as smooth
 
 ## Choosing points
 
-Each point is a chip in its own colour above the chart. Tap a chip to add it to the chart or take it off. When you open the page, the first point (in point-ID order) is selected.
+From firmware **v1.3.0** the points are behind one control, **Points: *n***. It opens a list with a search box
+and a checkbox per point, each in the colour it will have on the chart. When you open the page, the first point
+(in point-ID order) is selected.
 
-The chart shows **up to six points** at once. With more than six points, the first six (in point-ID order) can be selected. The others stay in the chip row, greyed out, and can't be selected.
+The chart shows **up to six points** at once; once six are ticked, the rest cannot be added until you untick
+one. Searching is the quick way in when the hub has many points: type part of the name.
 
 Points that are configured but not reporting live values right now are still listed, because their stored records don't need a live connection.
 
 If you see "No points available.", no point has been set up yet. "Select a point." means none is selected.
 
-![History: the point chips (up to six) and the window/metric controls](https://www.rbgrid.io/assets/img/webapp-docs/wa-history-point-chips.webp)
+![History: choosing which points the chart draws](https://www.rbgrid.io/assets/img/webapp-docs/wa-history-point-chips.webp)
 
 ## Total and parts
 
@@ -149,7 +156,7 @@ Partial rows have a soft red background. Records made before the hub's clock was
 
 **Live-only points.** A point that keeps no stored history shows a note: "*name* shows live values only — it has no stored history." It is followed by one of:
 
-- "The hub keeps history for 12 points." — all 12 history slots are taken;
+- "The hub keeps history for *n* points." — every history slot is taken;
 - "Restart the hub to start its history." — the point was bound while the hub was running; its history starts after the next restart.
 
 **Slow or lost connection.** If the records take more than 12 seconds to load, the page says "The hub is slow to answer — still waiting for the archive…". With no connection it says "No connection to the hub — the archive will load when it's back."
@@ -158,7 +165,7 @@ If loading fails, the page shows "Couldn't load history."; a period with no reco
 
 ## Downloads
 
-Both downloads are built **in your browser**; the hub doesn't create a file. **Download CSV** uses the records on screen. **Summary by point** asks the hub again for each point's energy and money records for the period, whatever metric is on screen.
+From firmware **v1.3.0** both downloads sit behind one **Download** button. Both are built **in your browser**; the hub doesn't create a file. **Download CSV** uses the records on screen. **Summary by point** asks the hub again for each point's energy and money records for the period, whatever metric is on screen.
 
 ### Download CSV
 
@@ -225,7 +232,7 @@ The **As a table** link on a point's page uses this: an hourly trend opens **Tod
 - A day rebuilt after a restart is marked **recomputed from the hour records**: it is the sum of the records that survived, and the hub says so rather than smoothing the gap.
 
 **A point has no history at all, only live values**
-- The hub keeps history for **12** points in total, its own and its nodes' together. A point beyond that shows live values only. → [Points](web-points.md)
+- The hub keeps history for a set number of points, its own and its nodes' together. A point beyond that shows live values only. → [Points](web-points.md)
 
 **History opens on a node's point, and I can't find the input**
 - On a hub with remote nodes, firmware **v1.1.8** sorts the point chips by key, which puts node points ahead of the input — so History opens on a node, and with enough points the input can fall outside the six you can pick. Clear a chip you don't need to make room for it. Fixed in a later web app; the records themselves are unaffected, only which point the page opens on. → [Remote nodes](web-nodes.md)

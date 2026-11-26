@@ -4,32 +4,43 @@
 
 Settings are kept in the hub's own memory and survive a restart. Once an API token is set (see [Security](#security)), every change needs it; without it the app shows "Admin token required."
 
-## The panels
+## The sections and their panels
 
-The panels come in six groups, one after another, separated by a line. The groups have no headings of their own.
+From firmware **v1.3.0** the panels are grouped into six named sections, listed down the left of the page; on a
+phone you choose the section from a list first. Each section has an address of its own, so a link can lead
+straight to it.
 
-| Group | Panels |
-|---|---|
-| 1. The site | Site scenario · Site · Mains · Consumer groups · Charging stations |
-| 2. Language and time | Interface · Time |
-| 3. Metering | Tariff · Points · Telemetry |
-| 4. Connectivity | Status and Connection · Hub access point · Home Assistant |
-| 5. Access | Security · Browser access (CORS) |
-| 6. Maintenance | Restore point · Hub firmware · Administration |
+| Section | Address | Panels |
+|---|---|---|
+| **Site** | `#/config/site` | Site · Mains · Consumer groups · Charging stations · a card linking to Tariffs and to Points |
+| **Interface** | `#/config/ui` | Interface — language, formats, theme, and the density choice **Roomy** or **Compact** |
+| **Network & time** | `#/config/network` | Wi-Fi · Hub access point · Time |
+| **Integrations** | `#/config/integrations` | Home Assistant (MQTT) · Telemetry · a card linking to AI assistants |
+| **Security** | `#/config/security` | Security · Browser access (CORS). The section appears only on a hub that announces authorisation |
+| **Device** | `#/config/device` | Hub firmware · Restore point · Setup wizard · Status lights · Administration |
 
 Some panels appear only when your hub supports the feature; each section below says when.
 
-![Settings, the whole page (no group headings; panels in order)](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-groups.webp)
+### If you knew the old page
+
+Three things moved. **Status** and **Connection** are now one **Wi-Fi** card, with *Join another network*
+under the link you have. **Site scenario** is gone: the standard Overview follows what is actually connected
+instead of asking you, so there is no scenario to choose anywhere in the app. And Settings has no **Points**
+panel any more — points live on their own page, which the card in **Site** links to.
+
+![Settings: the sections down the left, with Site open](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-groups.webp)
 
 ## Saving changes
 
-Most panels have their own **Save** button. Three panels share a saving bar at the top of the page instead: **Site**, the nominal values in **Mains**, and **Charging stations**. The bar shows **No unsaved changes** or **Unsaved changes: n**, with:
+From firmware **v1.3.0** each section has one bar of its own — **Cancel** and **Save** — and **Save** writes
+everything you changed anywhere in that section. The bar tells you whether there is anything to save.
 
-- **Apply**: saves the changes that take effect at once;
-- **Reset**: discards your unsaved changes;
-- **Save and restart**: shown only when you've changed a field that applies after a restart. It saves the changes, then restarts the hub (the app asks first).
+Changes that carry consequences do not ride on that bar. Joining another Wi-Fi network, changing the access
+point, setting a token, restoring a restore point, restarting the hub and the factory reset each have their
+own button and ask you to confirm first.
 
-The bar stays at the top while you scroll. If a saved change needs a restart, the bar's message offers **Restart now**. The **Time**, **Hub access point** and **Home Assistant** panels have their own restart button.
+If a saved change needs a restart, a line at the top of the Overview and of Settings says so and offers
+**Restart now**.
 
 ### What needs a restart
 
@@ -40,25 +51,13 @@ Most settings apply at once. These need a hub restart:
 | Mains nominal voltage and frequency | **Save and restart** |
 | NTP sync, the time source and the NTP server | after a restart; the Time panel says so |
 | The MQTT broker | after a restart (**Restart now**) |
-| The Wi-Fi network (Connection) | **Save and reboot**: the hub restarts at once |
+| Joining another Wi-Fi network | the hub restarts at once, and the app asks before it does |
 | Restoring a restore point | the hub restarts at once |
 | A firmware update | the hub restarts by itself |
 
 The access-point password normally applies at once; if the hub needs a restart for it, the panel says so.
 
 ![The bar at the top of Settings with one unsaved change: Reset · Apply](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-savebar.webp)
-
-## Site scenario
-
-![Settings: the Site scenario panel](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-site-scenario.webp)
-
-Always shown. Three cards: **Home**, **Business** and **Charging stations**. The current one is marked "· current".
-
-The scenario sets what the **Overview** shows. When you pick another one, the app asks "Change scenario?":
-
-- **Change** saves it on the hub. The Overview changes for everyone who opens this hub. It applies at once, no restart.
-- **Just preview** shows the scenario in this browser only. Nothing is saved on the hub.
-- **Cancel** keeps the current scenario.
 
 ## Site
 
@@ -112,7 +111,7 @@ Press **Save** (or **Cancel**). Changes apply at once. You add a point to a grou
 
 ![Settings: the Charging stations panel](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-charging.webp)
 
-Shown when your hub supports charging-station metering and either the site scenario is **Charging stations** or a point has the **Charging station** role.
+Shown when the hub carries charging settings of its own **and** at least one point has the **Charging station** role. A hub without those settings shows no panel even when stations are metered.
 
 | Field | What it does | Default |
 |---|---|---|
@@ -206,6 +205,67 @@ Press **Save and reboot**. The app asks you to confirm, then the hub restarts at
 
 The hub's own access point stays on after it joins your network, so you can always reach the hub at `192.168.4.1` through it.
 
+## Status lights
+
+RBgrid hub boards carry **two status lights**, green and red, from firmware **v1.3.0**. They tell you what the
+hub is doing without opening anything, which is what you want from a board sitting by the panel. An ESP32 hub
+has no status lights.
+
+You set how much they show in the app, under **Set up → Settings → Device**, in the **Status lights** panel
+(the quick search finds it by "status lights", "LED" or "find this hub"). The panel appears only on a hub that
+has the lights. You can also set it with `POST /api/v1/led`, or by asking an AI assistant — to an assistant it
+is the hub setting *LED mode*.
+
+The panel also says in words what each light is showing right now, and gives the red light's flash count, so
+you do not have to count them yourself.
+
+**Green shows what the hub is doing.**
+
+| What you see | What it means |
+|---|---|
+| Both light briefly, then green stays on | The hub is starting. |
+| Slow blink | The hub is running its own setup access point and waiting for Wi-Fi settings. |
+| Fast blink | It is connecting to Wi-Fi. |
+| Two flashes, repeating | A pairing window is open — an AI assistant's code or a node pairing — and the hub is waiting for you. |
+| A short flash every few seconds | Normal operation. The flash comes from the running firmware, so if it stops, the hub has stopped. |
+
+**Red counts out something that needs attention.** The hub repeats a group of flashes with a pause between
+groups; count the flashes.
+
+| Flashes | What it means |
+|---|---|
+| 1 | No module answers. |
+| 2 | A module that was set up is missing. |
+| 3 | The clock is not set yet. |
+| 4 | The hub cannot store statistics. |
+| 5 | The saved Wi-Fi has been out of reach for more than five minutes. |
+| 6 | The MQTT broker has been out of reach for more than five minutes. |
+| 7 | The hub restarted unexpectedly. |
+| 8 | A firmware update was rolled back. |
+
+Codes 7 and 8 report an event rather than a present fault, so they stay until you press **Acknowledge** in
+the Status lights panel, or for 24 hours. Red off means nothing needs
+attention. If two things apply at once, the lower code wins: a hub with no module answering shows **1**, even
+if it also cannot store statistics.
+
+**Code 4 in full.** Three things raise it, and the first is the common one: the statistics chip the hub had
+been using has stopped answering; the hub's own statistics storage has failed; or the stored history is in a
+format this firmware cannot read. In the first two cases the hub keeps statistics in memory only and the app
+shows its warning. → [The statistics chip](web-points.md#the-statistics-chip)
+
+**Both lights together** mean one of three things: they alternate quickly during a firmware update, both stay
+on during a factory reset, and both blink fast together when you press **Find this hub** in the same panel, or ask
+an AI assistant to identify it. It runs for **ten seconds** unless you ask for longer, and stops the moment
+you cancel it.
+
+### Turning them down
+
+The lights have three modes, three buttons in a row: **All**, **Quiet** and **Off** (`full`, `quiet` and `off`
+in the API). **Quiet** switches off only the normal-operation flash, so the hub stops winking at you across a
+dark room but still reports everything else. **Off** goes further, and even then four things still show: a
+firmware update, a factory reset, **Find this hub**, and "no module answers". A change applies at once, with no
+restart.
+
 ## Hub access point
 
 ![Hub access point](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-hub-ap.webp)
@@ -243,11 +303,11 @@ If the hub already has a login and password stored, it doesn't show them: type t
 
 Press **Save**. The hub connects to the new broker after a restart: press **Restart now**. With no broker saved, MQTT is off. There is no separate switch to turn MQTT off.
 
-**Secure connection (TLS, mqtts).** A switch under the broker fields; the port is usually **8883**. With it on, the hub verifies the broker's certificate and, from firmware **v1.1.8**, says what came of it — *"Secure connection to the broker: certificate verified."*, or the reason it was refused: an expired certificate, one not valid yet, a host name that doesn't match, an unknown authority, *"Waiting for the clock…"*, or a TLS failure. The hub opens a TLS connection only once its clock is set, because an unset clock makes every certificate look not valid yet; a plain `mqtt://` broker is not delayed.
+**Secure connection (TLS, mqtts).** A switch under the broker fields; the port is usually **8883**. With it on, the hub verifies the broker's certificate. From firmware **v1.1.8** it also says what came of it: *"Secure connection to the broker: certificate verified."*, or the reason it was refused — an expired certificate, one not valid yet, a host name that doesn't match, an unknown authority, *"Waiting for the clock…"*, or a TLS failure. The hub opens a TLS connection only once its clock is set, because an unset clock makes every certificate look not valid yet; a plain `mqtt://` broker is not delayed.
 
 **Broker CA (for mqtts).** From **v1.1.8** this block takes the certificate of **your own** authority — *"For a broker with its own certificate authority, such as Mosquitto in Home Assistant: upload that authority's certificate (a .pem or .crt file, up to 8 KB). Without it the hub connects only to brokers with a public certificate."* With nothing uploaded the button reads **Upload CA certificate**; once one is stored, the block shows its subject, its issuer and the dates it is valid between, with **Replace** and **Remove** beside them. The uploaded CA **replaces** the public bundle and applies at the next restart.
 
-![Settings → Home Assistant: the MQTT broker on port 8883 with the secure-connection switch on, «certificate verified», and a stored broker CA with Replace and Remove](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-mqtt-ca.webp)
+![Settings → Integrations → Home Assistant: the MQTT broker on port 8883 with the secure-connection switch on, «certificate verified», and a stored broker CA with Replace and Remove](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-mqtt-ca.webp)
 
 > ⚠️ **Upload the authority's certificate, never a key.** The hub refuses a file that holds a private key, isn't PEM, is over 8 KB, or isn't a CA certificate, and says which of those it was. **Remove the broker CA?** warns first: after a restart the hub trusts public authorities only, so a broker that depends on this CA stops connecting.
 
@@ -266,7 +326,7 @@ The panel also lists what to pick in Home Assistant's **Energy** dashboard:
 >
 > On firmware **v1.1.8** the panel listed both plainly, without saying they overlap, so the trap was invisible until the figures looked wrong. From **v1.2.0** the panel names the relationship itself — a nested point is listed with **(upstream device: …)** after it, so you can see which entry to set as the upstream before you add anything.
 
-![Settings → Home Assistant, «Individual devices», with a nested point listed as «(upstream device: RBGrid Garage sub-panel)»](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-ha-devices.webp)
+![Settings → Integrations → Home Assistant, «Individual devices», with a nested point listed as «(upstream device: RBGrid Garage sub-panel)»](https://www.rbgrid.io/assets/img/webapp-docs/wa-settings-ha-devices.webp)
 
 Topics, discovery and the command channel: see [MQTT broker](hub-mqtt.md).
 
@@ -363,3 +423,9 @@ Always shown.
 **Settings went wrong after an experiment**
 - If you saved a restore point earlier, use **Restore and restart**. Save one before the next experiment.
 - To start from scratch, use **Administration → Factory reset**.
+
+**I cannot tell whether the hub is running at all**
+- Look at the board, if it is an ESP32-S3. The green light's short flash every few seconds comes from the running firmware, so if
+  that flash has stopped, the hub has stopped — unless its lights are set to **quiet** or **off**, which hide
+  exactly that flash and nothing else.
+- A red light counts out what needs attention; the codes are in *Status lights* above.

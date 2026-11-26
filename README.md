@@ -2,7 +2,7 @@
 
 **See your electricity as money. Every circuit in your home, costed by your own tariff, on a hub you own.**
 
-[![Release](https://img.shields.io/github/v/release/rb-amp/RBgrid)](https://github.com/rb-amp/RBgrid/releases/latest)
+[![Release](https://img.shields.io/github/v/release/rb-amp/RBgrid?filter=v*)](https://github.com/rb-amp/RBgrid/releases/latest)
 ![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-blue.svg)
 ![Platform: ESP32-WROVER | ESP32-S3](https://img.shields.io/badge/platform-ESP32--WROVER%20%7C%20ESP32--S3-orange.svg)
 ![ESP-IDF 5.5.1](https://img.shields.io/badge/ESP--IDF-5.5.1-red.svg)
@@ -20,14 +20,17 @@ RBgrid is self-hosted firmware for an ESP32 hub that reads [rbAmp](https://www.r
 
 - **Your real tariff, not an average price.** Time-of-use zones, weekend rates, per-kWh taxes and fees, VAT and a sell price for export are all entered separately and all included in the cost. The tariff engine runs on the device, and its code is in this repository.
 - **Market prices too, and the price it used is kept.** The hub fetches the day-ahead price for your zone itself, applies your contract on top, and prices every 15-minute period with the price of that period. It keeps the price it applied beside the kilowatt-hours it applied it to, for 40 days, with the source of each one — so a cost figure can be traced back to the price that produced it instead of taken on trust.
-- **Every circuit, not just the whole house.** Up to 8 rbAmp modules on one hub (up to 56 current channels), with history kept for up to 12 measurement points.
+- **Every circuit, not just the whole house.** Up to 8 rbAmp modules on one hub (up to 56 current channels), on one I²C bus or two. History is kept for **49 measurement points** on a hub board with the statistics chip — every RBgrid hub board has one — and for 12 points on a hub that keeps history in its own flash.
 - **And circuits that are not in the same room.** A sub-panel in the garage, a workshop, an outbuilding: a second ESP32 measures there and sends its readings to the hub over ESP-NOW, with no cable run and without joining your Wi-Fi. Each node closes its own 15-minute periods by its own clock and, from node firmware 1.5, holds about five days of them in flash — so a node out of reach for a weekend loses nothing.
 - **On your own hardware.** The hub keeps measuring and storing with the internet down. Nothing goes through our servers.
+- **It answers an AI assistant, on your own network.** From 1.3.0 the hub has an interface an AI assistant can use to read your measurements, check an installation and set modules and points up. It is off until you turn it on, it needs an admin token, and an assistant you pair can be given read-only access. Nothing leaves your network except what you ask your assistant.
 - **Works with Home Assistant, doesn't need it.** No server to run. If you do run Home Assistant, the hub plugs into it over MQTT — or you can run the same metering core inside it as an ESPHome device (below).
 
 ## Documentation
 
 **[rbgrid.io/webapp/docs](https://www.rbgrid.io/webapp/docs?utm_source=github&utm_medium=referral&utm_campaign=rbgrid)**: tariffs, points, sensors, time, settings. Building and flashing: [rbgrid.io/source/build](https://www.rbgrid.io/source/build?utm_source=github&utm_medium=referral&utm_campaign=rbgrid).
+
+What changed in each release, including everything new in **1.3.0** — the AI interface, the second I²C bus, history for 49 points and the status LEDs — is in **[`CHANGELOG.md`](CHANGELOG.md)**.
 
 In this repository: **[`docs/`](docs/README.md)** — the same user guide (`web-*` pages), the hub's
 flashing guide [`docs/hub-flashing.md`](docs/hub-flashing.md) and the API reference
@@ -98,6 +101,36 @@ same remote nodes — set up from the RBgrid panel in Home Assistant, with no we
 
 That package has **no web app, no MQTT, no REST and no WebSocket** — ESPHome owns the network side there. The
 firmware in *this* repository is the standalone hub, and it is what the rest of this README describes.
+
+## AI assistants
+
+From **1.3.0** the hub speaks to an AI assistant running on your own computer. The assistant reads the
+installation, live values, the event log, energy and money per period and per point; it checks an installation
+and reports what it finds; and it sets modules and points up, including *identify channel* — you switch a load
+on, and the hub says which channel saw the step.
+
+**What it takes to allow it.** The interface stays off until you turn it on, and it needs an admin token on the
+hub first. Pairing is a six-digit code shown on the hub's *AI assistants* page; the assistant then uses a token
+of its own, is listed on that page, and can be revoked there. Two scopes: read, and read with config. In
+read-only mode every change is refused, and a change an assistant proposes is one you see first — setup actions
+on modules and points take effect at once.
+
+**The bridge.** An assistant reaches the hub through a bridge that runs on your computer, in one file:
+
+**[`rbgrid-mcp.mcpb`](https://github.com/rb-amp/RBgrid/releases/download/mcp-v0.2.0/rbgrid-mcp.mcpb)** · 2.7 MB ·
+bridge **0.2.0** · `sha256 c979c255de52baf8e6a15d020de730f16051e92900cb2ea539c3a63e351054e4`
+
+Add that file in an application that installs MCP bundles; the bundle holds the server and its dependencies. It
+runs on **Node 20.3.0 or newer** — some applications ship Node themselves, and then there is nothing for you to
+install; that depends on the application, and its own documentation says so. The bridge is versioned apart from
+the firmware: what has to match is the hub's **protocol v1**. Keep the link above as it is — it names its
+version and goes on pointing at this exact file.
+
+The bridge is licensed **MIT**, which covers that package and not the hub firmware.
+
+<!-- LINK PLACEHOLDER (operator 26.11: site pages not created yet, fix on GitHub after the site update):
+     the user guide for this section is /webapp/docs/ai-assistants (overview), with ai-connect, ai-clients,
+     ai-tools and ai-first-setup beside it. Add them here with utm once they are live. -->
 
 ## How it fits together
 

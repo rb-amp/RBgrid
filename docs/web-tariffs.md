@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **Tariffs** page holds the hub's electricity price plan: time-of-use zones, per-kWh taxes and fees, VAT, and the price for energy you export. The hub applies the plan to every reading and computes cost and export value per measurement point. Open it from the left navigation, **Management → Tariffs**, or from the **Tariff** card in Settings.
+The **Tariffs** page holds the hub's electricity price plan: time-of-use zones, per-kWh taxes and fees, VAT, and the price for energy you export. The hub applies the plan to every reading and computes cost and export value per measurement point. Open it from the left navigation, **Set up → Tariffs & prices** (the **Tariffs** tab), or from the **Tariff** card in **Settings → Site** (**Open “Tariffs”**).
 
 The hub keeps **one tariff plan**. Editing it changes the rates used from then on; costs already recorded keep the rates that applied.
 
@@ -191,7 +191,7 @@ The same 2 kWh cost less at night because the zone's buy price is lower; the fee
 
 ## Backup
 
-The tariff plan is part of the hub's **restore point** (**Settings → Restore point**): a copy of the hub's settings, points, tariffs, time and modules, kept on the hub. There's one restore point; a new one replaces the previous. It isn't a downloadable file, and there's no separate plan export.
+The tariff plan is part of the hub's **restore point** (**Settings → Device → Restore point**): a copy of the hub's settings, points, tariffs, time and modules, kept on the hub. There's one restore point; a new one replaces the previous. It isn't a downloadable file, and there's no separate plan export.
 
 ## Troubleshooting
 

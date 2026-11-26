@@ -91,9 +91,24 @@ spreadsheet or a long archive, this is the cheaper route: one request instead of
 > ⚠️ **Hourly history is kept for 60 days**, then daily, monthly and yearly. If you need the hours of a whole
 > billing period after the fact, pull them before they roll — a scheduled `export.csv` is the usual way.
 
+### Where the history lives, and how many points it covers
+
+`GET /api/system/version` and `GET /api/v1/schema` both report two fields that say how much history this
+particular hub keeps. Neither read needs a token.
+
+- **`stats_media`** — where the records are kept. `"external"`: on the statistics chip. `"internal"`: in the
+  hub's own flash. `"none"`: a chip the hub had been using has stopped answering, and statistics are being held
+  in memory only.
+- **`history_slots`** — the **capacity**: how many of this hub's points *can* keep history, not how many do.
+  It is `49` with the chip, `12` in the hub's own flash, and `0` while `stats_media` is `"none"`. It is the same
+  number the app shows.
+
+Read the field rather than assuming either number. `"none"` is a state a running hub can enter, and a client
+that takes 49 for granted will go on asking for history that is no longer being recorded.
+
 ---
 
-## The price routes (firmware 1.2.0 and later)
+## The price routes (firmware v1.2.0 and later)
 
 Three routes, and they answer three different questions:
 
@@ -130,6 +145,31 @@ has a column saying which. A few rules that are not in any table:
   one replaces the section. Read it, change what you mean to change, send it back.
 
 ---
+
+### The module buses
+
+`GET /api/v1/i2c` reports the hub's **two** buses: the pins each one is using, and which GPIOs the board will and will not
+accept for a bus (`pins_ok`, `pins_reserved`).
+
+`POST /api/v1/i2c/buses/<0|1>` sets the pins of one bus, taking `{"sda": <gpio>, "scl": <gpio>}` and the admin
+token. **The pins apply after a restart.** Setting the second bus's pins is also what switches it on.
+
+A refused pin comes back as `{"status":"error","message":…}` with the reason that GPIO cannot carry a bus —
+it is a boot strap pin, the console UART, or otherwise spoken for. Read the message rather than retrying: the
+same pin will be refused again.
+
+### The status lights
+
+`GET /api/v1/led` returns the current mode and what the lights are showing. `POST /api/v1/led` sets the mode —
+`full`, `quiet` or `off`, which the app shows as **All**, **Quiet** and **Off** — and takes the admin token.
+A mode applies at once, with no restart. The lights are on ESP32-S3 hub boards; an ESP32 hub has
+none, and says so rather than failing.
+
+The same route runs **Find this hub**: both lights blink fast together for **10 s** by default, for any time you
+ask between **0 and 300 s**, and `{"identify": false}` stops it at once.
+
+Turning the lights off does not turn off everything: a firmware update, a factory reset, **Find this hub** and
+"no module answers" are shown whatever the mode.
 
 ## What the API will not do
 

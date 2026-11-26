@@ -26,16 +26,16 @@ A demo with sample sites, so you can look around without a hub. It can't connect
 ## Setup
 
 **Can I leave the wizard half-way?**
-Yes. Nothing is blocked: skip optional steps and come back later from **System → Setup wizard**. **Done** lists what's left. → [Setup wizard](web-setup-wizard.md)
+Yes. Nothing is blocked: skip optional steps and come back later from **Set up → Setup wizard** (in the menu until the hub is set up; after that it starts from **Set up → Settings → Device**). **Done** lists what's left. → [Setup wizard](web-setup-wizard.md)
 
 **The wizard says "Almost done". What's missing?**
 The **Done** step lists it: a site name (not "Default"), a synchronized clock, your own tariff and at least one point. Each row has a **Fix** button.
 
 **The time says "not synchronized".**
-The hub sets its clock over the internet (NTP). Check that the hub is on your home Wi-Fi with internet and choose **Sync with NTP**. Without internet, choose **Use this device's time**: from firmware v1.1.6 that counts as a synchronization. On a hub on **v1.1.5 or earlier**, check one thing first — if you had saved the time zone in the app, that firmware dropped the NTP servers at the next restart and the hub never synced again. Update the hub and open **Settings → Time** once. → [Time](web-time.md)
+The hub sets its clock over the internet (NTP). Check that the hub is on your home Wi-Fi with internet and choose **Sync with NTP**. Without internet, choose **Use this device's time**: from firmware v1.1.6 that counts as a synchronization. On a hub on **v1.1.5 or earlier**, check one thing first — if you had saved the time zone in the app, that firmware dropped the NTP servers at the next restart and the hub never synced again. Update the hub and open **Settings → Network & time → Time** once. → [Time](web-time.md)
 
 **Why do "today" and the tariff zones look shifted?**
-The hub's time zone differs from where you are. Set it in **Settings → Time**. The Overview shows a note when the hub's zone and your browser's differ by 30 minutes or more.
+The hub's time zone differs from where you are. Set it in **Settings → Network & time → Time**. The Overview shows a note when the hub's zone and your browser's differ by 30 minutes or more.
 
 **I changed a setting, but nothing happened.**
 Settings has a bar at the top: *Unsaved changes: n*. Choose **Apply**. Some settings apply only after a restart: then the button reads **Save and restart**. A few panels (Security, Browser access, Hub access point, MQTT broker) save with their own button. → [Settings](web-settings.md)
@@ -78,13 +78,13 @@ Whatever came next in the chain: the backup provider, or your tariff plan's zone
 One measured line with a name and a role: the grid input, a circuit, an appliance, solar. Points come from the current channels of your rbAmp modules. → [Points](web-points.md)
 
 **How many modules and points can the hub take?**
-Up to 8 rbAmp modules (hub firmware v1.1.2 and later). The hub keeps history for up to 12 points; more points show live values only.
+Up to 8 rbAmp modules (hub firmware v1.1.2 and later). The hub keeps history for the number of points it reports — 12 in its own flash, 49 with a statistics chip; points beyond that number show live values only.
 
 **Can I rename a point?**
 Yes, on hub firmware v1.1.4 and later. On v1.1.3 and earlier, on ESP32 chip revisions before v3, a renamed point could disappear after the next restart, together with its history: update the hub first. → [Points](web-points.md#point-settings)
 
 **I added a point, but it has no history.**
-Restart the hub: a newly bound point starts keeping history after a restart. If all 12 history slots are used, the point shows live values only.
+Restart the hub: a newly bound point starts keeping history after a restart. If every history slot is in use, the point shows live values only.
 
 **How do I add a second module?**
 **Points → Add a module**, then follow the dialog. New modules all arrive at the same factory address, so the app first moves a module off it for you. Connect one new module at a time, with the hub off. → [Sensors and modules](web-sensors.md)
@@ -111,15 +111,15 @@ A Basic module counts consumption in one direction only. Its sensor faces the wr
 The current is at, or near, the top of the sensor's range. Above it, readings are cut off and the point counts less than it uses. Fit a sensor with a higher rating.
 
 **Can I measure three phases?**
-Yes, with an rbAmp STD-U3I3 on the input: set **Settings → Mains** to **Three phase**, then **Points → Use as the three-phase input**, and restart. → [Scenario: one main meter](web-scenario-main-meter.md)
+Yes, with an rbAmp STD-U3I3 on the input: set **Settings → Site → Mains** to **Three phase**, then, on the **Hardware** tab, **Points → Use as the three-phase input**, and restart. → [Scenario: one main meter](web-scenario-main-meter.md)
 
 ## Home Assistant and MQTT
 
 **How do I get the data into Home Assistant?**
-Connect the hub to an MQTT broker in **Settings → Home Assistant**. Home Assistant finds the hub's sensors by itself (MQTT discovery). → [MQTT broker](hub-mqtt.md)
+Connect the hub to an MQTT broker in **Settings → Integrations → Home Assistant**. Home Assistant finds the hub's sensors by itself (MQTT discovery). → [MQTT broker](hub-mqtt.md)
 
 **Which sensors go into the Energy dashboard?**
-The points' energy sensors ("Energy In", "Energy Out"). **Settings → Home Assistant** shows a table of what to pick.
+The points' energy sensors ("Energy In", "Energy Out"). **Settings → Integrations → Home Assistant** shows a table of what to pick.
 
 **I deleted a point, but Home Assistant still shows it.**
 The hub removes a deleted point's entities from Home Assistant, as long as it's connected to the MQTT broker when you delete it. If it wasn't, delete the leftover device in Home Assistant (**Settings → Devices & services → MQTT**).
@@ -150,4 +150,4 @@ At webapp.rbgrid.io it's always the latest; nothing to do. For the app installed
 Yes. On v1.2.0 the fetched prices shared the hub's small settings store with the hour being measured, so they could fill it and a restart could lose part of that hour (the Hub log shows `FAIL hour persist …`). **v1.2.1** moves the prices to the file system and frees the space on the first start. Nothing else changes. → [Where your price comes from](hub-dynamic-prices.md)
 
 **How do I update the hub's firmware?**
-In **Settings → Hub firmware**, upload `main_release.bin` from the new release (the other three files are for USB flashing only). Wi-Fi, settings, points, tariff, tokens and history are kept, and the modules keep counting during the update. If the new firmware doesn't start, the hub goes back to the previous one by itself. For about a minute after an update the hub is still confirming the new image, and a second update started in that minute is refused: the panel says "Failed: The hub is still confirming the firmware installed less than a minute ago. Try again in about a minute." Wait a minute and try again (on firmware v1.1.5 and earlier the same attempt failed with a generic error instead). Then install the release's matching `rbgrid-ui_<version>.zip`. Don't restart the hub in the first minute after an update: the new firmware isn't confirmed yet, and a restart inside that minute rolls it back to the previous one. → [Settings](web-settings.md#hub-firmware)
+In **Settings → Device → Hub firmware**, upload `main_release.bin` from the new release (the other three files are for USB flashing only). Wi-Fi, settings, points, tariff, tokens and history are kept, and the modules keep counting during the update. If the new firmware doesn't start, the hub goes back to the previous one by itself. For about a minute after an update the hub is still confirming the new image, and a second update started in that minute is refused: the panel says "Failed: The hub is still confirming the firmware installed less than a minute ago. Try again in about a minute." Wait a minute and try again (on firmware v1.1.5 and earlier the same attempt failed with a generic error instead). Then install the release's matching `rbgrid-ui_<version>.zip`. Don't restart the hub in the first minute after an update: the new firmware isn't confirmed yet, and a restart inside that minute rolls it back to the previous one. → [Settings](web-settings.md#hub-firmware)

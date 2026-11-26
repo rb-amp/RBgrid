@@ -4,7 +4,7 @@
 
 The hub needs the correct time for two things: to file each measurement under the right hour, day and month, and to pick the right tariff zone for its cost. It gets the time over the network (SNTP) from time servers, or once from your browser if the hub has no internet.
 
-Open it in the app: **Settings → Time**. The setup wizard shows a compact panel: the time zone with the browser's suggestion, the sync status, the two clock buttons and **Save**. The NTP settings are only here.
+Open it in the app: **Settings → Network & time → Time**. The setup wizard shows a compact panel: the time zone with the browser's suggestion, the sync status, the two clock buttons and **Save**. The NTP settings are only here.
 
 ## Fields
 
@@ -101,4 +101,4 @@ SNTP uses **UDP port 123**, outbound, to the servers you set. If your network bl
 - Otherwise, check that the hub has internet access, that outbound UDP port 123 is allowed, and that the **Resync interval** is between 60 and 86400 s.
 
 **The Time panel sometimes won't open**
-- **Fixed in v1.1.6.** On **v1.1.5 and earlier**, opening **Settings → Time** on a hub with no reachable time server failed about one time in three while the hub was retrying NTP. Open it again, or update the hub.
+- **Fixed in v1.1.6.** On **v1.1.5 and earlier**, opening **Settings → Network & time → Time** on a hub with no reachable time server failed about one time in three while the hub was retrying NTP. Open it again, or update the hub.

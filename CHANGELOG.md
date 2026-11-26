@@ -42,6 +42,12 @@
   modules lost and back, the clock and prices across restarts.
 - **For developers.** The manifest carries a JSON Schema for the input and the output of every tool, and it is the
   authority for what a hub offers. A period in a call is either a preset or `from` and `to`.
+- **The bridge, released separately.** An assistant reaches the hub through a bridge that runs on your own
+  computer, in one file: **[`rbgrid-mcp.mcpb`](https://github.com/rb-amp/RBgrid/releases/download/mcp-v0.2.0/rbgrid-mcp.mcpb)**
+  (bridge **0.2.0**, 2.7 MB, `sha256 c979c255de52baf8e6a15d020de730f16051e92900cb2ea539c3a63e351054e4`). The bundle
+  holds the server and its dependencies; it runs on **Node 20.3.0 or newer**, and some applications ship Node
+  themselves. The bridge keeps **its own version line** — what has to match is the hub's protocol v1, not a
+  firmware number — and it is licensed **MIT**, which covers that package and not this firmware.
 
 ### Two I²C buses
 - **Two buses.** The hub works with rbAmp modules on two I²C buses:

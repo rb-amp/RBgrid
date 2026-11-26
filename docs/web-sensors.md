@@ -2,7 +2,7 @@
 
 ## Overview
 
-All measurement in RBgrid is done by **rbAmp modules** on the hub's I2C bus. A hub with firmware v1.1.2 or later reads up to **8** modules. You see them, and add new ones, on the **Points** page under **rbAmp modules**. What you measure with each channel is set up as a point (see [Points](web-points.md)).
+All measurement in RBgrid is done by **rbAmp modules** on the hub's I2C bus. A hub with firmware v1.1.2 or later reads up to **8** modules. You see them on the **Points** page, on its **Hardware** tab, under **rbAmp modules**; **Add a module** is in the page header and works from either tab. What you measure with each channel is set up as a point (see [Points](web-points.md)).
 
 Modules can also sit on a **remote node** that reports to the hub by radio; the node's channels appear as points, not as module cards here (see [Remote nodes](web-nodes.md)).
 
@@ -21,7 +21,7 @@ Each module exposes a voltage input (`U`) and current channels (`I0`, `I1`, …)
 
 ## Module cards
 
-Each connected rbAmp module appears as a **module card** under **Points → rbAmp modules**. Under the module's **model** (or "rbAmp module") and a status chip, **online** or **not found**, is a line like this:
+Each connected rbAmp module appears as a **module card** under **Points → the Hardware tab → rbAmp modules**. Under the module's **model** (or "rbAmp module") and a status chip, **online** or **not found**, is a line like this:
 
 ```
 module 0 · 0x50 · 1U + 7I · 6 of 7 in use
@@ -109,8 +109,8 @@ Every new rbAmp module arrives at address **0x50**, and two modules can't share 
 On a new hub, module 0 at 0x50 is an **empty slot** until a module is connected there: nothing is measured on it yet. The dialog says so: "Module 0 at 0x50 is an empty slot: nothing is measured on it. A new module from the box answers at 0x50 and takes this slot as module 0 — no address change, no scan."
 
 1. Switch the hub off. To remove a module, unplug its whole cable, not only the power.
-2. Connect ONE new module (SDA, SCL, GND, VCC) and switch the hub on. The hub's default bus pins depend on the board: **SDA 25 / SCL 26** on an ESP32-WROVER, and **SDA 8 / SCL 9** on an ESP32-S3, which the hub supports from firmware **v1.1.8** (the S3 has no GPIO25, and its GPIO26 belongs to the flash/PSRAM bus). Both are defaults you can change in the hub's settings.
-3. Give it 10–20 seconds, open **Add a module** again and press **Check again**. A new module connected at 0x50 is picked up in this slot: it shows as present, and its channels appear under **Free sensors** on the Points page.
+2. Connect ONE new module (SDA, SCL, GND, VCC) and switch the hub on. The hub's first bus starts on **SDA 25 / SCL 26** on an ESP32 and on **SDA 8 / SCL 9** on an ESP32-S3. You choose the pins yourself: both of the hub's buses take the pins you set for them in the hub's settings, and a change applies after a restart.
+3. Give it 10–20 seconds, open **Add a module** again and press **Check again**. A new module connected at 0x50 is picked up in this slot: it shows as present, and its channels appear under **Free sensors** on the Points tab.
 
 ![Add a module on a new hub: module 0 at 0x50 is an empty slot](https://www.rbgrid.io/assets/img/webapp-docs/wa-sensors-add-module.webp)
 
@@ -131,7 +131,23 @@ The dialog works out where you are from the hub's state, so you can close it to 
 3. **Connect ONE new module** to the hub's I2C connector next to the others (SDA, SCL, GND, VCC).
 4. **Switch the hub on**, open **Add a module** again and press **Scan**.
 5. The scan shows "New module *model* at 0x50 · firmware *version*". Press **Add**.
-6. "Module *n* added at 0x50." Its channels now appear under **Free sensors** on the Points page: bind them as points (see [Binding a point](web-points.md#binding-a-point)). To add another, press **Add another** and repeat from step 1.
+6. "Module *n* added at 0x50." Its channels now appear under **Free sensors** on the Points tab: bind them as points (see [Binding a point](web-points.md#binding-a-point)). To add another, press **Add another** and repeat from step 1.
+
+### The two module buses
+
+A hub drives **two** module buses — on an ESP32 and on an ESP32-S3 alike: it starts with the first one on
+its default pins, and the second is off until you give it a pair of pins of its own.
+
+- **Up to eight modules in all**, on the first bus, the second, or split between them.
+- **An address has to be unique on its bus, not on the hub.** Two modules at the same address are fine as long
+  as they sit on different buses — which is why a second bus is worth having when you have run out of free
+  addresses.
+- **You choose the pins for both buses.** They are in the app under **Set up → Points**, on the **Hardware**
+  tab, in **I2C buses** — which appears only on a hub that drives modules on two buses — and the button is
+  **Change bus 1 pins**. The hub knows which of its GPIOs can carry a bus and refuses the ones that cannot,
+  naming the reason; a change applies after a restart.
+- **If one bus goes quiet, the other keeps measuring.** A warning appears at the top for the bus that stopped,
+  and the hub re-reads what it lost every ten seconds.
 
 ### Cables and pull-ups
 
@@ -139,7 +155,7 @@ The dialog works out where you are from the hub's state, so you can close it to 
 - With up to three modules, leave the modules' pull-ups as they are: no cutting, no extra resistors.
 - With four or more modules, cut the pull-ups on all but one module (or fit one external pair).
 
-See the rbAmp [wiring guide](https://www.rbamp.com/docs/modules-basic-standard-hardware-connection?utm_source=github&utm_medium=referral&utm_campaign=rbgrid) for longer cables.
+See the rbAmp [wiring guide](https://www.rbamp.com/docs/modules/basic/hardware-connection?utm_source=github&utm_medium=referral&utm_campaign=rbgrid) for longer cables.
 
 ### If something goes wrong
 
@@ -184,13 +200,13 @@ Which mode is right for you is your meter's behaviour, not a preference: a meter
 
 **To one point per phase.** The confirm asks "Meter the input per phase?": "Each phase becomes its own input point with its own import and export, as on a meter that counts per phase. Export on one phase is no longer offset by import on another. The input point keeps its history and takes L1; L2 and L3 start from zero. Applies after a restart." If a phase doesn't get its point, the card says which and why; pressing **One point per phase** again retries.
 
-**Back to one point.** The confirm asks "Meter the input as one point?". When there are phase points to remove, the button is red and the text names them: "The points *…* are deleted and their own history is erased; their totals move into the input, so the site's totals stay." Their totals survive; their own records don't — so download anything you need from [History](web-history.md#downloads) **before** you regroup. With no phase points to remove, the input simply keeps its history.
+**Back to one point.** The confirm asks "Meter the input as one point?". When there are phase points to remove, the button is red and the text names them: "The points *…* are deleted and their own history is erased; their totals move into the input, so the site's totals stay." Their totals survive; their own records don't. Download anything you need from [History](web-history.md#downloads) **before** you regroup. With no phase points to remove, the input simply keeps its history.
 
 **Either way the change needs a restart.** The card says "Saved. The hub meters the input this way after a restart." and offers **Restart now**, which asks "Reboot the device now?" ("The hub goes offline for about half a minute; metering resumes after start-up."). Until you restart, the card says "The change applies after a restart — until then the card shows the old layout." and hides the mode buttons. On app **v1.1.5** that message sat above the module list instead, where it could be off the top of the screen: if you pressed a mode button there and nothing seemed to happen, scroll up — the restart is still needed.
 
 **What the app shows per period while the input is split.** From firmware **v1.1.6**, with the matching app package, those figures cover the **whole input**: the hub serves the three phase points as one summed series. On **v1.1.5** the per-period figures — the Economics balance, the Overview month and "vs yesterday", the energy chart — showed the **L1 point only**. Live values and the hub's system totals are the full sum on either version, each phase point keeps its own history on the hub, and the History page always shows the phases separately.
 
-A split input is **three** measurement points, not one, so it takes three of the twelve the hub keeps history for (see [Points](web-points.md#messages)).
+A split input is **three** measurement points, not one, so it takes three of the hub's history slots (see [Points](web-points.md#messages)).
 
 > ⚠️ **Before installing firmware older than v1.1.5 on a hub whose input is metered per phase, switch it back to one point.** Older firmware handles one supply point only.
 

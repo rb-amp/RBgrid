@@ -6,7 +6,7 @@ MQTT is off until you set a broker. The hub connects to it only when it's on you
 
 ## Connect the hub to a broker
 
-In the app, open **Settings → Home Assistant** and fill in the **MQTT broker** form: the broker's address, port (usually 1883), login and password. Save and restart the hub when the app asks; the broker settings apply after a restart.
+In the app, open **Settings → Integrations → Home Assistant** and fill in the **MQTT broker** form: the broker's address, port (usually 1883), login and password. Save and restart the hub when the app asks; the broker settings apply after a restart.
 
 Over the API instead: `POST /api/system/mqtt-config` with `{"broker_uri":"mqtt://user:password@host:1883"}`. Reading it back shows the password masked.
 
@@ -19,7 +19,7 @@ On **v1.1.7** a private or self-signed certificate could not be used at all, and
 
 ### Your own broker CA
 
-**Settings → Home Assistant** has a **Broker CA (for mqtts)** card. While nothing is uploaded it reads *"None uploaded: the hub trusts public certificate authorities only."* **Upload CA certificate** takes the PEM file of your authority — the file that begins with `-----BEGIN CERTIFICATE-----` — and the hub answers *"Certificate saved on the hub. It is used after a restart."* The card then lists what it holds: subject, issuer and the validity dates.
+**Settings → Integrations → Home Assistant** has a **Broker CA (for mqtts)** card. While nothing is uploaded it reads *"None uploaded: the hub trusts public certificate authorities only."* **Upload CA certificate** takes the PEM file of your authority — the file that begins with `-----BEGIN CERTIFICATE-----` — and the hub answers *"Certificate saved on the hub. It is used after a restart."* The card then lists what it holds: subject, issuer and the validity dates.
 
 The hub refuses a file that isn't right, and says which:
 
@@ -53,7 +53,7 @@ From **v1.1.8** the hub checks the certificate's **dates** as well as its author
 
 Each refusal also writes a line to the event log. Over the API the same state is in `GET /api/system/mqtt-config` → `tls: {state, ca, ca_uploaded}`, where `state` is `ok`, `expired`, `not_yet_valid`, `name_mismatch`, `unknown_ca`, `waiting_clock`, `connecting`, `tls_error`, or `off` for a plain connection, and `ca` is `custom` or `bundle`.
 
-If the hub can't verify the broker it keeps retrying, and nothing else stops working: **Settings → MQTT** shows MQTT as not connected, and the hub's event log names the reason. → [Events](web-events.md#hub-log)
+If the hub can't verify the broker it keeps retrying, and nothing else stops working: **Settings → Integrations → Home Assistant** shows MQTT as not connected, and the hub's event log names the reason. → [Events](web-events.md#hub-log)
 
 > **Keep the broker private.** Anyone who can read and write on the broker can read the hub's settings through the command channel, and an admin token sent with a command is visible to every client subscribed to it. Use a broker with its own users and access rules (ACL), on your own network: give the hub its own broker user, and limit access to `rbgrid/<mac>/#` to the hub and the clients you trust. Never use a public broker.
 
