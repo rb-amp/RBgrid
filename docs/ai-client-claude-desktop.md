@@ -18,6 +18,9 @@ behave the same there, and we are not going to tell you it does until someone ha
 
 ## Installing it
 
+**The file to install:** **[rbgrid-mcp.mcpb](https://github.com/rb-amp/RBgrid/releases/download/mcp-v0.2.0/rbgrid-mcp.mcpb)**, about 2.7 MB. Download it first — every step below
+assumes it is already on this computer.
+
 **One door works, and three look like they should.** Save yourself the detour:
 
 | What you might try | What happens |

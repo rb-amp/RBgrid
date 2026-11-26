@@ -168,6 +168,7 @@ grows with firmware. → [What an AI assistant reads and changes](ai-tools.md)
 
 ## Where to go next
 
+- The bridge itself, if that is all you came for → **[rbgrid-mcp.mcpb](https://github.com/rb-amp/RBgrid/releases/download/mcp-v0.2.0/rbgrid-mcp.mcpb)**, one file, about 2.7 MB
 - Set up a hub that has nothing on it yet, by talking to it → [Set up a hub by talking to it](ai-first-setup.md)
 - Pair an AI assistant, step by step → [Connect an AI assistant](ai-connect.md)
 - What must run on your own computer → [Where an AI assistant runs](ai-clients.md)
