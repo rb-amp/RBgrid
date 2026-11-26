@@ -67,10 +67,23 @@ Always shown.
 
 | Field | What it does |
 |---|---|
-| **Site name** | The name of your home or building, for your reference. |
+| **Site name** | The name of your home or building — **and the hub's own name with it.** See below. |
 | **Location** | Where it is, for your reference. |
 
-Save with **Apply** in the saving bar; both apply at once. They're the same fields as **Name** and **Where it is** in the [setup wizard](web-setup-wizard.md).
+**This one field names the hub.** From firmware **v1.3.0** there is one name, not two, and it does three things
+besides labelling your site: it is the name on the hub's own pages, the name the hub announces on your network,
+and the name the hub gives when an AI assistant asks which hub it is talking to.
+
+- **A hub with no name calls itself "RBgrid".** So does a hub set up before v1.3.0 whose name was left at the
+  factory example *Default* — and so does one you save this field empty, because an empty field reaches the hub
+  as *Default*. If two hubs on one network both answer as "RBgrid", this is why.
+- **Renaming does not change the hub's address.** The `rbgrid-xxxx.local` name comes from the board's hardware
+  address, not from this field, and so does the hub's own Wi-Fi name. Neither follows a rename.
+- **It takes effect when you save, with no restart.** The announced name changes at once, and changing it back
+  puts the old one back the same way.
+
+Save with **Apply** in the saving bar; both apply at once. They're the same fields as **Name** and **Where it
+is** in the [setup wizard](web-setup-wizard.md), which writes the same value.
 
 Fields the hub reads only when it starts are listed under **Applies after a hub restart** and saved with **Save and restart**.
 

@@ -22,6 +22,8 @@ This page takes the shortest path: one hub and one rbAmp **STD-UI1** energy mete
 3. Connect the module to the hub with four wires: the module's **VIN to the board's 5 V/VIN** (not 3.3 V), GND, and the two bus wires to the hub's first-bus pins: **GPIO25 and GPIO26** on an ESP32, **GPIO8 and GPIO9** on an ESP32-S3. Those are the defaults, and you can set other pins in the hub's settings. Keep the cable up to 15 cm and leave the module's pull-ups as they are.
 4. Leave the module at its factory address **0x50**: that's how the hub finds it as your grid input.
 
+![Wiring of an STD-U3I3 and Basic UI1, UI2 and UI3 modules to the ESP32 hub: four wires to every module, with module VIN on the board's 5V/VIN pin, GND on GND, SDA on GPIO25 and SCL on GPIO26.](https://www.rbgrid.io/assets/img/webapp-docs/hw-i2c-bus-wiring.webp)
+
 Details: [Hardware](https://www.rbgrid.io/hardware), the rbAmp STD wiring guide.
 
 ## 2. Flash the firmware — only on a board of your own

@@ -60,7 +60,7 @@ Up to v1.2.x it had a third part, **Site scenario** — Home, Business or Chargi
 
 | Field | Default | What to enter |
 |---|---|---|
-| **Name** | the hub's current name (empty on a new hub) | The name of the home or building, for example "My home". Up to 31 characters. |
+| **Name** | the hub's current name (empty on a new hub) | The name of the home or building, for example "My home". Up to 31 characters. **This names the hub too**, on its own pages and on your network — leave it empty and the hub goes on calling itself "RBgrid". → [Settings](web-settings.md#site) |
 | **Where it is** | the hub's current location (empty on a new hub) | The town or place, for example "Berlin". Up to 31 characters. |
 
 Press **Save**. "Saved on the hub ✓" confirms it; "Not saved" means you have an unsaved change. The name and place apply at once.

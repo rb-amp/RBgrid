@@ -101,7 +101,9 @@ tells the app that its tool list changed; some apps do not re-read it inside a r
 
 **More than one hub answers.** Your AI assistant can list what it found — a name, an address and an id for each —
 and ask which one you mean. On firmware **v1.3.0** the announced name follows the name you gave the hub, so the
-name is enough to tell them apart. On older firmware the announced name could go stale and two hubs could answer with
+name is enough to tell them apart — **as long as you have given it one.** That is **Settings → Site**, the field
+**Site name**: one field names the site and the hub together, and a hub with it empty answers as "RBgrid", which
+is no help at all when two of them do. → [Settings](web-settings.md#site) On older firmware the announced name could go stale and two hubs could answer with
 the same one; there, choose by address and open each one's page in a browser to see which is which.
 
 ## Once it is running

@@ -8,6 +8,18 @@ when a connection is made, so a restarted bridge reads the current list.
 
 This page describes the **kinds of thing** that are there, which do not change when a new one is added.
 
+**If you are writing your own client**, that manifest answers more than *what*: every tool in it says what it
+takes, and nearly all of them say what they give back — so neither has to be found out by trial. The hub serves
+it to a token; without one it answers 401.
+
+> 🔸 **Two things worth knowing before you start, because both cost an hour to discover.** The extension file
+> you install — the bridge's own bundle — carries **no tool list at all**: the tools come from the hub, so the
+> manifest you want is the hub's, over HTTP, and not the file on your disk. And if you are writing an **MCP**
+> client rather than talking to the hub directly, you will see each tool's input shape but **not** its reply
+> shape: the bridge does not declare reply shapes on purpose, because one that turned out too strict would make
+> an SDK reject a perfectly good answer from firmware we cannot correct in place. Nothing is missing from the
+> answers themselves — they carry their values as structured content.
+
 ## What it reads
 
 | Family | What is in it |
