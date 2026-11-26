@@ -92,10 +92,13 @@ it('the connect block fills the hub address from connect (mDNS first)', async ()
   jest.spyOn(llmApi, 'get').mockResolvedValue(DOC);
   renderPage();
   expect(await screen.findByText('http://rbgrid-bfac.local/')).toBeInTheDocument();
-  // Until the bridge is on npm (ai-page-npx-404 25.11): no command to copy, the card says it isn't published yet.
+  // The .mcpb is published (26.11), the npm package is not: the versioned file link, the restart step, no npx line.
   expect(screen.queryByRole('tab', { name: 'Claude Code' })).toBeNull();
   expect(screen.queryByText(/npx|claude mcp add/)).toBeNull();
-  expect(screen.getByText('Мост RBgrid для ассистентов ещё не опубликован')).toBeInTheDocument();
+  const dl = screen.getByRole('link', { name: /Скачать расширение RBgrid/ });
+  expect(dl.getAttribute('href')).toBe('https://github.com/rb-amp/RBgrid/releases/download/mcp-v0.2.0/rbgrid-mcp.mcpb');
+  expect(dl.getAttribute('href')).not.toMatch(/latest/);
+  expect(screen.getByText(/полностью закройте Claude Desktop/)).toBeInTheDocument();
 });
 
 it('Restore shows the diff, then rolls back with the token', async () => {

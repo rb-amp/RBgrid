@@ -1,0 +1,22 @@
+{
+  "en": {
+    "desktopTitle": "Claude Desktop",
+    "desktop1": "Install the RBgrid extension in Claude Desktop on the computer you chat on (that computer needs internet; the hub doesn't).",
+    "desktopDownload": "Download the RBgrid extension (.mcpb)",
+    "fileNote": "Extension {version}. It runs on Node.js 20.3.0 or newer: as of November 2026 Claude Desktop on macOS and Windows brings its own, so there you install nothing else; elsewhere it needs Node on the computer. App makers may change their rules — check your app's own documentation.",
+    "desktop2": "Open the file: Claude Desktop installs it. Leave «Hub address» empty: the assistant finds the hub itself. Only if it can't (VPN, guest Wi-Fi, another subnet), enter {url}",
+    "sayConnect": "Then in the chat say «connect to my RBgrid». The assistant asks for a 6-digit code: it appears on top of this app, on any page.",
+    "restartAfter": "After pairing, quit Claude Desktop completely and open it again: the hub's tools appear in the chat only after a restart.",
+    "othersLater": "The bridge is an ordinary MCP server that talks over stdio: any assistant that can start a local MCP server by a command can work with it. There is no easy install for such assistants yet — it comes with the npm package, which isn't published. The extension above is the ready way today."
+  },
+  "ru": {
+    "desktopTitle": "Claude Desktop",
+    "desktop1": "Установите расширение RBgrid в Claude Desktop на компьютере, где вы общаетесь с ассистентом (этому компьютеру нужен интернет, хабу — нет).",
+    "desktopDownload": "Скачать расширение RBgrid (.mcpb)",
+    "fileNote": "Расширение {version}. Ему нужен Node.js 20.3.0 или новее: на ноябрь 2026 Claude Desktop на macOS и Windows приносит свой, там больше ничего ставить не нужно; в остальных случаях Node нужен на компьютере. Производители приложений могут менять правила — сверяйтесь с документацией своего приложения.",
+    "desktop2": "Откройте файл: Claude Desktop установит его. Поле «Hub address» оставьте пустым: ассистент сам найдёт хаб. Только если не найдёт (VPN, гостевой Wi-Fi, другая подсеть), введите {url}",
+    "sayConnect": "Затем скажите в чате «подключись к моему RBgrid». Ассистент попросит 6-значный код: он появится вверху этого приложения, на любой странице.",
+    "restartAfter": "После привязки полностью закройте Claude Desktop и откройте снова: инструменты хаба появятся в чате только после перезапуска.",
+    "othersLater": "Мост — обычный MCP-сервер, он говорит по stdio: любой ассистент, который умеет запускать локальный MCP-сервер командой, может работать с ним. Удобной установки для таких ассистентов пока нет — она придёт с npm-пакетом, которого ещё нет. Расширение выше — готовый путь на сегодня."
+  }
+}

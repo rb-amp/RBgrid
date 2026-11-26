@@ -1,0 +1,40 @@
+{
+  "en": {
+    "client_claude-desktop": "Claude Desktop",
+    "client_claude-code": "Claude Code",
+    "client_cursor": "Cursor",
+    "client_vscode": "VS Code",
+    "client_lmstudio": "LM Studio",
+    "client_other": "Other",
+    "desktop1": "Install the RBgrid extension in Claude Desktop on the computer you chat on (that computer needs internet; the hub doesn't).",
+    "desktopDownload": "Download the RBgrid extension (.mcpb)",
+    "desktop2": "Open the file: Claude Desktop installs it. Leave «Hub address» empty: the assistant finds the hub itself. Only if it can't (VPN, guest Wi-Fi, another subnet), enter {url}",
+    "sayConnect": "Then in the chat say «connect to my RBgrid». The assistant asks for a 6-digit code: it appears on top of this app, on any page.",
+    "where_claude-code": "Run this in a terminal on the computer where Claude Code runs:",
+    "where_cursor": "Add this to Cursor's MCP settings (~/.cursor/mcp.json), then restart Cursor:",
+    "where_vscode": "Add this to VS Code's MCP config (.vscode/mcp.json in the project, or «MCP: Open User Configuration»):",
+    "where_lmstudio": "In LM Studio open Program → Install → Edit mcp.json and add:",
+    "where_other": "Any MCP client that runs local servers: add this to its MCP config.",
+    "bridgeReadOnly": "Only let this assistant read (the bridge refuses changes)",
+    "needsNode": "Needs Node.js 20.3.0 or newer on that computer."
+  },
+  "ru": {
+    "client_claude-desktop": "Claude Desktop",
+    "client_claude-code": "Claude Code",
+    "client_cursor": "Cursor",
+    "client_vscode": "VS Code",
+    "client_lmstudio": "LM Studio",
+    "client_other": "Другой",
+    "desktop1": "Установите расширение RBgrid в Claude Desktop на компьютере, где вы общаетесь с ассистентом (этому компьютеру нужен интернет, хабу — нет).",
+    "desktopDownload": "Скачать расширение RBgrid (.mcpb)",
+    "desktop2": "Откройте файл: Claude Desktop установит его. Поле «Hub address» оставьте пустым: ассистент сам найдёт хаб. Только если не найдёт (VPN, гостевой Wi-Fi, другая подсеть), введите {url}",
+    "sayConnect": "Затем скажите в чате «подключись к моему RBgrid». Ассистент попросит 6-значный код: он появится вверху этого приложения, на любой странице.",
+    "where_claude-code": "Выполните в терминале на компьютере, где работает Claude Code:",
+    "where_cursor": "Добавьте в настройки MCP в Cursor (~/.cursor/mcp.json) и перезапустите Cursor:",
+    "where_vscode": "Добавьте в конфигурацию MCP в VS Code (.vscode/mcp.json в проекте или «MCP: Open User Configuration»):",
+    "where_lmstudio": "В LM Studio откройте Program → Install → Edit mcp.json и добавьте:",
+    "where_other": "Любой MCP-клиент, запускающий локальные серверы: добавьте это в его конфигурацию MCP.",
+    "bridgeReadOnly": "Этому ассистенту — только чтение (мост отклоняет изменения)",
+    "needsNode": "На этом компьютере нужен Node.js 20.3.0 или новее."
+  }
+}

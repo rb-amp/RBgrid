@@ -2,6 +2,13 @@
 
 All notable changes to the RBGrid web interface. Newest first.
 
+## 1.3.1
+
+The web app only, for hub firmware 1.3.0 (nothing new on the hub). Requires hub API version 1. The AI page's «Connect an assistant» card is brought up to the bridge's publication; the 1.3.0 card predates it (it said the bridge wasn't published and named an older Node.js).
+
+### Changed
+- **Connecting an assistant:** the AI page offers the RBgrid extension for Claude Desktop (a file, v0.2.0, by its versioned release link — not «latest», which the next firmware release would turn into a 404), with the steps: open it, leave «Hub address» empty unless the hub isn't found, «connect to my RBgrid», read the code from the top of the app, then restart Claude Desktop (its tools appear only after a restart). It needs Node.js 20.3.0 or newer, which Claude Desktop brings on macOS and Windows (as of November 2026; app makers may change their rules). Other assistants: the bridge is an ordinary MCP server over stdio, an easy install for them comes with the npm package, which isn't published — no command to paste, and no assistant named that wasn't tried.
+
 ## 1.3.0
 
 For hub firmware 1.3.0. Requires hub API version 1. App changes since 1.2.0. The new pages and blocks appear only where the hub reports them (AI assistants, I2C buses, the layout on the hub, status lights); on older hubs the app keeps its behaviour, and the Overview layout stays in the browser.

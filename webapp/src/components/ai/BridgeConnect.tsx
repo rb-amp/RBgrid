@@ -6,8 +6,16 @@
 import React, { useState } from 'react';
 import { Box, Button, FormControlLabel, Stack, Switch, Tab, Tabs, Typography } from '@mui/material';
 import { CLIENT_TABS, ClientTab, MCPB_URL, snippet } from '../../core/llm/bridge';
-import { t } from '../../i18n';
+import { t, getLang } from '../../i18n';
+import PHRASES from './bridgePhrases.json';
 import { CopyButton } from './aiShared';
+
+/** The bridge's own phrases live next to it (not in the app's catalogs), so an unpublished bridge ships no text. */
+const bt = (key: string, vars?: Record<string, string>): string => {
+  const all = PHRASES as Record<string, Record<string, string>>;
+  const raw = (all[getLang()] ?? all.en)[key] ?? all.en[key] ?? key;
+  return vars ? raw.replace(/\{(\w+)\}/g, (m, k: string) => vars[k] ?? m) : raw;
+};
 
 const Code: React.FC<{ text: string; label: string }> = ({ text, label }) => (
   <Stack direction="row" alignItems="flex-start" spacing={0.5}>
@@ -26,29 +34,26 @@ export const BridgeConnect: React.FC<{ hub: string }> = ({ hub }) => {
   return (
     <>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
-        {CLIENT_TABS.map((c) => <Tab key={c} value={c} label={t(`ai.client_${c}`)} />)}
+        {CLIENT_TABS.map((c) => <Tab key={c} value={c} label={bt(`client_${c}`)} />)}
       </Tabs>
       {tab === 'claude-desktop' ? (
         <Stack spacing={1}>
-          <Typography variant="body2">{t('ai.desktop1')}</Typography>
+          <Typography variant="body2">{bt('desktop1')}</Typography>
           <Box>
-            {MCPB_URL
-              ? <Button variant="contained" href={MCPB_URL} target="_blank" rel="noopener noreferrer">{t('ai.desktopDownload')}</Button>
-              : <><Button variant="contained" disabled>{t('ai.desktopDownload')}</Button>
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>{t('ai.desktopSoon')}</Typography></>}
+            <Button variant="contained" href={MCPB_URL} target="_blank" rel="noopener noreferrer">{bt('desktopDownload')}</Button>
           </Box>
-          <Typography variant="body2">{t('ai.desktop2', { url: hub })}</Typography>
-          <Typography variant="body2">{t('ai.sayConnect')}</Typography>
+          <Typography variant="body2">{bt('desktop2', { url: hub })}</Typography>
+          <Typography variant="body2">{bt('sayConnect')}</Typography>
         </Stack>
       ) : (
         <Stack spacing={1}>
-          <Typography variant="body2">{t(`ai.where_${tab}`)}</Typography>
+          <Typography variant="body2">{bt(`where_${tab}`)}</Typography>
           {text && <Code text={text} label={t('ai.copyText')} />}
           <FormControlLabel
             control={<Switch size="small" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />}
-            label={<Typography variant="body2">{t('ai.bridgeReadOnly')}</Typography>} />
-          <Typography variant="body2" color="text.secondary">{t('ai.needsNode')}</Typography>
-          <Typography variant="body2">{t('ai.sayConnect')}</Typography>
+            label={<Typography variant="body2">{bt('bridgeReadOnly')}</Typography>} />
+          <Typography variant="body2" color="text.secondary">{bt('needsNode')}</Typography>
+          <Typography variant="body2">{bt('sayConnect')}</Typography>
         </Stack>
       )}
     </>

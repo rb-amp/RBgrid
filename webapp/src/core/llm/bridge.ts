@@ -2,13 +2,13 @@
  * The local bridge (`rbgrid-mcp`): its package, the .mcpb link and the config snippets per client (CONNECT-UX §2.2,
  * root ai-connect-ux; env `RBGRID_HUB_URL` + optional `RBGRID_READ_ONLY=1`).
  *
- * NOT IMPORTED by the app while the bridge is unpublished (25.11: npm answers 404 for the package; the release check
- * wants no `rbgrid-mcp` anywhere in the kit). The day it is published: import BridgeConnect in ConnectCard instead of
- * the «not published yet» note, and set MCPB_URL.
+ * NOT IMPORTED by the app while the npm package is unpublished (npm answers 404; no account in custody): the client
+ * tabs with `npx` lines would fail. The .mcpb file IS published (26.11) — ConnectCard shows it through DesktopBridge.
+ * The day the npm package is published: import BridgeConnect in ConnectCard instead of DesktopBridge.
  */
 export const BRIDGE_PACKAGE = 'rbgrid-mcp';
-/** The Claude Desktop extension (.mcpb) on the bridge's release page; null until it is published. */
-export const MCPB_URL: string | null = null;
+/** The Claude Desktop extension (.mcpb): published 26.11, see ./mcpb (the app imports that module, not this one). */
+export { MCPB_URL } from './mcpb';
 
 export type ClientTab = 'claude-desktop' | 'claude-code' | 'cursor' | 'vscode' | 'lmstudio' | 'other';
 export const CLIENT_TABS: ClientTab[] = ['claude-desktop', 'claude-code', 'cursor', 'vscode', 'lmstudio', 'other'];
