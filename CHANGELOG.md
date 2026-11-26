@@ -48,6 +48,12 @@
   holds the server and its dependencies; it runs on **Node 20.3.0 or newer**, and some applications ship Node
   themselves. The bridge keeps **its own version line** — what has to match is the hub's protocol v1, not a
   firmware number — and it is licensed **MIT**, which covers that package and not this firmware.
+- **The guide.** [AI assistants](docs/ai-assistants.md) is the overview; the route from a hub on your Wi-Fi to a
+  first checked answer is [Connect an AI assistant](docs/ai-connect.md);
+  [Where an AI assistant runs](docs/ai-clients.md) covers the bridge on your computer and what it needs;
+  [What an AI assistant reads and changes](docs/ai-tools.md) is the list of what it may touch;
+  [Set up a hub by talking to it](docs/ai-first-setup.md) does a first setup from a chat; and
+  [Claude Desktop](docs/ai-client-claude-desktop.md) is one app installed start to finish by hand.
 
 ### Two I²C buses
 - **Two buses.** The hub works with rbAmp modules on two I²C buses:
