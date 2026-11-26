@@ -1,53 +1,67 @@
-# Hub API reference (firmware 1.1.8, API v1)
+# Hub API reference (firmware 1.3.0, API v1)
 
 Generated from the hub's own `GET /api/v1/schema`. Do not edit by hand.
 
 ## Endpoints
 
-| Path | Methods | Token | Restart to apply | Parameters |
+**Admin for writes** = writes on this route need the admin token once one is set. This schema does not say which reads need the read token; see the token table in the API overview.
+
+| Path | Methods | Admin for writes | Restart to apply | Parameters |
 |---|---|---|---|---|
-| `/api/system/ap` | GET,POST | admin | no | GET: AP ssid/password (admin token, armed hub only); POST {password}: the user sets the AP password ("" = setup password) |
-| `/api/system/backup` | GET,POST | admin | no |  |
-| `/api/system/factory-reset` | POST | admin | yes | history(erase\|keep) |
-| `/api/system/hardware-config` | GET,POST | admin | yes |  |
-| `/api/system/lang` | GET,POST | admin | no | code (query, ISO 639-1); body=language pack JSON ≤ 200 KB; one pack kept; served at /lang/<code>.json |
-| `/api/system/mqtt-ca` | GET,POST,DELETE | admin | yes | POST body = PEM (≤ 8192 B, one or more certificates); DELETE = back to the public CA bundle |
-| `/api/system/mqtt-config` | GET,POST | admin | yes | broker_uri |
-| `/api/system/ota` | POST | admin | yes | (binary) |
-| `/api/system/provisioning` | GET | none | no |  |
-| `/api/system/reboot` | POST | admin | no | delay_ms |
-| `/api/system/restore` | POST | admin | yes |  |
-| `/api/system/restore-system-config` | POST | admin | no | body = system-config JSON |
-| `/api/system/security` | GET,POST | admin | no | dev_cors,origins |
-| `/api/system/system-config` | GET,POST | admin | no |  |
-| `/api/system/tariff-plan-config` | GET,POST | admin | no |  |
-| `/api/system/telemetry-config` | GET,POST | admin | no | profile(lean\|full) |
-| `/api/system/time-config` | GET | none | no | read-only time settings view (the app's time card) |
-| `/api/system/time-sync` | GET,POST | admin | yes |  |
-| `/api/system/token` | GET,POST | admin | no | token,role(admin\|read) |
-| `/api/system/ui-commit` | POST | admin | no | force (query); body=ui-manifest.json |
-| `/api/system/ui-upload` | POST | admin | no | path (query); body=raw file |
-| `/api/system/units-config` | GET,POST | admin | no |  |
-| `/api/system/version` | GET | none | no |  |
-| `/api/system/wifi-config` | GET | none | no | current Wi-Fi settings (read-only view; setup goes through the hub's own Wi-Fi page) |
-| `/api/telemetry/latest` | GET | none | no |  |
-| `/api/v1/economics` | GET | none | no | unit |
-| `/api/v1/espnow` | GET,POST | admin | no | action(pair\|add\|remove\|disable\|enable\|latch),mac,seconds,channels |
-| `/api/v1/export.csv` | GET | none | no | unit,period,type,from,to |
-| `/api/v1/history` | GET | none | no | unit_id,period,type(electrical\|energy\|economics\|all),offset,limit,from,to,since |
-| `/api/v1/i2c` | GET | none | no | buses (pins, up), board pin profile, modules |
-| `/api/v1/i2c/modules` | POST | admin | no | bus,addr: add a scanned rbAmp module (joins at once) |
-| `/api/v1/i2c/modules/{m}/address` | POST | admin | no | addr: change the module's address (saved in the module, UID-verified) |
-| `/api/v1/i2c/scan` | POST | admin | no | bus → devices answering: {addr, module\|null, kind, fw, uid} |
-| `/api/v1/schema` | GET | none | no | this description |
-| `/api/v1/sensors` | GET | none | no |  |
-| `/api/v1/summary` | GET | none | no | unit,period,from,to |
-| `/api/v1/system/events` | GET | none | no | since,limit(≤1000),level(all\|event\|fail) → {events[],boot,seq_last,next,more,persist,dropped,fail_boot,up,now,heap} |
-| `/api/v1/units` | POST | admin | no | sensor,name,role,stat_class,point,reuse |
-| `/api/v1/units/{hex}` | POST,DELETE | admin | no | name,short_name,phase,rated_power_w,max_current_a,role,group_id,role_trunk,invert_sign,charge_threshold_w,idle_timeout_min,ct_code (POST=params patch; invert_sign + ct_code apply live; ct_code = enums.ct_model, rbAmp current channels; EV overrides 0 = system.ev) |
-| `/api/v1/units/{hex}/rebind` | POST | admin | no | module,ch |
-| `/api/v1/units/{hex}/rename` | POST | admin | no | point,reuse |
-| `/api/v1/ws-ticket` | POST | none | no | → {ticket,expires_s}; open /ws-telemetry?ticket=<ticket> once within expires_s |
+| `/api/system/ap` | GET,POST | yes | no | GET: AP ssid/password (admin token, armed hub only); POST {password}: the user sets the AP password ("" = setup password) |
+| `/api/system/backup` | GET,POST | yes | no |  |
+| `/api/system/factory-reset` | POST | yes | yes | history(erase\|keep) |
+| `/api/system/hardware-config` | GET,POST | yes | yes |  |
+| `/api/system/lang` | GET,POST | yes | no | code (query, ISO 639-1); body=language pack JSON ≤ 200 KB; one pack kept; served at /lang/<code>.json |
+| `/api/system/mqtt-ca` | GET,POST,DELETE | yes | yes | POST body = PEM (<= 8192 B, one or more certificates); DELETE = public CA bundle |
+| `/api/system/mqtt-config` | GET,POST | yes | yes | broker_uri |
+| `/api/system/ota` | POST | yes | yes | (binary) |
+| `/api/system/provisioning` | GET | no | no |  |
+| `/api/system/reboot` | POST | yes | no | delay_ms |
+| `/api/system/restore` | POST | yes | yes |  |
+| `/api/system/restore-system-config` | POST | yes | no | body = system-config JSON |
+| `/api/system/security` | GET,POST | yes | no | dev_cors,origins |
+| `/api/system/system-config` | GET,POST | yes | no |  |
+| `/api/system/tariff-plan-config` | GET,POST | yes | no |  |
+| `/api/system/telemetry-config` | GET,POST | yes | no | profile(lean\|full) |
+| `/api/system/time-config` | GET | no | no | read-only time settings view |
+| `/api/system/time-sync` | GET,POST | yes | yes |  |
+| `/api/system/token` | GET,POST | yes | no | token,role(admin\|read) |
+| `/api/system/ui-commit` | POST | yes | no | force (query); body=ui-manifest.json |
+| `/api/system/ui-state` | GET,PUT,DELETE | yes | no | the app's dashboard layout, stored as is: GET → document + X-UI-State-Rev (404 {rev:0} when none); PUT ?rev=<n> body=JSON ≤ limits.ui_state_bytes → {rev:n+1}, 409 {rev} on a stale rev (0 = none expected); DELETE → {rev:0} |
+| `/api/system/ui-upload` | POST | yes | no | path (query); body=raw file |
+| `/api/system/units-config` | GET,POST | yes | no |  |
+| `/api/system/version` | GET | no | no |  |
+| `/api/system/wifi-config` | GET | no | no | read-only Wi-Fi settings view |
+| `/api/telemetry/latest` | GET | no | no |  |
+| `/api/v1/dynprice` | GET,POST | yes | no | dynamic price config, providers, live state |
+| `/api/v1/economics` | GET | no | no | unit |
+| `/api/v1/espnow` | GET,POST | yes | no | action(pair\|add\|remove\|disable\|enable\|latch),mac,seconds,channels |
+| `/api/v1/export.csv` | GET | no | no | unit,period,type,from,to |
+| `/api/v1/history` | GET | no | no | unit_id,period,type(electrical\|energy\|economics\|all),offset,limit,from,to,since |
+| `/api/v1/i2c` | GET | no | no | buses, board pin profile, modules |
+| `/api/v1/i2c/buses/{b}` | POST | yes | yes | sda,scl \| off (board pin profile checked; applied after a restart: reboot_pending) |
+| `/api/v1/i2c/modules` | POST | yes | no | bus,addr |
+| `/api/v1/i2c/modules/{m}/address` | POST | yes | no | addr |
+| `/api/v1/i2c/modules/{m}/bus` | POST | yes | no | bus |
+| `/api/v1/i2c/modules/{m}/drdy` | POST | yes | no | gpio |
+| `/api/v1/i2c/scan` | POST | yes | no | bus |
+| `/api/v1/led` | GET,POST | yes | no | status LEDs: GET what they show; POST mode(full\|quiet\|off), identify(seconds\|true\|false), ack(true) |
+| `/api/v1/llm` | GET,POST | yes | no | AI / LLM page: enabled, read_only, pairing codes, tokens, call log, connect \| revoke, pair_cancel |
+| `/api/v1/llm/call` | POST | yes | no | {tool,args}: an LLM tool run by the hub page (caller web) |
+| `/api/v1/peaks` | GET,POST | yes | no | cycle_day(1..28) \| reset |
+| `/api/v1/price` | GET,POST | yes | no | price push (HA source) / resolved prices / log |
+| `/api/v1/rules` | GET,POST | yes | no | cheap windows (threshold\|cheapest\|deadline) |
+| `/api/v1/schema` | GET | no | no | this description |
+| `/api/v1/sensors` | GET | no | no |  |
+| `/api/v1/signal` | GET | no | no | price_signal v1 |
+| `/api/v1/summary` | GET | no | no | unit,period,from,to |
+| `/api/v1/system/events` | GET | no | no | since,limit(<=1000),level(all\|event\|fail) |
+| `/api/v1/units` | POST | yes | no | sensor,name,role,stat_class,point,reuse |
+| `/api/v1/units/{hex}` | POST,DELETE | yes | no | name,short_name,phase,rated_power_w,max_current_a,role,group_id,role_trunk,invert_sign,charge_threshold_w,idle_timeout_min,ct_code (POST=params patch; invert_sign + ct_code apply live; ct_code = enums.ct_model, rbAmp current channels; EV overrides 0 = system.ev) |
+| `/api/v1/units/{hex}/rebind` | POST | yes | no | module,ch |
+| `/api/v1/units/{hex}/rename` | POST | yes | no | point,reuse |
+| `/api/v1/ws-ticket` | POST | no | no | → {ticket,expires_s}; open /ws-telemetry?ticket=<ticket> once within expires_s |
 
 ## Transports
 
@@ -78,10 +92,12 @@ Generated from the hub's own `GET /api/v1/schema`. Do not edit by hand.
 |---|---|
 | `espnow` | true |
 | `pointNesting` | true |
+| `dynamicTariffs` | true |
 | `economics` | true |
 | `summary` | true |
 | `exportCsv` | true |
 | `telemetryConfigPost` | true |
+| `llm` | true |
 | `mqttConfig` | true |
 | `adcUnboundDiscovery` | false |
 | `historyTimeRange` | true |
@@ -91,6 +107,18 @@ Generated from the hub's own `GET /api/v1/schema`. Do not edit by hand.
 | `configBackup` | true |
 | `inputAggregate` | true |
 | `wsTicket` | true |
+
+## Hub fields
+
+Top-level fields of this schema (also in `GET /api/system/version` for the storage ones). `stats_media`: `external` = history on the statistics chip, `internal` = in the hub's own flash, `none` = statistics kept in memory only. `history_slots`: how many points on this hub can keep history.
+
+| Field | This hub |
+|---|---|
+| `storage_state` | "ready" |
+| `stats_media` | "external" |
+| `history_slots` | 49 |
+| `history_schema_ver` | 4 |
+| `telemetry_schema` | 1 |
 
 ## Units and money
 
@@ -120,6 +148,7 @@ Generated from the hub's own `GET /api/v1/schema`. Do not edit by hand.
 ## Limits
 
 - `short_name_bytes`: 24
+- `ui_state_bytes`: 8192
 - `name_bytes`: 31
 - `origins_max`: 8
 
