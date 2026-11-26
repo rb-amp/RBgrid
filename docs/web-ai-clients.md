@@ -28,7 +28,7 @@ there is no installer to run. What it does need is Node on the computer — see 
 | | |
 |---|---|
 | **Nothing to fetch from a package registry** | The file is the whole package: there is no `install` step that downloads anything. |
-| **It runs on Node 20.3.0 or newer** | Some AI assistant apps ship Node inside themselves, and then there is nothing for you to install. Whether yours does is a question for that app's own documentation. |
+| **It runs on Node 20.3.0 or newer** | Some AI assistant apps ship Node inside themselves, and then there is nothing for you to install. Whether yours does is a question for that app's own documentation — and app makers change their rules. **If the bridge does not start, install Node 20.3.0 or newer on that computer yourself**; that is the whole fix, and it is the same fix whichever app you use. |
 | **Its own version line** | The bridge is versioned apart from the hub's firmware. What has to match is the hub's **protocol v1**, not a firmware number. |
 | **Licence** | The bridge is MIT. That covers this package, not the hub firmware, which has its own licence. |
 

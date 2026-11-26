@@ -13,7 +13,7 @@ behave the same there, and we are not going to tell you it does until someone ha
 | | |
 |---|---|
 | The bridge, downloaded | One file. → [Where an AI assistant runs](web-ai-clients.md#getting-the-bridge) |
-| Node | The bridge runs on **Node 20.3.0 or newer**. This app's own documentation says it brings a Node with it, so there is usually nothing for you to install — that is their statement about their app, not a measurement of ours, and app makers change their rules. |
+| Node | The bridge runs on **Node 20.3.0 or newer**. This app's own documentation says it brings a Node with it, so there is usually nothing for you to install — that is their statement about their app, not a measurement of ours, and app makers change their rules. **If the extension does not start, install Node 20.3.0 or newer on the computer yourself.** |
 | The hub's AI interface switched on | It is off until you switch it on, and that needs the admin password. → [Connect an AI assistant](web-ai-connect.md) |
 
 ## Installing it
