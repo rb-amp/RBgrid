@@ -63,7 +63,7 @@ The hub can take the price of every 15-minute period from a day-ahead source for
 fixed schedule — Energy-Charts (Fraunhofer ISE), Nord Pool, Elpriset just nu, Hva koster strømmen, EnergyZero
 or Octopus Agile — or from Home Assistant, which can push prices in for a supplier none of those covers. Each
 source carries the attribution its licence asks for, and the hub serves that text with the price
-(`attribution` and `terms_url` in `/api/v1/dynprice`). The app credits it on its Prices page; if you build your
+(`attribution` and `terms_url` in `/api/v1/dynprice`). The app credits it on the **Dynamic prices** tab of **Tariffs & prices**; if you build your
 own dashboard, showing it is yours to do.
 
 Your contract is applied on top: a factor and a markup, then the per-kWh taxes and fees of your own tariff
