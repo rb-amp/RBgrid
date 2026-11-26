@@ -66,6 +66,20 @@ New hub, nothing set up yet? → [Quick start](web-quick-start.md), then [the se
 **Questions**
 - [FAQ](web-faq.md)
 
+## AI assistants
+
+From v1.3.0 the hub can be worked with by asking. The interface is off until you switch it on, it needs an admin
+token, and every assistant is paired with a six-digit code shown in the app.
+
+- [AI assistants](web-ai-assistants.md) — what an assistant can do with the hub, and what it is not.
+- [Connect an AI assistant](web-ai-connect.md) — the numbered route, from a hub on your Wi-Fi to an answer you can check.
+- [Where an AI assistant runs](web-ai-clients.md) — the bridge on your own computer, what it needs, and why a phone or a browser cannot do it.
+- [What an AI assistant reads and changes](web-ai-tools.md) — the manifest is the list; read-only mode.
+- [Set up a hub by talking to it](web-ai-first-setup.md) — modules, points and a tariff from a chat.
+
+**One app, walked by hand**
+- [Claude Desktop](web-ai-client-claude-desktop.md) — the install we did ourselves, start to finish, on Windows.
+
 ## The hub
 
 - [Flashing the hub](hub-flashing.md) — USB install for the ESP32-S3, over-the-air updates, the partition layout.
