@@ -83,6 +83,8 @@ token, and every assistant is paired with a six-digit code shown in the app.
 ## The hub
 
 - [Flashing the hub](hub-flashing.md) — USB install for the ESP32-S3, over-the-air updates, the partition layout.
+- [Status lights](web-settings.md#status-lights) — what the green light is saying, and the red light's eight
+  flash codes. On hub boards with the lights; an ESP32 hub has none.
 - [MQTT broker](hub-mqtt.md) — topics, Home Assistant discovery, commands, TLS.
 - [API reference](hub-api-schema.md) — every public route, generated from the hub's own `GET /api/v1/schema`.
 
