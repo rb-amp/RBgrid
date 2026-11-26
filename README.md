@@ -202,7 +202,7 @@ The hub's own Wi-Fi stays on so you can always reach the hub. Once the web app i
 
 ### 3. Install the web app
 
-No install needed if you use [webapp.rbgrid.io](https://webapp.rbgrid.io/): open it on a computer on the same network as the hub and connect to the hub's address. To have the app on the hub itself, install it once. It's a separate package on the release page, `rbgrid-ui_vX.Y.Z.zip` ([latest release](https://github.com/rb-amp/RBgrid/releases/latest)). Unpack it (it holds `kit/` and `ui-manifest.json` side by side), then upload each file and commit:
+No install needed if you use [webapp.rbgrid.io](https://webapp.rbgrid.io/): open it on a computer on the same network as the hub and connect to the hub's address. To have the app on the hub itself, install it once. It ships as a separate `rbgrid-ui_vX.Y.Z.zip` package: take the newest one from the [releases page](https://github.com/rb-amp/RBgrid/releases). The web app has a version line of its own, so its newest package is not always attached to the newest firmware release. Unpack it (it holds `kit/` and `ui-manifest.json` side by side), then upload each file and commit:
 
 ```bash
 HUB=http://<your-hub-address>     # e.g. http://192.168.4.1 on the hub's own Wi-Fi
